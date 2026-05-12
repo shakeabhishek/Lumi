@@ -10,6 +10,8 @@ Lumi is a portable physical AI desk companion that plugs into any computer via U
 
 Currently in **pre-hardware design phase**. All major architecture decisions are locked in. Hardware is being ordered. Software development begins on a laptop using mocked hardware interfaces and will migrate to the Raspberry Pi 5 + AI HAT+ 2 stack when components arrive.
 
+V1 now includes **OpenClaw integration** for the skills/agent layer. OpenClaw is the most-starred open-source AI agent framework as of 2026 and provides a mature skills ecosystem. Lumi uses OpenClaw as a service for extensible integrations while keeping its core architecture (voice + face + gesture + local LLM) independent.
+
 ---
 
 ## Product identity
@@ -24,15 +26,16 @@ Currently in **pre-hardware design phase**. All major architecture decisions are
 
 **What makes Lumi different from ChatGPT or Claude.ai:**
 - Physical presence on your desk
-- Truly local AI (V1 has zero cloud dependency for inference)
+- Truly local AI (V1 has zero cloud LLM dependency for inference)
 - Ambient awareness via camera and microphones
 - Owns its data — your conversations, embeddings, and preferences live on the device
+- Extensible via OpenClaw's skill ecosystem (curated for safety in V1)
 
 ---
 
 ## Architecture overview
 
-Lumi is a **purely onboard AI** for V1 — no cloud LLM fallback, no external API calls during inference. This is a deliberate choice that simplifies the architecture, removes failure modes, and makes the brand promise literal.
+Lumi runs a **purely onboard LLM** for V1 — no cloud LLM calls during inference. WiFi is available for OpenClaw skills that need network access (email, calendar, weather, etc.) but the LLM itself stays local.
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
@@ -44,26 +47,46 @@ Lumi is a **purely onboard AI** for V1 — no cloud LLM fallback, no external AP
 │  └─────────────┘    │              │    └─────────────────┘    │
 │                     │  - LLM       │                            │
 │  ┌─────────────┐    │  - MediaPipe │    ┌─────────────────┐    │
-│  │  Display    │◀── │              │ ──▶│    Speaker      │    │
+│  │  Display    │◀── │  (8GB RAM)   │ ──▶│    Speaker      │    │
 │  │  (SPI bus)  │    │              │    │  (analog)       │    │
 │  └─────────────┘    └──────┬───────┘    └─────────────────┘    │
 │                            │                                     │
 │                     ┌──────▼───────┐                            │
 │                     │   Pi 5 16GB  │ ──── USB-C ──▶ Host PC     │
-│                     │  (orchestr.) │                            │
-│                     └──────────────┘                            │
+│                     │              │                            │
+│                     │  - Lumi app  │                            │
+│                     │  - Whisper   │                            │
+│                     │  - Piper     │                            │
+│                     │  - ChromaDB  │      ┌───────────────┐    │
+│                     │  - FastAPI   │ ◀──▶ │  OpenClaw     │    │
+│                     │              │ HTTP │  (Node.js)    │    │
+│                     │              │      └───────────────┘    │
+│                     └──────┬───────┘                            │
+│                            │                                     │
+│                            ▼ WiFi (for OpenClaw skills only)    │
 └────────────────────────────────────────────────────────────────┘
 ```
 
-**Compute split:**
-- **AI HAT+ 2 (40 TOPS, 8GB RAM)**: LLM inference, MediaPipe gesture recognition, vision models
-- **Pi 5 CPU**: OS, application orchestration, Whisper STT, Piper TTS, web server, USB gadget service, ChromaDB, face rendering
+**Compute & memory split:**
+- **AI HAT+ 2 (8GB dedicated RAM)**: LLM inference, MediaPipe gesture recognition. Isolated memory pool.
+- **Pi 5 (16GB system RAM)**: OS, Lumi Python app, Whisper, Piper, ChromaDB, FastAPI, **OpenClaw service (Node.js)**, audio pipeline, display rendering. Plenty of headroom (~13GB free with everything running).
 
-**Data flow (typical voice query):**
+**Why memory separation works:** AI HAT+ 2 handles the heavy LLM workload in its own 8GB. Pi RAM is never used for LLM inference, so OpenClaw + everything else gets full 16GB to share. Confirmed memory headroom ~13GB free at idle.
+
+**Data flow (typical voice query, native skill):**
 ```
 Mic → Whisper Tiny (CPU) → text
-    → LLM via AI HAT+ 2 → response text
+    → Skill router → native Python skill (fast path)
+    → LLM via AI HAT+ 2 → response
     → Piper TTS (CPU) → audio → speaker
+```
+
+**Data flow (voice query, OpenClaw skill):**
+```
+Mic → Whisper Tiny (CPU) → text
+    → Skill router → OpenClaw skill
+    → OpenClaw orchestrates: LLM (via custom Hailo provider) + tool calls
+    → Result → Piper TTS (CPU) → audio → speaker
 ```
 
 **Data flow (gesture):**
@@ -78,7 +101,7 @@ Camera → MediaPipe via AI HAT+ 2 → hand landmarks
 
 | Category | Component | Purpose |
 |---|---|---|
-| **Core compute** | Raspberry Pi 5 (16GB) | Main computer, runs Lumi OS |
+| **Core compute** | Raspberry Pi 5 (16GB) | Main computer, runs Lumi OS + OpenClaw |
 | | Raspberry Pi AI HAT+ 2 | LLM + vision inference (40 TOPS, 8GB onboard RAM) |
 | | Active cooler for Pi 5 | Thermal management (required) |
 | **Storage** | SanDisk Extreme Pro 256GB A2 microSD | OS, models, ChromaDB, user data |
@@ -94,8 +117,6 @@ Camera → MediaPipe via AI HAT+ 2 → hand landmarks
 | | Acrylic mounting plate | Bare-bones V1 base |
 | | Self-adhesive rubber feet | Non-slip base |
 
-**V1 hardware total: ~$700-750** (no enclosure, no mechanical buttons, no rotary encoder)
-
 **PCIe lane usage:** Single PCIe lane on Pi 5 is dedicated to AI HAT+ 2. NVMe storage is intentionally not used — onboard storage is microSD only.
 
 ---
@@ -108,7 +129,8 @@ Layer                     Component                  Notes
 Operating system          Raspberry Pi OS Lite       64-bit, headless
                           (Bookworm or Trixie)
 
-Runtime                   Python 3.11+
+Runtime                   Python 3.11+               Lumi core
+                          Node.js 20+                OpenClaw service
 
 Speech-to-text            Whisper Tiny               ~150MB, runs on Pi CPU
                                                       ~0.5s for short clips
@@ -131,8 +153,13 @@ Vector database           ChromaDB (embedded)        Local personal data
 Embedding model           all-MiniLM-L6              Generated during ingestion
                                                       Stored in ChromaDB
 
+Skills framework          OpenClaw (Node.js)         Runs as systemd service on Pi
+                                                      Custom LLM provider routes to Hailo
+                                                      Curated skill set for V1
+
 Web server                FastAPI                    Serves lumi.local
-                                                      Onboarding, dashboard
+                                                      Onboarding, dashboard,
+                                                      skill management
 
 USB gadget                libcomposite               HID + Mass Storage + CDC
                                                       Native Pi 5 support
@@ -145,42 +172,74 @@ Process supervisor        systemd                    All Lumi services
 ```
 
 **Service architecture (systemd units):**
-- `lumi.service` — main app runtime
+- `lumi.service` — main Python app runtime
 - `lumi-web.service` — FastAPI dashboard
+- `lumi-openclaw.service` — OpenClaw Node.js service (skills + agent)
 - `lumi-gadget.service` — USB composite device setup
 - `lumi-audio.service` — audio pipeline
 - `lumi-camera.service` — vision pipeline
 
 ---
 
-## The Lumi OS image
+## Skills system
 
-V1 ships as a **custom Pi OS image** (`.img` file), built with `pi-gen`. Users flash one file with Raspberry Pi Imager and Lumi just works. Same pattern as Home Assistant OS, OctoPrint, RetroPie, etc.
+Lumi has **two skill layers** that work together:
 
-**Contents baked in:**
-- Pi OS Lite 64-bit base
-- Python runtime + all dependencies
-- Pre-downloaded models (Whisper, Piper, MediaPipe, LLM)
-- ReSpeaker HAT drivers configured
-- Camera Module 3 configured
-- AI HAT+ 2 Hailo runtime + LLM models
-- USB gadget mode pre-configured in `/boot/config.txt`
-- log2ram installed and enabled
-- mDNS for `lumi.local`
-- All Lumi services + Python app
-- First-boot onboarding flow
-
-**Release versioning:**
 ```
-lumi-os-1.0.0.img        First release
-lumi-os-1.0.1.img        Patch (bug fixes)
-lumi-os-1.1.0.img        Feature update
-lumi-os-2.0.0.img        Major (V2 hardware support)
+Native Python skills              OpenClaw skills
+──────────────────────────        ──────────────────────────
+Fast, deterministic               Flexible, extensible
+Hardware-near (audio, display)    Network-capable (email, calendar)
+Simple commands                   Multi-step workflows possible
+Always available                  Per-skill enable/disable
+Examples:                         Examples:
+  - "what time is it"               - "check my email"
+  - "set timer 5 minutes"           - "what's on my calendar"
+  - "switch to focus mode"          - "weather today"
+  - "louder / quieter"              - "find file containing X"
 ```
 
-Each release ships with a SHA-256 hash for verification.
+**Skill router** (in Lumi Python runtime): On each user utterance, decides which layer handles it.
 
-**Build pipeline (TBD):** GitHub Actions running `pi-gen` on each tagged release, output uploaded to a release CDN.
+```python
+class SkillRouter:
+    def route(self, transcript: str) -> SkillHandler:
+        # 1. Try native skill keyword match (fast, reliable)
+        native = self.native_registry.match(transcript)
+        if native:
+            return native
+        
+        # 2. Fall back to OpenClaw (if enabled + skill matches)
+        if self.openclaw_enabled:
+            return OpenClawHandler(transcript)
+        
+        # 3. Pure LLM response (no skill)
+        return DirectLLMHandler(transcript)
+```
+
+**Custom LLM provider for OpenClaw:** OpenClaw expects a cloud LLM (Claude, GPT). We write a custom provider that routes OpenClaw's LLM calls to:
+- **Dev**: Ollama serving Qwen2 1.5B on laptop
+- **Production**: Hailo runtime on AI HAT+ 2
+
+Same provider interface, swappable backend by config.
+
+**V1 curated OpenClaw skill set** (vetted for safety with 1.5B model):
+- `email_read` — IMAP read-only (no send, no delete)
+- `calendar_read` — CalDAV read-only (no creation, no modification)
+- `weather` — Public API, no auth needed
+- `timer` — Local, no network
+- `file_search` — Local filesystem search, read-only
+- `reminder` — Local storage
+
+**Explicitly NOT in V1** (deferred for safety / capability reasons):
+- Email send/draft — destructive action, defer to V2 with cloud LLM
+- Calendar event creation — same
+- Browser automation — too complex for 1.5B
+- Shell execution — security risk
+- File modification — security risk
+- Any third-party ClawHub skills — security risk (known malware reports)
+
+**Skill audit log:** Every OpenClaw skill invocation is logged with timestamp, skill name, input parameters, and result. User can view audit log in web dashboard. Builds trust through transparency.
 
 ---
 
@@ -190,7 +249,7 @@ Each release ships with a SHA-256 hash for verification.
 Voice                Primary input — wake word, commands, dictation
 Camera gestures      Acknowledgments + presence detection
 ReSpeaker button     One physical button — wake / cancel / push-to-talk
-Web UI (lumi.local)  Settings, system prompt, voice enrollment, modes
+Web UI (lumi.local)  Settings, system prompt, voice enrollment, modes, skills
 ```
 
 **Why no mechanical buttons or rotary encoder in V1:** Pushed to V2. V1 is intentionally minimalist to ship faster and lean into the ambient voice+vision differentiator.
@@ -203,16 +262,227 @@ Web UI (lumi.local)  Settings, system prompt, voice enrollment, modes
 
 ---
 
-## Onboarding flow
+## Development plan & milestones
 
-First-run experience runs across **Lumi's device display + a companion web UI** at `lumi.local` on the host PC. Total time ~10 minutes.
+Six-phase plan. Phases 1-4 happen on laptop before hardware arrives. Phases 5-6 happen with real Lumi hardware. Each phase has a measurable **gate criterion**.
+
+### Phase 1 (Week 1) — Foundation + OpenClaw viability proof
+
+The critical Week 1 task is proving OpenClaw works reliably with our small LLM. If it doesn't, scope back to native skills only.
+
+**Tasks**
+- Initialize GitHub repo, project structure per the directory layout below
+- Set up dev environment: Python 3.11+, Node.js 20+, Whisper, Piper, Ollama
+- Install Qwen2 1.5B via Ollama (`ollama pull qwen2:1.5b`)
+- Implement basic voice loop: mic → Whisper → Ollama → Piper → speaker (laptop)
+- Install OpenClaw, configure with local Ollama as LLM provider
+- Run tool-calling reliability test: 50 invocations across 5 simple skills
+  - `email_read`, `calendar_read`, `weather`, `timer`, `file_search`
+  - Track: success rate, latency, hallucination instances
+
+**Deliverables**
+- Repo with directory structure committed
+- `scripts/dev-setup.sh` works on macOS and Linux
+- Working laptop voice loop demo
+- `docs/openclaw-viability-report.md` with reliability numbers
+
+**🚦 Gate criterion (CRITICAL):**
+- OpenClaw + Qwen2 1.5B achieves **≥80% reliability** on the 5 simple skills
+- **If yes** → continue with OpenClaw in V1
+- **If no** → fall back to native Python skills only, defer OpenClaw to V2 (cloud LLM)
+- If marginal (60-80%) → explore tool-calling fine-tuning options or accept scoped skill set
+
+---
+
+### Phase 2 (Week 2) — Lumi runtime + OpenClaw integration
+
+Build the core runtime that orchestrates voice, LLM, skills, and OpenClaw.
+
+**Tasks**
+- State machine: idle → wake → listen → think → speak → idle
+- Mode system: General / Code / Focus / Dictation (mode pre-configures system prompt)
+- Conversation manager with ChromaDB integration
+- Speaker verification via Resemblyzer (voice enrollment + recognition)
+- Face engine rendering to laptop window (3 face style options)
+- **Mock hardware abstraction layer**:
+  - `MockGPIO`, `MockI2C`, `MockSPIDisplay`, `MockUSBGadget`, `MockCameraIO`
+  - Clean interfaces so real drivers swap in later
+- **LLM backend abstraction**:
+  - `OllamaBackend` (dev), `HailoBackend` (production — stubbed for now)
+  - Used by both Lumi runtime AND OpenClaw's custom provider
+- **OpenClaw integration**:
+  - Custom LLM provider for OpenClaw pointing to `OllamaBackend`
+  - Skill router (native first, OpenClaw fallback)
+  - Implement 5 curated skills with clear input/output contracts
+- Skill audit log persistence to ChromaDB
+
+**Deliverables**
+- Lumi runtime accepts voice input, routes to skills, returns voice output
+- 5 OpenClaw skills working end-to-end
+- All 5 skills logged to audit log with full trace
+- Face animations render correctly through all state transitions
+
+**🚦 Gate criterion:** End-to-end voice → skill → voice loop works for all 5 curated skills with ≥80% success rate on demo prompts.
+
+---
+
+### Phase 3 (Week 3) — Web UI + skill management + onboarding
+
+Build the lumi.local dashboard that handles onboarding and ongoing configuration.
+
+**Tasks**
+- FastAPI scaffold + mDNS for `lumi.local`
+- HTMX-based UI with warm cream/amber palette
+- **9-step onboarding flow**:
+  1. First plug-in / welcome animation
+  2. WiFi setup
+  3. Name your Lumi (curated palette of 10-15 wake-word-friendly names)
+  4. Voice enrollment (5 spoken prompts)
+  5. Voice personality (3-4 Piper voices, each with sample)
+  6. Face style (pixel / vector / terminal, live preview)
+  7. Permissions (granular toggles per data source)
+  8. Work mode (Developer / Writer / Student / General)
+  9. First conversation
+- **Skill management dashboard**:
+  - List of all OpenClaw skills with enable/disable toggles
+  - Per-skill permission configuration
+  - Audit log viewer with filterable history
+  - Test invocation panel for debugging
+- Memory browser (ChromaDB contents, what Lumi knows about you)
+- System prompt editor
+- Settings persistence
+
+**Deliverables**
+- Complete onboarding flow walkthroughs cleanly on laptop
+- User can enable/disable individual OpenClaw skills
+- User can see exactly what each skill has done (audit log)
+- Onboarding completes in ~10 minutes for a fresh user
+
+**🚦 Gate criterion:** A fresh user (no engineer help) can complete onboarding and have their first conversation. Test this by handing the laptop to a friend.
+
+---
+
+### Phase 4 (Week 4) — Host PC helper + integration testing
+
+Build the host-side helper that runs on the user's computer.
+
+**Tasks**
+- USB HID injection module (test against another laptop / VM)
+- Clipboard reading (macOS / Windows / Linux)
+- Active window detection (cross-platform)
+- First-run helper app (USB mass storage trick simulation)
+- End-to-end integration testing across all features
+- **Failure mode hardening**:
+  - Skill timeout (OpenClaw skill takes >10s)
+  - LLM hallucination (output doesn't match expected schema)
+  - Permission denial (skill tries to access disabled resource)
+  - Network failure (WiFi-dependent skill while offline)
+  - Audio device disconnect / reconnect
+  - All failure modes return graceful user-facing messages
+- Performance profiling: measure latency at each pipeline stage
+
+**Deliverables**
+- "Laptop Lumi" fully functional — looks and feels like the real product
+- Documented failure modes with handling
+- Performance baseline numbers (voice query latency, skill execution latency, memory usage)
+
+**🚦 Gate criterion:** Full feature-complete laptop Lumi running stably for 1 hour of continuous demo use without crashes or major user-visible errors.
+
+---
+
+### Phase 5 (Week 5-6, hardware arrives) — Hardware integration
+
+Migrate from laptop mocks to real Pi 5 + AI HAT+ 2.
+
+**Tasks**
+- Flash base Pi OS Lite 64-bit, set up Pi dev environment
+- Install Node.js 20+ on Pi (for OpenClaw)
+- Configure ALSA with ReSpeaker 2-Mics HAT
+- Install Hailo runtime, load LLM models in `.hef` format
+- **Migrate OpenClaw LLM provider** from Ollama to Hailo runtime
+  - Same provider interface, different backend
+  - Validate tool-calling reliability still ≥80% on Hailo
+- Configure USB gadget composite mode in `/boot/config.txt`
+- Configure SPI display driver (Waveshare 3.5")
+- Configure Camera Module 3 Wide via libcamera
+- Configure I2C bus (for future modular sensor expansion)
+- **Replace each mocked hardware driver with real implementation**:
+  - `MockGPIO` → real GPIO
+  - `MockI2C` → real I2C  
+  - `MockSPIDisplay` → real Waveshare driver
+  - `MockUSBGadget` → real libcomposite
+  - `MockCameraIO` → real libcamera
+  - `OllamaBackend` → `HailoBackend`
+- Install MediaPipe gesture model on AI HAT+ 2
+- Performance and stress testing with all subsystems active
+
+**Deliverables**
+- All laptop features running on real hardware
+- Performance benchmarks comparing laptop vs hardware
+- Memory headroom validation (Pi 5 RAM usage with OpenClaw + everything)
+- Stress test results: 30 min concurrent voice + gesture + skills
+
+**🚦 Gate criterion:** Real Lumi hardware matches laptop Lumi behavior with ≤2x latency penalty on voice query loop. RAM usage stays under 6GB on Pi (well within 16GB budget).
+
+---
+
+### Phase 6 (Week 7-8) — Lumi OS image build
+
+Package the whole thing into a flashable .img file users can install.
+
+**Tasks**
+- Set up `pi-gen` recipe in `os-image/stage-lumi/`
+- Bake in:
+  - Pi OS Lite 64-bit base
+  - Python runtime + all dependencies
+  - Node.js 20+ + OpenClaw + curated skills
+  - All AI models pre-downloaded (Whisper, Piper, MediaPipe, Qwen2 .hef)
+  - ReSpeaker HAT drivers configured
+  - Camera Module 3 configured
+  - Hailo runtime + LLM models
+  - USB gadget mode in `/boot/config.txt`
+  - log2ram pre-installed
+  - mDNS for `lumi.local`
+  - All systemd services enabled
+  - First-boot onboarding flow
+- CI/CD pipeline (GitHub Actions or local script)
+- Image versioning + SHA-256 hashing
+- Fresh-flash test: blank SD → flash → onboarding → first conversation
+
+**Deliverables**
+- `lumi-os-1.0.0.img` (~6-8GB compressed)
+- Build documentation (anyone can reproduce)
+- `docs/release-notes/v1.0.0.md`
+- V1 release candidate
+
+**🚦 Gate criterion:** A fresh SanDisk SD card flashed with the image boots into a fully functional Lumi within 5 minutes. Onboarding completes successfully on first try.
+
+---
+
+## The Lumi OS image
+
+V1 ships as a **custom Pi OS image** (`.img` file), built with `pi-gen`. Users flash one file with Raspberry Pi Imager and Lumi just works. Same pattern as Home Assistant OS, OctoPrint, RetroPie, etc.
+
+**Release versioning:**
+```
+lumi-os-1.0.0.img        First release
+lumi-os-1.0.1.img        Patch (bug fixes, new vetted skills)
+lumi-os-1.1.0.img        Feature update
+lumi-os-2.0.0.img        Major (V2 hardware support, cloud LLM)
+```
+
+Each release ships with a SHA-256 hash for verification.
+
+---
+
+## Onboarding flow (summary)
 
 ```
 Step 1  First plug-in           USB mass storage trick mounts a helper
                                  Welcome animation plays on device
 
 Step 2  WiFi setup               Web UI captures credentials via helper
-                                 (For mDNS + V2 features later)
+                                 Required for OpenClaw skill internet access
 
 Step 3  Name your Lumi           Curated palette of wake-word-friendly names
                                  Each plays a voice sample
@@ -229,22 +499,18 @@ Step 6  Face style               Pixel / vector / terminal — live preview
 Step 7  Permissions              Granular toggles:
                                  - Active window title
                                  - Clipboard
-                                 - Calendar (V2)
-                                 - Email (V2)
                                  - Files (pointed-to only)
                                  - Camera (gestures + presence)
+                                 - WiFi for skills
+                                 - Each OpenClaw skill individually
 
 Step 8  Work mode                Developer / Writer / Student / General
-                                 Pre-configures system prompt + defaults
+                                 Pre-configures system prompt + skill defaults
 
 Step 9  First conversation       Lumi greets user by name
                                  Asks "What are you working on?"
                                  No tutorial — just talking
 ```
-
-**Voice enrollment details:** Uses Resemblyzer or SpeechBrain ECAPA-TDNN for speaker verification. Embedding stays on device. Multi-user mode (V2) allows adding household members.
-
-**Wake word approach:** Curated palette of 10-15 pre-trained names. User picks one. Avoids the accuracy problems of custom wake-word training while preserving personalization.
 
 ---
 
@@ -254,23 +520,23 @@ Served at `lumi.local` via mDNS. FastAPI backend + HTMX frontend.
 
 ```
 /                       Dashboard — Lumi's current state, recent conversations
-/onboarding             First-run flow (Step 1-9 above)
+/onboarding             First-run flow (Steps 1-9)
 /settings/personality   System prompt editor, voice picker
 /settings/memory        Memory browser — what Lumi knows about you
 /settings/data          Permission toggles per data source
 /settings/face          Face theme picker
 /settings/voice         Voice enrollment management
 /settings/modes         General / Code / Focus / Dictation
+/skills                 Skill management — enable/disable, audit log per skill
+/skills/audit-log       Full audit log of all skill invocations
 /dev                    Developer mode — logs, debug, hardware status
 ```
-
-**Design tone:** Warm cream/amber palette, generous whitespace, slow gentle animations. Lumi's face mirrored live in a corner of the UI. Feels conversational, not configurable.
 
 ---
 
 ## Privacy & data handling
 
-**V1 commitment: local-only.** No telemetry, no remote API calls during normal operation, no cloud LLM, no cloud backup.
+**V1 commitment: local-first.** LLM inference stays on device. WiFi is used only by OpenClaw skills the user explicitly enables.
 
 **Where data lives:**
 ```
@@ -278,15 +544,22 @@ User conversations          → ChromaDB on microSD
 Speaker voice embedding     → Single file on microSD
 User preferences            → JSON on microSD
 LLM context cache           → AI HAT+ 2 RAM (volatile)
+Skill audit log             → ChromaDB on microSD
 Camera frames               → Never stored, never persisted
                               Only landmarks used, frames discarded after inference
 ```
 
-**Camera-active indicator:** When camera is in use, a NeoPixel on the ReSpeaker HAT lights red. Optional 3D-printed manual privacy cap for V1; integrated slider shutter for V2.
+**External data access (OpenClaw skills only, with explicit user consent):**
+- Email server (IMAP) — read-only, user's own account
+- Calendar server (CalDAV) — read-only, user's own account
+- Weather API — public, no user data sent
+- All skill network traffic logged in audit log
 
-**Data export:** User can export everything (conversations, embeddings, preferences) as a single archive via web UI. Important for trust.
+**Camera-active indicator:** NeoPixel on ReSpeaker HAT lights red when camera is active. Manual 3D-printed privacy cap for V1; integrated slider shutter for V2.
 
-**Data deletion:** "Forget everything" option in settings wipes all user-specific data and resets to first-boot state without reflashing.
+**Data export:** Export everything (conversations, embeddings, preferences, audit log) as a single archive via web UI.
+
+**Data deletion:** "Forget everything" option wipes all user-specific data and resets to first-boot state without reflashing.
 
 ---
 
@@ -336,7 +609,7 @@ Camera → libcamera → frame buffer → MediaPipe Hand Landmarks (on AI HAT+ 2
 
 ## Storage strategy
 
-**Single microSD card holds everything:** OS, application code, all AI models, ChromaDB, conversation history, user data.
+**Single microSD card holds everything:** OS, application code, all AI models, ChromaDB, conversation history, user data, OpenClaw + skills.
 
 **Card spec:** SanDisk Extreme Pro 256GB A2 (or equivalent). 200MB/s read, 90MB/s write, 4000 IOPS.
 
@@ -344,13 +617,11 @@ Camera → libcamera → frame buffer → MediaPipe Hand Landmarks (on AI HAT+ 2
 - LLM runs entirely from AI HAT+ 2's onboard 8GB RAM (never hits disk)
 - Models load once at boot into Pi RAM
 - ChromaDB queries are RAM-cached after warmup
-- Writes are tiny (kilobytes per conversation)
+- Writes are tiny (kilobytes per conversation + small audit log entries)
 
-**Write protection: log2ram pre-installed.** OS journaling and system logs are written to a RAM tmpfs and synced to disk hourly. Reduces SD card writes by ~95%.
+**Write protection: log2ram pre-installed.** Reduces SD card writes by ~95%.
 
-**Backup strategy (V2):** Nightly automated backup of user data (not OS) to user's chosen cloud (Drive/Dropbox/iCloud) or local PC folder. V1 keeps data local only.
-
-**Recovery:** SD card failure → flash a new card with `lumi-os-X.Y.Z.img` (10 min) → restore user data from backup (V2 only for now) → back to working state in <15 min.
+**Backup strategy (V2):** Nightly automated backup of user data to user's chosen cloud or local PC folder. V1 keeps data local only.
 
 ---
 
@@ -362,12 +633,14 @@ Features deferred from V1 to keep V1 shippable:
 |---|---|
 | Mechanical key switches (NeoKey 1x4 + Kailh Brown + keycaps) | Premium tactile inputs |
 | Rotary encoder + knob | Volume + mute dial with NeoPixel ring |
-| Cloud backup integration | Sync to user's Drive/Dropbox/iCloud |
-| ElevenLabs premium voice tier | Higher-quality TTS as paid upgrade |
+| Cloud backup integration | Sync to user's Drive / Dropbox / iCloud |
+| ElevenLabs premium voice option | Higher-quality TTS as paid upgrade |
 | Cloud LLM fallback (Claude API) | For complex queries beyond local LLM capability |
+| **Expanded OpenClaw skill set** | Multi-step workflows, email send, calendar create — needs cloud LLM |
+| **MCP protocol integrations** | Connect directly to MCP servers (Google Drive, Slack, etc.) |
 | Premium enclosure | Frosted translucent shell, underside glow, matte finish |
 | Physical privacy shutter | Integrated slider over camera lens |
-| Custom wake word training | User picks any name |
+| Custom wake-word training | User picks any name |
 | Multi-user voice profiles | Household members can be enrolled |
 | Sound design | Startup chime, listening tone, confirmation chimes |
 | Onboard fine-tuning | Adapt to user's writing style |
@@ -375,61 +648,25 @@ Features deferred from V1 to keep V1 shippable:
 
 ---
 
-## Pre-hardware development plan
-
-The first 4 weeks of work happen on a developer laptop. The hardware-specific code is ~20% of the project; everything else can be built and tested without a Pi.
-
-**Week 1 — Foundation**
-- Set up GitHub repo + project structure
-- Dev environment: Python 3.11, Whisper, Piper, Ollama (for local LLM testing)
-- Verify basic voice pipeline: laptop mic → Whisper → LLM → Piper → laptop speaker
-- Get a "hello, I can hear you" round-trip working
-
-**Week 2 — Lumi runtime**
-- State machine: idle → wake → listen → think → speak → idle
-- Mode system (general / code / focus / dictation)
-- Conversation manager + ChromaDB integration
-- Face engine rendering to a laptop window (will swap to SPI display later)
-- Mock GPIO/I2C/USB layer (clean abstractions so hardware swap is easy)
-
-**Week 3 — Web UI**
-- FastAPI scaffold + mDNS
-- Onboarding flow (all 9 steps)
-- Dashboard + settings
-- Voice enrollment UX with laptop mic
-
-**Week 4 — Host PC helper + polish**
-- USB HID injection (test against another laptop/VM for now)
-- Clipboard + active window detection
-- End-to-end testing on laptop
-
-**Week 5+ (hardware arrives) — Hardware integration**
-1. Flash base Pi OS, set up Pi dev environment
-2. ALSA + ReSpeaker 2-Mics HAT
-3. AI HAT+ 2 + Hailo runtime + LLM
-4. USB gadget composite (HID + Mass Storage + CDC)
-5. SPI display
-6. Camera Module 3 Wide + MediaPipe
-7. Replace mocked drivers with real ones, one subsystem at a time
-8. `pi-gen` pipeline for Lumi OS image build
-
-By the time hardware is in hand, "laptop Lumi" should be fully functional. Hardware phase becomes integration, not invention.
-
----
-
-## Project structure (suggested)
+## Project structure
 
 ```
 lumi/
-├── CLAUDE.md                    # This file
-├── README.md                    # Public-facing intro
+├── CLAUDE.md                    # This file — cross-session AI context
+├── README.md                    # Public-facing intro + portfolio piece
 ├── LICENSE
 ├── pyproject.toml               # Python deps + tooling
+├── package.json                 # Node deps (for OpenClaw glue code)
+│
 ├── docs/
 │   ├── architecture.md
+│   ├── openclaw-viability-report.md   # Phase 1 deliverable
 │   ├── onboarding-flow.md
 │   ├── voice-design.md
 │   ├── privacy.md
+│   ├── skills/
+│   │   ├── native-skills.md
+│   │   └── openclaw-skills.md
 │   └── decisions/               # ADRs for major decisions
 │
 ├── src/lumi/
@@ -450,8 +687,17 @@ lumi/
 │   │   ├── gestures.py
 │   │   └── presence.py
 │   ├── llm/
-│   │   ├── hailo_backend.py     # AI HAT+ 2 inference
+│   │   ├── backend.py           # LLMBackend protocol
+│   │   ├── ollama_backend.py    # Dev backend
+│   │   ├── hailo_backend.py     # Production backend
 │   │   └── prompts.py
+│   ├── skills/
+│   │   ├── router.py            # Skill routing logic
+│   │   ├── native/              # Fast Python skills
+│   │   │   ├── timer.py
+│   │   │   ├── mode_switch.py
+│   │   │   └── ...
+│   │   └── openclaw_bridge.py   # HTTP client to OpenClaw service
 │   ├── ui/
 │   │   ├── face/                # Face animations
 │   │   └── web/                 # FastAPI + HTMX
@@ -466,9 +712,16 @@ lumi/
 │       ├── clipboard.py
 │       └── active_window.py
 │
+├── openclaw-service/            # Node.js OpenClaw configuration
+│   ├── package.json
+│   ├── lumi-llm-provider.js     # Custom LLM provider (Ollama dev, Hailo prod)
+│   ├── enabled-skills/          # Curated skill manifests
+│   └── README.md
+│
 ├── tests/
 │   ├── unit/
 │   ├── integration/
+│   ├── openclaw/                # OpenClaw viability tests
 │   └── hardware/                # Run only on real Pi
 │
 ├── os-image/                    # pi-gen recipe
@@ -478,7 +731,8 @@ lumi/
 │
 └── scripts/
     ├── dev-setup.sh
-    └── flash-image.sh
+    ├── flash-image.sh
+    └── openclaw-viability-test.sh
 ```
 
 ---
@@ -489,12 +743,17 @@ Key decisions made during design, with reasoning. Future sessions: do not re-lit
 
 | Decision | Reasoning |
 |---|---|
-| **Pi 5 16GB** (vs 4GB/8GB) | Comfortable RAM headroom for Whisper + Piper + ChromaDB + future. ~$55 well spent. |
+| **Pi 5 16GB** (vs 4GB/8GB) | Comfortable RAM headroom for Whisper + Piper + ChromaDB + OpenClaw + future. |
 | **AI HAT+ 2** (vs original AI HAT+) | 40 TOPS + 8GB dedicated RAM = LLM-capable. Vision still excellent. |
-| **microSD only** (no NVMe, no external SSD) | AI HAT+ 2 takes PCIe lane. External SSD kills portability. Workload doesn't benefit from NVMe in practice. |
+| **microSD only** (no NVMe, no external SSD) | AI HAT+ 2 takes PCIe lane. External SSD kills portability. Workload doesn't need NVMe. |
 | **microSD + log2ram** | Mitigates write wear. Standard pattern in Pi production projects. |
-| **Pure onboard LLM** (V1) | No cloud dependency. Simpler architecture. Stronger brand promise. |
-| **ReSpeaker 2-Mics HAT** (vs USB mic array + separate amp) | Single board replaces three components. Better integration. |
+| **Pure onboard LLM** (V1) | No cloud dependency for inference. Simpler architecture. Stronger brand. |
+| **OpenClaw included in V1** | Industry standard agent framework. Memory separation makes it feasible (LLM on HAT, OpenClaw on Pi RAM). Gives users a rich skill ecosystem out of the box. |
+| **Curated skill set for V1** | Small LLM (1.5B) can't reliably orchestrate complex multi-step skills. Limit to simple single-step, read-only skills for safety and reliability. |
+| **No third-party ClawHub skills** | Documented security incidents (ClawHavoc, ~20% malicious plugins per Cisco). Only Lumi-vetted skills shipped. |
+| **Custom LLM provider for OpenClaw** | Lets OpenClaw use our Hailo NPU (production) or Ollama (dev). Same interface, swappable backend. |
+| **Skill router (native first, OpenClaw fallback)** | Native skills are fast and reliable for simple commands. OpenClaw extends reach but with more overhead. |
+| **ReSpeaker 2-Mics HAT** | Single board replaces three components. Better integration. |
 | **No mechanical buttons in V1** | Pushed to V2. V1 leans into voice + gesture as the differentiator. |
 | **Camera Module 3 Wide** (vs AI Camera IMX500) | AI HAT+ 2 is more capable; AI Camera redundant. Wide FOV needed for desk gestures. |
 | **Curated wake-word palette** (vs custom training) | Pre-trained = reliable. Custom training has poor accuracy. |
@@ -508,15 +767,18 @@ Key decisions made during design, with reasoning. Future sessions: do not re-lit
 
 ## Open questions (TBD)
 
-Things not yet decided. Surface to user when relevant.
+Surface to user when relevant.
 
-- **Specific LLM model choice for V1**: Qwen2 1.5B vs DeepSeek R1-Distill 1.5B vs Llama 3.2 1B — needs real-world testing on AI HAT+ 2.
-- **Wake word options in the curated palette**: Need to test which pre-trained models work cleanly. Initial candidates: Lumi, Aria, Nova, Sage, Atlas, Iris, Juno, Hugo, Echo, Pip.
-- **Piper voice selection**: Need to listen through candidate voices and pick 3-4 that match the warm/calm brand.
-- **Face style options (pixel / vector / terminal)**: Need actual designs created.
-- **Onboarding system prompts per work mode**: Need wording for Developer / Writer / Student / General defaults.
-- **CSI ribbon cable**: Pi 5 uses a smaller CSI connector than Camera Module 3 ships with. Need to verify which adapter to order (likely Raspberry Pi camera cable for Pi 5).
-- **3D-printed manual privacy cap design**: V1 trust signal — needs a simple sliding cover.
+- **OpenClaw viability with Qwen2 1.5B** — Phase 1 gate criterion. Reliability ≥80% on 5 simple skills?
+- **Specific LLM model choice for V1** — Qwen2 1.5B vs DeepSeek R1-Distill 1.5B vs Llama 3.2 1B. Test which has best tool-calling reliability on Hailo.
+- **Wake word palette** — Initial candidates: Lumi, Aria, Nova, Sage, Atlas, Iris, Juno, Hugo, Echo, Pip. Need to test which pre-trained models work cleanly.
+- **Piper voice selection** — Listen through candidates and pick 3-4 matching the warm/calm brand.
+- **Face style designs** — Need actual designs for pixel / vector / terminal.
+- **Onboarding system prompts** — Per work mode (Developer / Writer / Student / General).
+- **CSI ribbon cable** — Pi 5 uses smaller CSI connector than Camera Module 3 ships with. Verify adapter needed.
+- **3D-printed manual privacy cap** — V1 trust signal — needs design.
+- **OpenClaw service startup time** — Adds to Pi boot time. Acceptable threshold?
+- **Skill timeout default** — How long before a stuck skill is killed? (Default 10s, configurable per skill)
 
 ---
 
@@ -529,6 +791,7 @@ This file is the source of truth for project context across AI sessions. When wo
 - A V1 vs V2 scope change happens
 - An open question gets resolved
 - A new constraint or learning emerges
+- A phase gate criterion result comes in
 
 **Don't add to this file:**
 - Implementation details that belong in code comments
@@ -538,7 +801,8 @@ This file is the source of truth for project context across AI sessions. When wo
 **Tone for AI sessions:**
 - Push back on suggestions that compromise V1 simplicity
 - Question additions that don't fit the warm/calm/private brand
-- Verify hardware claims against current 2026 reality (Pi/Hailo/Arduino ecosystem moves fast)
+- Verify hardware claims against current 2026 reality
 - Don't re-litigate decisions in the Decision Log without strong new information
+- Respect the phase gate criteria — they exist to prevent scope creep
 
-**Pre-hardware work focus:** Build the laptop version of Lumi first. Mock all hardware interfaces cleanly so the swap to real hardware is a driver replacement, not a rewrite.
+**Pre-hardware work focus:** Build the laptop version of Lumi first. Mock all hardware interfaces cleanly so the swap to real hardware is a driver replacement, not a rewrite. The OpenClaw viability check in Phase 1 is the most important early decision — let it determine V1 scope honestly.

@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.eggs/
+*.egg-info/
+build/
+dist/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# uv
+.uv/
+
+# Models (downloaded at runtime — not checked in)
+models/
+*.onnx
+*.gguf
+*.bin
+*.pt
+*.safetensors
+
+# Local data
+data/
+chroma/
+*.sqlite
+*.db
+
+# Logs
+logs/
+*.log
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# Onboard image build artifacts
+os-image/work/
+os-image/deploy/
+*.img
+*.img.xz
