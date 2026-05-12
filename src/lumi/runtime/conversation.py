@@ -2,18 +2,22 @@
 
 `ConversationManager` is the single point of contact between the runtime
 and the LLM. It owns the history, injects the system prompt, and enforces
-the sliding-window context limit. ChromaDB-backed memory retrieval plugs in
-here in Week 2 (inject relevant past context into the system prompt string).
+the sliding-window context limit. An optional MemoryStore injects relevant
+past context into the system prompt when available.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import TYPE_CHECKING
 
 from ..config import Mode
 from ..llm.ollama_backend import LLMBackend, Message
 from ..llm.prompts import get_system_prompt
 from ..log import get_logger
+
+if TYPE_CHECKING:
+    from .memory import MemoryStore
 
 log = get_logger(__name__)
 
@@ -24,10 +28,12 @@ class ConversationManager:
         backend: LLMBackend,
         mode: Mode = Mode.GENERAL,
         max_turns: int = 20,
+        memory: MemoryStore | None = None,
     ) -> None:
         self._backend = backend
         self._mode = mode
         self._max_turns = max_turns
+        self._memory = memory
         self._history: list[Message] = []
 
     @property
@@ -43,7 +49,12 @@ class ConversationManager:
         log.info("conversation.cleared")
 
     def _build_messages(self) -> list[Message]:
-        system: Message = {"role": "system", "content": get_system_prompt(self._mode)}
+        system_content = get_system_prompt(self._mode)
+        if self._memory and self._history:
+            ctx = self._memory.get_relevant_context(self._history[-1]["content"])
+            if ctx:
+                system_content += f"\n\nRelevant from past conversations:\n{ctx}"
+        system: Message = {"role": "system", "content": system_content}
         tail = self._history[-(self._max_turns * 2):]
         return [system, *tail]
 
@@ -56,14 +67,14 @@ class ConversationManager:
 
         self._history.append({"role": "assistant", "content": reply})
         log.info("conversation.assistant", text=reply)
+        if self._memory:
+            self._memory.store_turn(user_text, reply)
         return reply
 
     def stream_chat(self, user_text: str) -> Iterator[str]:
         """Streaming variant — yields text chunks as they arrive.
 
         Appends the full assembled reply to history once the stream is exhausted.
-        Use this when the caller wants to pipe chunks to TTS without waiting for
-        the full response (streaming TTS, Week 2).
         """
         self._history.append({"role": "user", "content": user_text})
         log.info("conversation.user", text=user_text)
@@ -76,3 +87,5 @@ class ConversationManager:
         reply = "".join(buffer).strip()
         self._history.append({"role": "assistant", "content": reply})
         log.info("conversation.assistant", text=reply)
+        if self._memory:
+            self._memory.store_turn(user_text, reply)

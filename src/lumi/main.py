@@ -4,6 +4,7 @@ Usage:
   lumi                          # normal run (push-to-talk, Ollama backend)
   lumi --backend mock           # no Ollama needed; great for first-run testing
   lumi --mode code              # start in developer mode
+  lumi --enroll                 # record voice enrollment clips and exit
   LUMI_LOG_LEVEL=DEBUG lumi     # verbose logs
   lumi --list-devices           # show available audio devices and exit
 """
@@ -20,9 +21,14 @@ from .audio.voice_id import VoiceID
 from .audio.wake_word import PushToTalkWake, WakeSource
 from .config import LLMBackendName, Mode, Settings, WakeStrategy, get_settings
 from .hardware.audio_io import SoundDeviceInput
+from .hardware.display import make_display
 from .llm import make_llm_backend
 from .log import configure_logging, get_logger
 from .runtime.conversation import ConversationManager
+from .runtime.memory import MemoryStore
+from .runtime.state_machine import LumiState, StateMachine
+from .skills import AuditLog, OpenClawBridge, SkillRouter
+from .ui.face.engine import FaceEngine
 
 app = typer.Typer(name="lumi", add_completion=False, pretty_exceptions_enable=False)
 log = get_logger(__name__)
@@ -34,33 +40,55 @@ def _make_wake_source(cfg: Settings) -> WakeSource:
     raise NotImplementedError(f"Wake strategy not yet implemented: {cfg.wake}")
 
 
+def _enroll_voice(cfg: Settings, mic: SoundDeviceInput, voice_id: VoiceID) -> None:
+    typer.echo("Voice enrollment: recording 3 clips of 5 seconds each.")
+    clips = []
+    for i in range(3):
+        typer.echo(f"  Clip {i + 1}/3 — speak now...")
+        clips.append(mic.record(5.0))
+    voice_id.enroll(clips, cfg.audio_sample_rate)
+    typer.echo("Enrollment saved. Set LUMI_VOICE_ID_ENABLED=true to activate verification.")
+
+
 def _voice_loop(
     cfg: Settings,
     wake: WakeSource,
     mic: SoundDeviceInput,
     stt: WhisperSTT,
-    conversation: ConversationManager,
+    router: SkillRouter,
     tts: TTS,
     voice_id: VoiceID,
+    sm: StateMachine,
+    face: FaceEngine,
 ) -> None:
     typer.echo(
         f"Lumi is ready.  backend={cfg.llm_backend.value}  mode={cfg.mode.value}  "
-        f"record={cfg.audio_record_duration_s}s"
+        f"record={cfg.audio_record_duration_s}s  "
+        f"openclaw={'on' if cfg.openclaw_enabled else 'off'}  "
+        f"memory={'on' if cfg.memory_enabled else 'off'}  "
+        f"voice_id={'on' if cfg.voice_id_enabled else 'off'}"
     )
-    log.info("lumi.ready", wake=cfg.wake.value, mode=cfg.mode.value, llm=cfg.llm_backend.value)
+    log.info(
+        "lumi.ready",
+        wake=cfg.wake.value,
+        mode=cfg.mode.value,
+        llm=cfg.llm_backend.value,
+    )
 
     while True:
+        sm.transition(LumiState.IDLE)
+        face.show()
         wake.wait_for_wake()
 
+        sm.transition(LumiState.LISTEN)
+        face.show()
         audio = mic.record(cfg.audio_record_duration_s)
 
-        if not voice_id.is_owner(audio, cfg.audio_sample_rate):
+        if cfg.voice_id_enabled and not voice_id.is_owner(audio, cfg.audio_sample_rate):
             log.info("voice_id.rejected")
             continue
 
-        typer.echo("Transcribing...", nl=False)
         text = stt.transcribe(audio, cfg.audio_sample_rate)
-        typer.echo("\r              \r", nl=False)  # clear the transcribing line
 
         if not text:
             typer.echo("(silence or noise — try again)")
@@ -69,14 +97,18 @@ def _voice_loop(
 
         typer.echo(f"You:  {text}")
 
+        sm.transition(LumiState.THINK)
+        face.show()
         try:
-            reply = conversation.chat(text)
+            reply = router.handle(text)
         except Exception as exc:
-            log.error("llm.error", error=str(exc))
-            typer.echo(f"[LLM error: {exc}]", err=True)
+            log.error("router.error", error=str(exc))
+            typer.echo(f"[error: {exc}]", err=True)
             continue
 
         typer.echo(f"Lumi: {reply}")
+        sm.transition(LumiState.SPEAK)
+        face.show()
         tts.speak(reply)
 
 
@@ -86,6 +118,7 @@ def run(
     backend: str = typer.Option("", "--backend", help="Override LUMI_LLM_BACKEND (ollama/mock)"),
     mode: str = typer.Option("", "--mode", help="Override LUMI_MODE (general/code/focus/dictation)"),
     list_devices: bool = typer.Option(False, "--list-devices", help="Print audio devices and exit"),
+    enroll: bool = typer.Option(False, "--enroll", help="Record voice enrollment clips and exit"),
 ) -> None:
     configure_logging(log_level)
 
@@ -105,22 +138,45 @@ def run(
         sample_rate=cfg.audio_sample_rate,
         device=cfg.audio_input_device,
     )
+    voice_id = VoiceID(cfg.data_dir)
+
+    if enroll:
+        _enroll_voice(cfg, mic, voice_id)
+        raise typer.Exit()
+
     stt = WhisperSTT(
         model_name=cfg.whisper_model,
         compute_type=cfg.whisper_compute,
         cache_dir=cfg.models_dir,
     )
     llm = make_llm_backend(cfg)
-    conversation = ConversationManager(llm, mode=cfg.mode)
+
+    memory: MemoryStore | None = None
+    if cfg.memory_enabled and MemoryStore.is_available():
+        memory = MemoryStore(cfg.data_dir)
+
+    conversation = ConversationManager(llm, mode=cfg.mode, memory=memory)
     tts = make_tts(cfg.piper_voice, cfg.models_dir / "piper")
-    voice_id = VoiceID()
     wake = _make_wake_source(cfg)
 
-    typer.echo("Loading Whisper model...")
-    stt._load()  # warm up before the first keypress so latency lands at startup
+    bridge: OpenClawBridge | None = None
+    if cfg.openclaw_enabled:
+        bridge = OpenClawBridge(cfg.openclaw_url, cfg.openclaw_token)
+    audit_log = AuditLog(cfg.data_dir)
+    router = SkillRouter(conversation=conversation, tts=tts, bridge=bridge, audit_log=audit_log)
+
+    display = make_display(cfg.face_width, cfg.face_height)
+    sm = StateMachine()
+    face = FaceEngine(display=display)
+    sm.on_state_change(face.set_state)
+
+    with typer.progressbar(length=1, label="Loading Whisper model") as progress:
+        stt._load()
+        progress.update(1)
 
     try:
-        _voice_loop(cfg, wake, mic, stt, conversation, tts, voice_id)
+        _voice_loop(cfg, wake, mic, stt, router, tts, voice_id, sm, face)
     except KeyboardInterrupt:
         typer.echo("\nGoodbye.")
+        display.close()
         sys.exit(0)

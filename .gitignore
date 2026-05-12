@@ -18,6 +18,10 @@ dist/
 # uv
 .uv/
 
+# Node
+node_modules/
+package-lock.json
+
 # Models (downloaded at runtime — not checked in)
 models/
 *.onnx
@@ -31,6 +35,9 @@ data/
 chroma/
 *.sqlite
 *.db
+
+# OpenClaw sandbox — files Lumi is allowed to search (local only, never committed)
+sandbox/
 
 # Logs
 logs/

@@ -1,0 +1,75 @@
+{
+  "models": {
+    "providers": {
+      "ollama": {
+        "baseUrl": "http://127.0.0.1:11434",
+        "apiKey": "ollama-local",
+        "api": "ollama",
+        "models": [
+          {
+            "id": "qwen2.5:1.5b",
+            "name": "qwen2.5:1.5b",
+            "input": ["text"],
+            "contextWindow": 8192,
+            "maxTokens": 2048
+          }
+        ]
+      }
+    }
+  },
+
+  "agents": {
+    "defaults": {
+      "model": { "primary": "ollama/qwen2.5:1.5b" }
+    }
+  },
+
+  "gateway": {
+    "port": 18789,
+    "bind": "loopback",
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": "lumi-dev-token"
+    },
+    "http": {
+      "endpoints": {
+        "chatCompletions": { "enabled": true }
+      }
+    }
+  },
+
+  "tools": {
+    "deny": ["group:automation", "group:runtime"],
+    "exec": { "security": "deny" }
+  },
+
+  "skills": {
+    "allowBundled": [],
+    "entries": {
+      "file_search": {
+        "enabled": true,
+        "config": {
+          "rootPath": "__SANDBOX_PATH__"
+        }
+      },
+      "weather": {
+        "enabled": true,
+        "env": {
+          "OPENWEATHERMAP_API_KEY": "__OPENWEATHERMAP_API_KEY__"
+        }
+      },
+      "timer":            { "enabled": true },
+      "unit_converter":   { "enabled": true },
+      "wikipedia_lookup": { "enabled": true }
+    }
+  },
+
+  "update": {
+    "auto": { "enabled": false }
+  },
+
+  "diagnostics": {
+    "otel": { "enabled": false }
+  }
+}

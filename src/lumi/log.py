@@ -20,13 +20,11 @@ def configure_logging(level: str = "INFO") -> None:
         format="%(message)s",
         datefmt="%H:%M:%S",
         handlers=[RichHandler(rich_tracebacks=True, show_path=False, show_time=True)],
-        stream=sys.stderr,
     )
 
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
-            structlog.stdlib.add_logger_name,
             structlog.stdlib.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.dev.ConsoleRenderer(colors=True),

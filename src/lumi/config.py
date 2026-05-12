@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # LLM
     llm_backend: LLMBackendName = LLMBackendName.OLLAMA
     ollama_host: str = "http://127.0.0.1:11434"
-    ollama_model: str = "qwen2:1.5b"
+    ollama_model: str = "qwen2.5:1.5b"
 
     # Audio
     audio_input_device: str | None = None
@@ -69,6 +69,17 @@ class Settings(BaseSettings):
     face_height: int = 320
     face_fps: int = 30
     face_theme: FaceTheme = FaceTheme.PIXEL
+
+    # OpenClaw
+    openclaw_enabled: bool = True
+    openclaw_url: str = "http://127.0.0.1:18789"
+    openclaw_token: str = "lumi-dev-token"
+
+    # Memory (requires [memory] extra)
+    memory_enabled: bool = False
+
+    # Speaker verification (requires [voice] extra + enrollment)
+    voice_id_enabled: bool = False
 
     # Runtime
     mode: Mode = Mode.GENERAL

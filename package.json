@@ -1,0 +1,19 @@
+{
+  "name": "lumi",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "dependencies": {
+    "openclaw": "2026.5.7"
+  },
+  "scripts": {
+    "viability-test": "node scripts/openclaw-viability-test.js",
+    "openclaw:setup": "bash openclaw-service/setup.sh",
+    "openclaw:start": "npx openclaw gateway start",
+    "openclaw:stop": "npx openclaw gateway stop",
+    "openclaw:status": "npx openclaw gateway status",
+    "openclaw:run": "npx openclaw gateway run"
+  }
+}

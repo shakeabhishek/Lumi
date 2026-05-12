@@ -51,7 +51,7 @@ memory = ["chromadb>=0.5", "sentence-transformers>=3.0"]
 web = ["fastapi>=0.111", "uvicorn>=0.30", "jinja2>=3.1"]
 
 [project.scripts]
-lumi = "lumi.main:run"
+lumi = "lumi.main:app"
 
 [build-system]
 requires = ["hatchling"]
