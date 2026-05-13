@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Permissions — Lumi{% endblock %}
+{% block content %}
+
+<div class="progress-bar">
+  {% for i in range(1, total + 1) %}
+  <div class="progress-dot {% if i < step %}done{% elif i == step %}current{% endif %}"></div>
+  {% endfor %}
+</div>
+
+<div class="onboard-card">
+  <div class="step-label">Step {{ step }} of {{ total }}</div>
+  <h1>Permissions</h1>
+  <p>
+    {{ settings.lumi_name }} only accesses what you allow. Everything defaults to off.
+    You can change these any time in Settings → Privacy.
+  </p>
+
+  <form method="POST" action="/onboarding/7">
+    <div class="card" style="margin-bottom:1rem">
+      <label class="inline">
+        <input type="checkbox" name="wifi_skills" value="on"
+               {% if settings.wifi_skills_enabled %}checked{% endif %}>
+        <div>
+          <strong>Internet for skills</strong>
+          <div style="font-size:.82rem;color:var(--muted)">Weather, Wikipedia, news headlines</div>
+        </div>
+      </label>
+    </div>
+    <div class="card" style="margin-bottom:1rem">
+      <label class="inline">
+        <input type="checkbox" name="clipboard" value="on"
+               {% if settings.clipboard_enabled %}checked{% endif %}>
+        <div>
+          <strong>Clipboard</strong>
+          <div style="font-size:.82rem;color:var(--muted)">Read what you've copied to use as context</div>
+        </div>
+      </label>
+    </div>
+    <div class="card" style="margin-bottom:1rem">
+      <label class="inline">
+        <input type="checkbox" name="active_window" value="on"
+               {% if settings.active_window_enabled %}checked{% endif %}>
+        <div>
+          <strong>Active window title</strong>
+          <div style="font-size:.82rem;color:var(--muted)">Know which app you're working in</div>
+        </div>
+      </label>
+    </div>
+    <div class="card" style="margin-bottom:1rem">
+      <label class="inline">
+        <input type="checkbox" name="camera" value="on"
+               {% if settings.camera_enabled %}checked{% endif %}>
+        <div>
+          <strong>Camera (gestures)</strong>
+          <div style="font-size:.82rem;color:var(--muted)">Wave, thumbs up/down, presence detection</div>
+        </div>
+      </label>
+    </div>
+
+    <div class="btn-row">
+      <a href="/onboarding/6" class="btn">← Back</a>
+      <button type="submit" class="btn primary">Continue →</button>
+    </div>
+  </form>
+</div>
+
+{% endblock %}

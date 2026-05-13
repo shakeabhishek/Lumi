@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Privacy — Lumi{% endblock %}
+{% block content %}
+<h1>Privacy &amp; permissions</h1>
+<p>{{ settings.lumi_name }} only accesses what you explicitly allow here. All data stays on your device.</p>
+
+<div class="card">
+  <form method="POST" action="/settings/data">
+
+    <div class="skill-row">
+      <div>
+        <strong>Internet for skills</strong>
+        <div style="font-size:.82rem;color:var(--muted)">Weather, Wikipedia, news headlines. No personal data sent.</div>
+      </div>
+      <label class="inline"><input type="checkbox" name="wifi_skills" value="on"
+        {% if settings.wifi_skills_enabled %}checked{% endif %}></label>
+    </div>
+
+    <div class="skill-row">
+      <div>
+        <strong>Clipboard read</strong>
+        <div style="font-size:.82rem;color:var(--muted)">Use copied text as context when relevant.</div>
+      </div>
+      <label class="inline"><input type="checkbox" name="clipboard" value="on"
+        {% if settings.clipboard_enabled %}checked{% endif %}></label>
+    </div>
+
+    <div class="skill-row">
+      <div>
+        <strong>Active window title</strong>
+        <div style="font-size:.82rem;color:var(--muted)">Know which app you're in for context-aware help.</div>
+      </div>
+      <label class="inline"><input type="checkbox" name="active_window" value="on"
+        {% if settings.active_window_enabled %}checked{% endif %}></label>
+    </div>
+
+    <div class="skill-row">
+      <div>
+        <strong>Camera (gestures &amp; presence)</strong>
+        <div style="font-size:.82rem;color:var(--muted)">Only hand landmarks used. Frames never stored.</div>
+      </div>
+      <label class="inline"><input type="checkbox" name="camera" value="on"
+        {% if settings.camera_enabled %}checked{% endif %}></label>
+    </div>
+
+    <div class="skill-row">
+      <div>
+        <strong>Long-term memory (ChromaDB)</strong>
+        <div style="font-size:.82rem;color:var(--muted)">Remember past conversations for better context. Requires <code>uv pip install -e "[memory]"</code>.</div>
+      </div>
+      <label class="inline"><input type="checkbox" name="memory_enabled" value="on"
+        {% if settings.memory_enabled %}checked{% endif %}></label>
+    </div>
+
+    <div class="btn-row" style="margin-top:1.25rem">
+      <button type="submit" class="btn primary">Save</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

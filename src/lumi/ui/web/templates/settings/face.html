@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Face — Lumi{% endblock %}
+{% block content %}
+<h1>Face style</h1>
+<p>Takes effect on next startup of the voice loop.</p>
+
+<div class="card">
+  <form method="POST" action="/settings/face">
+    <div class="option-grid">
+      {% for theme in face_themes %}
+      <label class="option-card">
+        <input type="radio" name="face_theme" value="{{ theme.id }}"
+               {% if settings.face_theme == theme.id %}checked{% endif %}
+               {% if theme.id != "pixel" %}disabled{% endif %}>
+        <div class="opt-label">{{ theme.label }}</div>
+        <div class="opt-desc">{{ theme.desc }}</div>
+      </label>
+      {% endfor %}
+    </div>
+    <div class="btn-row">
+      <button type="submit" class="btn primary">Save</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

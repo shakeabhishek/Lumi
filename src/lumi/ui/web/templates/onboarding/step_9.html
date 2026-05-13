@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}All set — Lumi{% endblock %}
+{% block content %}
+
+<div class="progress-bar">
+  {% for i in range(1, total + 1) %}
+  <div class="progress-dot done"></div>
+  {% endfor %}
+</div>
+
+<div class="onboard-card" style="text-align:center">
+  <div class="step-label">You're all set</div>
+  <h1 style="font-size:2rem;margin-bottom:.5rem">{{ settings.lumi_name }} is ready.</h1>
+  <p style="font-size:1.05rem;margin-bottom:1.5rem">
+    Start a conversation by running:<br>
+    <code style="font-size:1rem">uv run lumi --backend ollama</code>
+  </p>
+  <p>Press <strong>Enter</strong> to wake {{ settings.lumi_name }}, then speak.</p>
+  <p>Say <em>"switch to {{ settings.mode }} mode"</em> or <em>"set a timer for 5 minutes"</em> to try the skills.</p>
+
+  <hr style="margin:1.5rem 0">
+
+  <form method="POST" action="/onboarding/9" style="display:inline">
+    <div class="form-group" style="text-align:left;max-width:280px;margin:0 auto 1rem">
+      <label for="owner_name">What's your name? (optional)</label>
+      <input type="text" id="owner_name" name="owner_name"
+             placeholder="e.g. Alex"
+             value="{{ settings.owner_name }}">
+    </div>
+    <button type="submit" class="btn primary" style="font-size:1rem;padding:.75rem 2rem">
+      Go to dashboard →
+    </button>
+  </form>
+</div>
+
+{% endblock %}

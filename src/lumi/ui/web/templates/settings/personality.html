@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Personality — Lumi{% endblock %}
+{% block content %}
+<h1>Personality</h1>
+<p>Override the default system prompt for {{ settings.lumi_name }}. Leave blank to use the built-in prompt for the current mode.</p>
+
+<div class="card">
+  <form method="POST" action="/settings/personality">
+    <div class="form-group">
+      <label for="sp">System prompt override</label>
+      <textarea id="sp" name="system_prompt_override" rows="8"
+                placeholder="You are Lumi, a warm and helpful AI companion...">{{ settings.system_prompt_override }}</textarea>
+      <div class="form-hint">Applies to all conversations. The current mode ({{ settings.mode }}) provides the default if this is empty.</div>
+    </div>
+    <div class="btn-row">
+      <button type="submit" class="btn primary">Save</button>
+      <a href="/" class="btn">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<h2>Quick settings</h2>
+<div style="display:flex;gap:.75rem;flex-wrap:wrap">
+  <a href="/settings/voice" class="btn">Voice</a>
+  <a href="/settings/face" class="btn">Face</a>
+  <a href="/settings/modes" class="btn">Mode</a>
+  <a href="/settings/data" class="btn">Privacy</a>
+  <a href="/settings/memory" class="btn">Memory</a>
+</div>
+{% endblock %}

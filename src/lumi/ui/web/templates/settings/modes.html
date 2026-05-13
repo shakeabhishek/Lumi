@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Mode — Lumi{% endblock %}
+{% block content %}
+<h1>Work mode</h1>
+<p>You can also switch modes by voice: <em>"switch to code mode"</em>.</p>
+
+<div class="card">
+  <form method="POST" action="/settings/modes">
+    <div class="option-grid">
+      {% for m in modes %}
+      <label class="option-card">
+        <input type="radio" name="mode" value="{{ m.id }}"
+               {% if settings.mode == m.id %}checked{% endif %}>
+        <div class="opt-label">{{ m.label }}</div>
+        <div class="opt-desc">{{ m.desc }}</div>
+      </label>
+      {% endfor %}
+    </div>
+    <div class="btn-row">
+      <button type="submit" class="btn primary">Save</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

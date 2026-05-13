@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Memory — Lumi{% endblock %}
+{% block content %}
+<h1>Memory browser</h1>
+<p>What {{ settings.lumi_name }} remembers from past conversations. Stored locally in ChromaDB.</p>
+
+{% if not settings.memory_enabled %}
+<div class="msg info">
+  Long-term memory is disabled. Enable it in
+  <a href="/settings/data">Settings → Privacy</a> and install the memory extra:
+  <code>uv pip install -e ".[memory]"</code>
+</div>
+{% elif conversations %}
+<div class="card">
+  {% for conv in conversations %}
+  <div style="padding:.65rem 0;border-bottom:1px solid var(--border)">
+    <pre style="white-space:pre-wrap;font-family:inherit;font-size:.88rem">{{ conv }}</pre>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+  <p>No memories yet. Have some conversations first.</p>
+</div>
+{% endif %}
+{% endblock %}

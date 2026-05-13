@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Lumi{% endblock %}
+{% block content %}
+
+<h1>Hello{% if settings.owner_name %}, {{ settings.owner_name }}{% endif %} 👋</h1>
+<p>{{ settings.lumi_name }} is ready. Here's what's configured.</p>
+
+<div class="card-grid">
+  <div class="stat-card">
+    <div class="stat-label">Name</div>
+    <div class="stat-value">{{ settings.lumi_name }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Mode</div>
+    <div class="stat-value" style="text-transform:capitalize">{{ settings.mode }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Face</div>
+    <div class="stat-value" style="text-transform:capitalize">{{ settings.face_theme }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Voice ID</div>
+    <div class="stat-value">{{ "On" if settings.voice_id_enabled else "Off" }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Memory</div>
+    <div class="stat-value">{{ "On" if settings.memory_enabled else "Off" }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Skills</div>
+    <div class="stat-value">{{ settings.enabled_skills | length }} active</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Recent activity</h2>
+  {% if recent %}
+  <table class="log-table">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Source</th>
+        <th>Skill</th>
+        <th>You said</th>
+        <th>Lumi replied</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in recent | reverse %}
+      <tr>
+        <td style="white-space:nowrap;color:var(--muted)">{{ entry.ts[11:19] }}</td>
+        <td><span class="badge {{ entry.source }}">{{ entry.source }}</span></td>
+        <td>{{ entry.skill }}</td>
+        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ entry.input }}</td>
+        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ entry.result }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">
+    <p>No conversations yet — start talking to {{ settings.lumi_name }}!</p>
+    <p style="font-size:.85rem">Run <code>uv run lumi --backend mock</code> in a terminal to start.</p>
+  </div>
+  {% endif %}
+</div>
+
+<div style="display:flex;gap:.75rem;flex-wrap:wrap">
+  <a href="/skills" class="btn">Manage skills</a>
+  <a href="/settings/personality" class="btn">Edit system prompt</a>
+  <a href="/settings/data" class="btn">Permissions</a>
+  <a href="/settings/memory" class="btn">Memory browser</a>
+</div>
+
+{% endblock %}

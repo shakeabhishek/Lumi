@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Voice Enrollment — Lumi{% endblock %}
+{% block content %}
+
+<div class="progress-bar">
+  {% for i in range(1, total + 1) %}
+  <div class="progress-dot {% if i < step %}done{% elif i == step %}current{% endif %}"></div>
+  {% endfor %}
+</div>
+
+<div class="onboard-card">
+  <div class="step-label">Step {{ step }} of {{ total }}</div>
+  <h1>Voice enrollment</h1>
+  <p>
+    Lumi learns your voice so it only responds to you.
+    We'll record 3 short clips (5 seconds each) from your microphone.
+  </p>
+  <p style="font-size:.85rem">
+    Make sure no other app is using your microphone, and the
+    <code>lumi</code> voice loop is not running.
+  </p>
+
+  <div id="enroll-status">
+    {% if clip_count == 0 %}
+    <button class="btn primary" hx-post="/onboarding/4/record" hx-target="#enroll-status">
+      Record clip 1/3
+    </button>
+    {% elif clip_count < 3 %}
+    <p class="msg ok">{{ clip_count }}/3 clips recorded.</p>
+    <button class="btn primary" hx-post="/onboarding/4/record" hx-target="#enroll-status">
+      Record clip {{ clip_count + 1 }}/3
+    </button>
+    {% else %}
+    <p class="msg ok">All 3 clips recorded.</p>
+    <button class="btn primary" hx-post="/onboarding/4/enroll" hx-target="#enroll-status">
+      Complete enrollment
+    </button>
+    {% endif %}
+  </div>
+
+  <hr>
+  <p style="font-size:.85rem">Prefer the command line?</p>
+  <p style="margin-bottom:.75rem"><code>uv run lumi --enroll</code></p>
+
+  <form method="POST" action="/onboarding/4/skip">
+    <div class="btn-row">
+      <a href="/onboarding/3" class="btn">← Back</a>
+      <button type="submit" class="btn">Skip for now</button>
+    </div>
+  </form>
+</div>
+
+{% endblock %}

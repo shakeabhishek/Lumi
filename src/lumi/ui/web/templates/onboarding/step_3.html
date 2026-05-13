@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Name — Lumi{% endblock %}
+{% block content %}
+
+<div class="progress-bar">
+  {% for i in range(1, total + 1) %}
+  <div class="progress-dot {% if i < step %}done{% elif i == step %}current{% endif %}"></div>
+  {% endfor %}
+</div>
+
+<div class="onboard-card">
+  <div class="step-label">Step {{ step }} of {{ total }}</div>
+  <h1>Name your Lumi</h1>
+  <p>Pick a name that feels natural to say out loud. This becomes the wake word.</p>
+
+  <form method="POST" action="/onboarding/3">
+    <div class="option-grid" style="grid-template-columns:repeat(auto-fill,minmax(130px,1fr))">
+      {% for name in lumi_names %}
+      <label class="option-card" style="text-align:center">
+        <input type="radio" name="lumi_name" value="{{ name }}"
+               {% if settings.lumi_name == name %}checked{% endif %}>
+        <div class="opt-label">{{ name }}</div>
+      </label>
+      {% endfor %}
+    </div>
+    <div class="btn-row">
+      <a href="/onboarding/2" class="btn">← Back</a>
+      <button type="submit" class="btn primary">Continue →</button>
+    </div>
+  </form>
+</div>
+
+{% endblock %}

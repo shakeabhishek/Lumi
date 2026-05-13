@@ -48,7 +48,7 @@ dev = [
 # Activated once we wire ChromaDB in Week 2
 memory = ["chromadb>=0.5", "sentence-transformers>=3.0"]
 # Activated when web onboarding UI lands in Week 3
-web = ["fastapi>=0.111", "uvicorn>=0.30", "jinja2>=3.1"]
+web = ["fastapi>=0.111", "uvicorn>=0.30", "jinja2>=3.1", "python-multipart>=0.0.9"]
 
 [project.scripts]
 lumi = "lumi.main:app"

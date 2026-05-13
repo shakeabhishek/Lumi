@@ -180,3 +180,25 @@ def run(
         typer.echo("\nGoodbye.")
         display.close()
         sys.exit(0)
+
+
+@app.command()
+def web(
+    port: int = typer.Option(8080, "--port", help="Port to listen on"),
+    host: str = typer.Option("0.0.0.0", "--host", help="Host to bind"),  # noqa: S104
+    reload: bool = typer.Option(False, "--reload", help="Auto-reload on code changes (dev)"),
+) -> None:
+    """Start the Lumi web dashboard (http://localhost:8080)."""
+    try:
+        import uvicorn  # noqa: PLC0415
+    except ImportError:
+        typer.echo("Web deps not installed. Run: uv pip install -e '[.web]'", err=True)
+        raise typer.Exit(1) from None
+
+    from .ui.web.app import create_app  # noqa: PLC0415
+
+    configure_logging("INFO")
+    cfg = get_settings()
+    web_app = create_app(cfg.data_dir)
+    typer.echo(f"Lumi dashboard → http://localhost:{port}")
+    uvicorn.run(web_app, host=host, port=port, reload=reload)

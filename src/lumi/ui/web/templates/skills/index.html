@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Skills — Lumi{% endblock %}
+{% block content %}
+
+<h1>Skills</h1>
+<p>Native skills run locally. OpenClaw skills use the internet when permitted.</p>
+
+<div class="card">
+  <h2>OpenClaw skills</h2>
+  {% for skill in available_skills %}
+  <div class="skill-row">
+    <div>
+      <strong>{{ skill.replace("_", " ").title() }}</strong>
+    </div>
+    {% set enabled = skill in settings.enabled_skills %}
+    <button class="toggle {{ 'on' if enabled else 'off' }}"
+            hx-post="/skills/{{ skill }}/toggle"
+            hx-target="this"
+            hx-swap="outerHTML">
+      {{ "On" if enabled else "Off" }}
+    </button>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <h2>Native skills</h2>
+  <p style="margin-bottom:.75rem">Always active — no network required.</p>
+  <div class="skill-row"><div><strong>Timer</strong><div style="font-size:.82rem;color:var(--muted)">"Set a timer for 5 minutes"</div></div><span class="badge native">Built-in</span></div>
+  <div class="skill-row"><div><strong>Mode switch</strong><div style="font-size:.82rem;color:var(--muted)">"Switch to code mode"</div></div><span class="badge native">Built-in</span></div>
+</div>
+
+<div class="card">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+    <h2 style="margin:0">Audit log</h2>
+    <div style="display:flex;gap:.5rem;align-items:center">
+      <button class="btn" hx-get="/skills/audit-log/rows" hx-target="#log-rows" hx-swap="innerHTML">Refresh</button>
+      <form method="POST" action="/skills/audit-log/clear" style="display:inline"
+            onsubmit="return confirm('Clear all audit log entries?')">
+        <button type="submit" class="btn danger">Clear</button>
+      </form>
+    </div>
+  </div>
+
+  {% if recent %}
+  <table class="log-table">
+    <thead>
+      <tr>
+        <th>Time (UTC)</th>
+        <th>Source</th>
+        <th>Skill</th>
+        <th>Input</th>
+        <th>Result</th>
+      </tr>
+    </thead>
+    <tbody id="log-rows"
+           hx-get="/skills/audit-log/rows"
+           hx-trigger="every 5s"
+           hx-swap="innerHTML">
+      {% include "skills/audit_log_rows.html" %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state" id="log-rows"
+       hx-get="/skills/audit-log/rows"
+       hx-trigger="every 5s"
+       hx-swap="innerHTML">
+    <p>No skill invocations recorded yet.</p>
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}
