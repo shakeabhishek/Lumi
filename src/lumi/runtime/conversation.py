@@ -35,6 +35,7 @@ class ConversationManager:
         self._max_turns = max_turns
         self._memory = memory
         self._history: list[Message] = []
+        self._context_hint: str = ""  # injected for one turn (e.g. active window)
 
     @property
     def mode(self) -> Mode:
@@ -43,6 +44,10 @@ class ConversationManager:
     def set_mode(self, mode: Mode) -> None:
         log.info("conversation.mode_change", old=self._mode.value, new=mode.value)
         self._mode = mode
+
+    def set_context_hint(self, hint: str) -> None:
+        """Set a one-turn context string (e.g. active window title) to inject into the system prompt."""
+        self._context_hint = hint
 
     def clear(self) -> None:
         self._history.clear()
@@ -54,6 +59,9 @@ class ConversationManager:
             ctx = self._memory.get_relevant_context(self._history[-1]["content"])
             if ctx:
                 system_content += f"\n\nRelevant from past conversations:\n{ctx}"
+        if self._context_hint:
+            system_content += f"\n\n{self._context_hint}"
+            self._context_hint = ""  # consume after one turn
         system: Message = {"role": "system", "content": system_content}
         tail = self._history[-(self._max_turns * 2):]
         return [system, *tail]

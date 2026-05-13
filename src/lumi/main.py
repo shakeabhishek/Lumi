@@ -50,6 +50,19 @@ def _enroll_voice(cfg: Settings, mic: SoundDeviceInput, voice_id: VoiceID) -> No
     typer.echo("Enrollment saved. Set LUMI_VOICE_ID_ENABLED=true to activate verification.")
 
 
+def _get_active_window_context(cfg: Settings) -> str:
+    """Return a short context string about the foreground window, or '' if disabled/failed."""
+    if not cfg.active_window_enabled:
+        return ""
+    try:
+        from .host_helper import active_window  # noqa: PLC0415
+
+        w = active_window.get()
+        return str(w) if w else ""
+    except Exception:
+        return ""
+
+
 def _voice_loop(
     cfg: Settings,
     wake: WakeSource,
@@ -58,6 +71,7 @@ def _voice_loop(
     router: SkillRouter,
     tts: TTS,
     voice_id: VoiceID,
+    conversation: ConversationManager,
     sm: StateMachine,
     face: FaceEngine,
 ) -> None:
@@ -66,7 +80,9 @@ def _voice_loop(
         f"record={cfg.audio_record_duration_s}s  "
         f"openclaw={'on' if cfg.openclaw_enabled else 'off'}  "
         f"memory={'on' if cfg.memory_enabled else 'off'}  "
-        f"voice_id={'on' if cfg.voice_id_enabled else 'off'}"
+        f"voice_id={'on' if cfg.voice_id_enabled else 'off'}  "
+        f"clipboard={'on' if cfg.clipboard_enabled else 'off'}  "
+        f"active_window={'on' if cfg.active_window_enabled else 'off'}"
     )
     log.info(
         "lumi.ready",
@@ -82,13 +98,26 @@ def _voice_loop(
 
         sm.transition(LumiState.LISTEN)
         face.show()
-        audio = mic.record(cfg.audio_record_duration_s)
+
+        # --- Failure mode: audio device disconnect ---
+        try:
+            audio = mic.record(cfg.audio_record_duration_s)
+        except Exception as exc:
+            log.warning("mic.error", error=str(exc))
+            typer.echo("(mic error — check your audio device)", err=True)
+            continue
 
         if cfg.voice_id_enabled and not voice_id.is_owner(audio, cfg.audio_sample_rate):
             log.info("voice_id.rejected")
             continue
 
-        text = stt.transcribe(audio, cfg.audio_sample_rate)
+        # --- Failure mode: STT crash ---
+        try:
+            text = stt.transcribe(audio, cfg.audio_sample_rate)
+        except Exception as exc:
+            log.warning("stt.error", error=str(exc))
+            typer.echo("(transcription failed — try again)", err=True)
+            continue
 
         if not text:
             typer.echo("(silence or noise — try again)")
@@ -97,19 +126,33 @@ def _voice_loop(
 
         typer.echo(f"You:  {text}")
 
+        # Inject active window context once per turn so the LLM knows what's on screen
+        window_ctx = _get_active_window_context(cfg)
+        if window_ctx:
+            conversation.set_context_hint(f"User's active window: {window_ctx}")
+            log.info("context.active_window", window=window_ctx)
+
         sm.transition(LumiState.THINK)
         face.show()
+
+        # --- Failure mode: router / LLM / skill error ---
         try:
             reply = router.handle(text)
         except Exception as exc:
             log.error("router.error", error=str(exc))
+            reply = "Sorry, something went wrong. Please try again."
             typer.echo(f"[error: {exc}]", err=True)
-            continue
 
         typer.echo(f"Lumi: {reply}")
         sm.transition(LumiState.SPEAK)
         face.show()
-        tts.speak(reply)
+
+        # --- Failure mode: TTS crash ---
+        try:
+            tts.speak(reply)
+        except Exception as exc:
+            log.warning("tts.error", error=str(exc))
+            # Text already printed above — user can read it even if TTS fails
 
 
 @app.command()
@@ -163,7 +206,13 @@ def run(
     if cfg.openclaw_enabled:
         bridge = OpenClawBridge(cfg.openclaw_url, cfg.openclaw_token)
     audit_log = AuditLog(cfg.data_dir)
-    router = SkillRouter(conversation=conversation, tts=tts, bridge=bridge, audit_log=audit_log)
+    router = SkillRouter(
+        conversation=conversation,
+        tts=tts,
+        bridge=bridge,
+        audit_log=audit_log,
+        clipboard_enabled=cfg.clipboard_enabled,
+    )
 
     display = make_display(cfg.face_width, cfg.face_height)
     sm = StateMachine()
@@ -175,7 +224,7 @@ def run(
         progress.update(1)
 
     try:
-        _voice_loop(cfg, wake, mic, stt, router, tts, voice_id, sm, face)
+        _voice_loop(cfg, wake, mic, stt, router, tts, voice_id, conversation, sm, face)
     except KeyboardInterrupt:
         typer.echo("\nGoodbye.")
         display.close()

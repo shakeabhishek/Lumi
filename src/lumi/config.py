@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     # Speaker verification (requires [voice] extra + enrollment)
     voice_id_enabled: bool = False
 
+    # Host PC context (permissions)
+    clipboard_enabled: bool = False
+    active_window_enabled: bool = False
+
     # Runtime
     mode: Mode = Mode.GENERAL
     wake: WakeStrategy = WakeStrategy.PUSH_TO_TALK

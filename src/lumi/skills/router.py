@@ -15,6 +15,7 @@ from ..log import get_logger
 from ..runtime.conversation import ConversationManager
 from .audit_log import AuditLog
 from .base import NativeSkill
+from .native.clipboard_skill import ClipboardSkill
 from .native.mode_switch import ModeSwitchSkill
 from .native.timer import TimerSkill
 from .openclaw_bridge import OpenClawBridge
@@ -33,10 +34,12 @@ class SkillRouter:
         tts: TTS,
         bridge: OpenClawBridge | None = None,
         audit_log: AuditLog | None = None,
+        clipboard_enabled: bool = False,
     ) -> None:
         self._native: list[NativeSkill] = [
             TimerSkill(tts=tts),
             ModeSwitchSkill(conversation=conversation),
+            ClipboardSkill(enabled=clipboard_enabled),
         ]
         self._bridge = bridge
         self._conversation = conversation
