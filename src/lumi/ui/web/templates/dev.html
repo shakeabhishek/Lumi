@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Dev — Lumi{% endblock %}
+{% block content %}
+<h1>Developer dashboard</h1>
+
+<div class="card">
+  <h2>Hardware &amp; backend status</h2>
+  <table class="audit-table">
+    <thead><tr><th>Component</th><th>Status</th></tr></thead>
+    <tbody>
+      {% set checks = [
+        ("whisper",     "faster-whisper (STT)"),
+        ("piper",       "Piper (TTS)"),
+        ("ollama",      "Ollama (LLM)"),
+        ("pygame",      "Pygame (face engine)"),
+        ("pynput",      "pynput (HID inject)"),
+        ("chromadb",    "ChromaDB (memory)"),
+        ("resemblyzer", "Resemblyzer (voice ID)"),
+        ("psutil",      "psutil (system stats)"),
+      ] %}
+      {% for key, label in checks %}
+      <tr>
+        <td>{{ label }}</td>
+        <td>
+          {% if hw[key] %}
+            <span style="color: var(--amber)">✓ available</span>
+          {% else %}
+            <span style="opacity:.5">✗ not installed</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+      <tr><td>Platform</td><td>{{ hw.platform }} / Python {{ hw.python }}</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Pipeline latency
+    <small style="font-weight:normal; font-size:.8em; margin-left:.5rem">
+      auto-refresh every 5 s
+    </small>
+  </h2>
+  <div id="perf-rows"
+       hx-get="/dev/perf/rows"
+       hx-trigger="every 5s"
+       hx-swap="innerHTML">
+    {% include "dev_perf_rows.html" %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>Current config</h2>
+  <table class="audit-table">
+    <tbody>
+      <tr><td>Lumi name</td><td>{{ settings.lumi_name }}</td></tr>
+      <tr><td>Mode</td><td>{{ settings.mode }}</td></tr>
+      <tr><td>Voice</td><td>{{ settings.piper_voice }}</td></tr>
+      <tr><td>Face theme</td><td>{{ settings.face_theme }}</td></tr>
+      <tr><td>Memory</td><td>{{ "on" if settings.memory_enabled else "off" }}</td></tr>
+      <tr><td>Clipboard</td><td>{{ "on" if settings.clipboard_enabled else "off" }}</td></tr>
+      <tr><td>Active window</td><td>{{ "on" if settings.active_window_enabled else "off" }}</td></tr>
+      <tr><td>OpenClaw</td><td>{{ "on" if settings.openclaw_enabled else "off" }}</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endblock %}

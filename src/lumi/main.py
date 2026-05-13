@@ -16,7 +16,7 @@ import sys
 import typer
 
 from .audio.stt import WhisperSTT
-from .audio.tts import TTS, make_tts
+from .audio.tts import TTS, make_tts, speak_streaming
 from .audio.voice_id import VoiceID
 from .audio.wake_word import PushToTalkWake, WakeSource
 from .config import LLMBackendName, Mode, Settings, WakeStrategy, get_settings
@@ -26,6 +26,7 @@ from .llm import make_llm_backend
 from .log import configure_logging, get_logger
 from .runtime.conversation import ConversationManager
 from .runtime.memory import MemoryStore
+from .runtime.perf import PerfLog, PipelineTimer
 from .runtime.state_machine import LumiState, StateMachine
 from .skills import AuditLog, OpenClawBridge, SkillRouter
 from .ui.face.engine import FaceEngine
@@ -74,6 +75,7 @@ def _voice_loop(
     conversation: ConversationManager,
     sm: StateMachine,
     face: FaceEngine,
+    perf_log: PerfLog,
 ) -> None:
     typer.echo(
         f"Lumi is ready.  backend={cfg.llm_backend.value}  mode={cfg.mode.value}  "
@@ -95,6 +97,8 @@ def _voice_loop(
         sm.transition(LumiState.IDLE)
         face.show()
         wake.wait_for_wake()
+
+        timer = PipelineTimer()
 
         sm.transition(LumiState.LISTEN)
         face.show()
@@ -119,6 +123,8 @@ def _voice_loop(
             typer.echo("(transcription failed — try again)", err=True)
             continue
 
+        timer.mark("stt_ms")
+
         if not text:
             typer.echo("(silence or noise — try again)")
             log.info("stt.silence")
@@ -126,7 +132,6 @@ def _voice_loop(
 
         typer.echo(f"You:  {text}")
 
-        # Inject active window context once per turn so the LLM knows what's on screen
         window_ctx = _get_active_window_context(cfg)
         if window_ctx:
             conversation.set_context_hint(f"User's active window: {window_ctx}")
@@ -135,24 +140,55 @@ def _voice_loop(
         sm.transition(LumiState.THINK)
         face.show()
 
-        # --- Failure mode: router / LLM / skill error ---
+        # --- Streaming LLM → TTS ---
         try:
-            reply = router.handle(text)
+            chunks = router.handle_streaming(text)
+            # Collect first chunk to detect errors early before TTS starts
+            first = next(iter(chunks), None)
+            if first is None:
+                reply_text = "Sorry, I didn't get a response."
+                tts.speak(reply_text)
+            else:
+                timer.mark("router_ms")
+                typer.echo("Lumi: ", nl=False)
+                sm.transition(LumiState.SPEAK)
+                face.show()
+
+                def _echo_and_stream() -> Iterator[str]:
+                    yield first
+                    for chunk in chunks:
+                        yield chunk
+
+                collected: list[str] = []
+
+                def _collecting_chunks() -> Iterator[str]:
+                    for chunk in _echo_and_stream():
+                        collected.append(chunk)
+                        typer.echo(chunk, nl=False)
+                        yield chunk
+
+                # --- Failure mode: TTS crash ---
+                try:
+                    speak_streaming(tts, _collecting_chunks())
+                except Exception as exc:
+                    log.warning("tts.error", error=str(exc))
+                reply_text = "".join(collected)
+                typer.echo("")  # newline after streamed output
         except Exception as exc:
             log.error("router.error", error=str(exc))
-            reply = "Sorry, something went wrong. Please try again."
+            reply_text = "Sorry, something went wrong. Please try again."
+            typer.echo(f"Lumi: {reply_text}")
             typer.echo(f"[error: {exc}]", err=True)
+            sm.transition(LumiState.SPEAK)
+            face.show()
+            try:
+                tts.speak(reply_text)
+            except Exception:
+                pass
 
-        typer.echo(f"Lumi: {reply}")
-        sm.transition(LumiState.SPEAK)
-        face.show()
-
-        # --- Failure mode: TTS crash ---
-        try:
-            tts.speak(reply)
-        except Exception as exc:
-            log.warning("tts.error", error=str(exc))
-            # Text already printed above — user can read it even if TTS fails
+        timer.mark("tts_ms")
+        perf_log.record(timer)
+        log.info("perf.turn", **timer.summary())
 
 
 @app.command()
@@ -213,6 +249,7 @@ def run(
         audit_log=audit_log,
         clipboard_enabled=cfg.clipboard_enabled,
     )
+    perf_log = PerfLog(cfg.data_dir)
 
     display = make_display(cfg.face_width, cfg.face_height)
     sm = StateMachine()
@@ -224,7 +261,7 @@ def run(
         progress.update(1)
 
     try:
-        _voice_loop(cfg, wake, mic, stt, router, tts, voice_id, conversation, sm, face)
+        _voice_loop(cfg, wake, mic, stt, router, tts, voice_id, conversation, sm, face, perf_log)
     except KeyboardInterrupt:
         typer.echo("\nGoodbye.")
         display.close()

@@ -14,6 +14,7 @@ from __future__ import annotations
 import platform
 import shutil
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Protocol
 
@@ -101,6 +102,45 @@ class PiperTTS:
         piper.stdin.close()
         player.wait()
         piper.wait()
+
+
+def speak_streaming(tts: TTS, chunks: Iterator[str]) -> None:  # noqa: F811
+    """Buffer an LLM token stream into sentences and speak each as it completes.
+
+    Runs TTS in a background thread so audio plays while the LLM continues
+    generating the next sentence — significantly reduces perceived latency.
+    """
+    import queue  # noqa: PLC0415
+    import re  # noqa: PLC0415
+    import threading  # noqa: PLC0415
+
+    q: queue.Queue[str | None] = queue.Queue()
+
+    def _worker() -> None:
+        while True:
+            sentence = q.get()
+            if sentence is None:
+                break
+            tts.speak(sentence)
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+
+    buf = ""
+    for chunk in chunks:
+        buf += chunk
+        # Split on sentence-ending punctuation followed by whitespace
+        parts = re.split(r"(?<=[.!?…])\s+", buf)
+        for part in parts[:-1]:
+            clean = part.strip()
+            if clean:
+                q.put(clean)
+        buf = parts[-1]
+
+    if buf.strip():
+        q.put(buf.strip())
+    q.put(None)
+    t.join()
 
 
 def make_tts(piper_voice: str, voice_dir: Path) -> TTS:

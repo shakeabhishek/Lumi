@@ -1,0 +1,28 @@
+{% if recent_perf %}
+<table class="audit-table">
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Total</th>
+      <th>STT</th>
+      <th>Router</th>
+      <th>TTS</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for entry in recent_perf %}
+    <tr>
+      <td style="opacity:.6; font-size:.85em">
+        {{ entry.ts | int | string | truncate(10, killwords=True, end='') }}
+      </td>
+      <td><strong>{{ entry.total_ms | round | int }}ms</strong></td>
+      <td>{{ entry.get("stt_ms", "—") | round | int if entry.get("stt_ms") else "—" }}ms</td>
+      <td>{{ entry.get("router_ms", "—") | round | int if entry.get("router_ms") else "—" }}ms</td>
+      <td>{{ entry.get("tts_ms", "—") | round | int if entry.get("tts_ms") else "—" }}ms</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p style="opacity:.5">No turns recorded yet. Run the voice loop to see latency data here.</p>
+{% endif %}

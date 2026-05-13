@@ -10,6 +10,8 @@ Every dispatch is recorded in AuditLog when one is provided.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from ..audio.tts import TTS
 from ..log import get_logger
 from ..runtime.conversation import ConversationManager
@@ -17,7 +19,10 @@ from .audit_log import AuditLog
 from .base import NativeSkill
 from .native.clipboard_skill import ClipboardSkill
 from .native.mode_switch import ModeSwitchSkill
+from .native.reminder_skill import ReminderSkill
+from .native.system_stats_skill import SystemStatsSkill
 from .native.timer import TimerSkill
+from .native.volume_skill import VolumeSkill
 from .openclaw_bridge import OpenClawBridge
 
 log = get_logger(__name__)
@@ -37,8 +42,11 @@ class SkillRouter:
         clipboard_enabled: bool = False,
     ) -> None:
         self._native: list[NativeSkill] = [
+            ReminderSkill(tts=tts),   # before TimerSkill — more specific "remind me to X" pattern
             TimerSkill(tts=tts),
             ModeSwitchSkill(conversation=conversation),
+            VolumeSkill(),
+            SystemStatsSkill(),
             ClipboardSkill(enabled=clipboard_enabled),
         ]
         self._bridge = bridge
@@ -73,3 +81,37 @@ class SkillRouter:
         if self._audit:
             self._audit.log("llm", "llm", transcript, reply)
         return reply
+
+    def handle_streaming(self, transcript: str) -> Iterator[str]:
+        """Like handle() but streams the LLM response token-by-token on the LLM path."""
+        # 1. Native skills — return full text as a single chunk
+        for skill in self._native:
+            if skill.matches(transcript):
+                result = skill.execute(transcript)
+                if result.handled:
+                    name = _skill_name(skill)
+                    log.info("router.native", skill=name)
+                    if self._audit:
+                        self._audit.log("native", name, transcript, result.text)
+                    yield result.text
+                    return
+
+        # 2. OpenClaw — synchronous, yield whole response
+        if self._bridge is not None:
+            response = self._bridge.send(transcript)
+            if response:
+                log.info("router.openclaw")
+                if self._audit:
+                    self._audit.log("openclaw", "openclaw", transcript, response)
+                yield response
+                return
+            log.info("router.openclaw_miss")
+
+        # 3. Streaming LLM
+        log.info("router.llm_stream")
+        parts: list[str] = []
+        for chunk in self._conversation.stream_chat(transcript):
+            parts.append(chunk)
+            yield chunk
+        if self._audit:
+            self._audit.log("llm", "llm", transcript, "".join(parts))

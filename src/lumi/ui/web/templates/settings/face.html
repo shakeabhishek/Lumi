@@ -10,15 +10,29 @@
       {% for theme in face_themes %}
       <label class="option-card">
         <input type="radio" name="face_theme" value="{{ theme.id }}"
-               {% if settings.face_theme == theme.id %}checked{% endif %}
-               {% if theme.id != "pixel" %}disabled{% endif %}>
+               {% if settings.face_theme == theme.id %}checked{% endif %}>
         <div class="opt-label">{{ theme.label }}</div>
         <div class="opt-desc">{{ theme.desc }}</div>
       </label>
       {% endfor %}
     </div>
+
+    <div class="form-row" style="margin-top: 1.5rem">
+      <label for="face_color">Face colour</label>
+      <div style="display:flex; align-items:center; gap:.75rem">
+        <input type="color" id="face_color" name="face_color"
+               value="{{ settings.face_color or '#F5A623' }}"
+               style="width:3rem; height:2rem; border:none; background:none; cursor:pointer; padding:0">
+        <span style="opacity:.6; font-size:.9em">
+          Leave at default for theme's built-in colour
+          (pixel = pink, vector = amber, terminal = green)
+        </span>
+      </div>
+    </div>
+
     <div class="btn-row">
       <button type="submit" class="btn primary">Save</button>
+      <a href="/settings/face" class="btn">Reset</a>
     </div>
   </form>
 </div>

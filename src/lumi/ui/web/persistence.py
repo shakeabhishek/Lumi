@@ -39,9 +39,9 @@ MODES: list[dict[str, str]] = [
 ]
 
 FACE_THEMES: list[dict[str, str]] = [
-    {"id": "pixel",    "label": "Pixel",    "desc": "Warm amber dots on near-black"},
-    {"id": "vector",   "label": "Vector",   "desc": "Smooth lines (coming soon)"},
-    {"id": "terminal", "label": "Terminal", "desc": "Green-on-black CRT style (coming soon)"},
+    {"id": "pixel",    "label": "Pixel",    "desc": "Chunky 8-bit pixel art with heart eyes"},
+    {"id": "vector",   "label": "Vector",   "desc": "Smooth geometric shapes with expressive brows"},
+    {"id": "terminal", "label": "Terminal", "desc": "Classic green phosphor CRT style"},
 ]
 
 
@@ -59,6 +59,7 @@ class UserSettings(BaseModel):
 
     # Face
     face_theme: str = "pixel"
+    face_color: str = ""  # empty = use per-theme default
 
     # Conversation mode
     mode: str = "general"

@@ -88,10 +88,12 @@ async def face_get(request: Request) -> HTMLResponse:
 async def face_post(
     request: Request,
     face_theme: Annotated[str, Form()] = "pixel",
+    face_color: Annotated[str, Form()] = "",
 ) -> str:
     data_dir = request.app.state.data_dir
     s = load_settings(data_dir)
     s.face_theme = face_theme
+    s.face_color = face_color
     save_settings(data_dir, s)
     return "/settings/face"
 
