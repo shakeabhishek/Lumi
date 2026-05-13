@@ -1,26 +1,36 @@
-{% extends "base.html" %}
+{% extends "onboarding/_base.html" %}
 {% block title %}Welcome — Lumi{% endblock %}
-{% block content %}
+{% block body %}
 
-<div class="progress-bar">
-  {% for i in range(1, total + 1) %}
-  <div class="progress-dot {% if i < step %}done{% elif i == step %}current{% endif %}"></div>
-  {% endfor %}
+<div class="ob-welcome">
+  <div class="ob-glow"></div>
+
+  <div style="position:relative;margin-bottom:44px;">
+    <div class="ob-face ob-face--pixel" style="width:260px;height:160px;border-radius:24px;display:flex;flex-direction:column;align-items:center;justify-content:center;">
+      <div>
+        <span class="ob-face__pixel-eye"></span>
+        <span class="ob-face__pixel-eye"></span>
+      </div>
+      <span class="ob-face__pixel-mouth"></span>
+    </div>
+  </div>
+
+  <div class="ob-status-line">USB-C · Listening</div>
+  <h1 class="ob-h1 ob-h1--display">Hi. I'm Lumi.</h1>
+  <p class="ob-tagline">Your AI companion. Always on. Always yours.</p>
+
+  <form method="POST" action="/onboarding/1" style="margin-top:44px;">
+    <button type="submit" class="ob-btn ob-btn--primary" style="height:56px;padding:0 32px;font-size:16px;">
+      Let's set up
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+    </button>
+  </form>
 </div>
 
-<div class="onboard-card">
-  <div class="step-label">Step {{ step }} of {{ total }}</div>
-  <h1 style="font-size:2rem;margin-bottom:.5rem">Meet Lumi.</h1>
-  <p style="font-size:1.05rem;margin-bottom:1.5rem">
-    Your AI companion. Always on. Always yours.<br>
-    Everything runs locally — no cloud, no subscriptions, no data leaving your desk.
-  </p>
-  <p>This setup takes about 5 minutes. You can change anything later from the dashboard.</p>
-  <form method="POST" action="/onboarding/1">
-    <div class="btn-row">
-      <button type="submit" class="btn primary">Get started →</button>
-    </div>
-  </form>
+<div style="padding:12px 28px 20px;text-align:center;">
+  <span class="mono" style="font-size:10px;color:var(--iris-mute-soft);letter-spacing:0.08em;">
+    lumi.local · firmware 1.0.0 · made with care
+  </span>
 </div>
 
 {% endblock %}

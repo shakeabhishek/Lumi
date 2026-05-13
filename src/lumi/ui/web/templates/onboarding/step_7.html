@@ -1,68 +1,68 @@
-{% extends "base.html" %}
+{% extends "onboarding/_base.html" %}
 {% block title %}Permissions — Lumi{% endblock %}
-{% block content %}
+{% block body %}
 
-<div class="progress-bar">
-  {% for i in range(1, total + 1) %}
-  <div class="progress-dot {% if i < step %}done{% elif i == step %}current{% endif %}"></div>
-  {% endfor %}
-</div>
+{% set perms = [
+  {"key": "active_window", "checked": settings.active_window_enabled,
+   "name": "Active window title", "desc": "Helps me understand what you're working on.",
+   "detail": "I see only the title bar text — e.g. \"Mail · Inbox\". Never the contents."},
+  {"key": "clipboard", "checked": settings.clipboard_enabled,
+   "name": "Clipboard", "desc": "So you can ask \"what did I just copy?\"",
+   "detail": "Read on demand, not continuously. Nothing leaves the device."},
+  {"key": "camera", "checked": settings.camera_enabled,
+   "name": "Camera — gestures + presence", "desc": "Wave to wake, thumbs up to confirm.",
+   "detail": "Frames are processed on Lumi's onboard chip and immediately discarded."},
+  {"key": "wifi_skills", "checked": settings.wifi_skills_enabled,
+   "name": "WiFi for skills", "desc": "Required for email, calendar, weather.",
+   "detail": "Only the specific skill endpoint sees the request. Conversations remain local."},
+] %}
 
-<div class="onboard-card">
-  <div class="step-label">Step {{ step }} of {{ total }}</div>
-  <h1>Permissions</h1>
-  <p>
-    {{ settings.lumi_name }} only accesses what you allow. Everything defaults to off.
-    You can change these any time in Settings → Privacy.
-  </p>
+<form method="POST" action="/onboarding/7" style="display:contents;">
+  <div class="ob-body" style="overflow:auto;">
+    <div class="ob-inner">
+      <div class="ob-eyebrow">Step six</div>
+      <h1 class="ob-h1">What I can see.</h1>
+      <p class="ob-lead">
+        Granular. Off by default. Everything below can be changed later from Settings → Privacy.
+      </p>
 
-  <form method="POST" action="/onboarding/7">
-    <div class="card" style="margin-bottom:1rem">
-      <label class="inline">
-        <input type="checkbox" name="wifi_skills" value="on"
-               {% if settings.wifi_skills_enabled %}checked{% endif %}>
-        <div>
-          <strong>Internet for skills</strong>
-          <div style="font-size:.82rem;color:var(--muted)">Weather, Wikipedia, news headlines</div>
+      <div class="ob-list" style="margin-top:24px;">
+        {% for p in perms %}
+        <div class="ob-perm-row">
+          <div class="text">
+            <div class="name">{{ p.name }}</div>
+            <div class="desc">{{ p.desc }}</div>
+            <details>
+              <summary>
+                <span>what does this share?</span>
+                <svg width="9" height="9" viewBox="0 0 12 12" style="transition:transform .2s"><path d="M3 5l3 3 3-3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+              </summary>
+              <div class="detail">{{ p.detail }}</div>
+            </details>
+          </div>
+          <label class="ob-toggle">
+            <input type="checkbox" name="{{ p.key }}" value="on" {% if p.checked %}checked{% endif %}>
+            <span class="ob-toggle__slider"></span>
+          </label>
         </div>
-      </label>
+        {% endfor %}
+      </div>
     </div>
-    <div class="card" style="margin-bottom:1rem">
-      <label class="inline">
-        <input type="checkbox" name="clipboard" value="on"
-               {% if settings.clipboard_enabled %}checked{% endif %}>
-        <div>
-          <strong>Clipboard</strong>
-          <div style="font-size:.82rem;color:var(--muted)">Read what you've copied to use as context</div>
-        </div>
-      </label>
-    </div>
-    <div class="card" style="margin-bottom:1rem">
-      <label class="inline">
-        <input type="checkbox" name="active_window" value="on"
-               {% if settings.active_window_enabled %}checked{% endif %}>
-        <div>
-          <strong>Active window title</strong>
-          <div style="font-size:.82rem;color:var(--muted)">Know which app you're working in</div>
-        </div>
-      </label>
-    </div>
-    <div class="card" style="margin-bottom:1rem">
-      <label class="inline">
-        <input type="checkbox" name="camera" value="on"
-               {% if settings.camera_enabled %}checked{% endif %}>
-        <div>
-          <strong>Camera (gestures)</strong>
-          <div style="font-size:.82rem;color:var(--muted)">Wave, thumbs up/down, presence detection</div>
-        </div>
-      </label>
-    </div>
+  </div>
 
-    <div class="btn-row">
-      <a href="/onboarding/6" class="btn">← Back</a>
-      <button type="submit" class="btn primary">Continue →</button>
+  <div class="ob-footer">
+    <div class="ob-footer__left">
+      <a href="/onboarding/6" class="ob-back" aria-label="Back">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </a>
     </div>
-  </form>
-</div>
+    <div class="ob-footer__right">
+      <button type="submit" class="ob-btn ob-btn--primary">
+        Continue
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+      </button>
+    </div>
+  </div>
+</form>
 
 {% endblock %}

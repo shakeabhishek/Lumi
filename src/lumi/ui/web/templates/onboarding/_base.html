@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Lumi · setup{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/onboarding.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+</head>
+<body class="onboarding">
+  <div class="ob-shell">
+    <header class="ob-topbar">
+      <a href="/" class="ob-wordmark">
+        <span class="ob-wordmark__dot"><i></i><i></i></span>
+        lumi
+      </a>
+      <div class="ob-progress">
+        <span class="ob-progress__num">{{ '%02d' % step }} / {{ '%02d' % total }}</span>
+        <div class="ob-progress__dots">
+          {% for i in range(1, total + 1) %}
+          <span class="{% if i < step %}done{% elif i == step %}current{% endif %}"></span>
+          {% endfor %}
+        </div>
+      </div>
+    </header>
+
+    {% block body %}{% endblock %}
+  </div>
+</body>
+</html>

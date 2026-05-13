@@ -1,53 +1,78 @@
-{% extends "base.html" %}
+{% extends "onboarding/_base.html" %}
 {% block title %}Voice Enrollment — Lumi{% endblock %}
-{% block content %}
+{% block body %}
 
-<div class="progress-bar">
-  {% for i in range(1, total + 1) %}
-  <div class="progress-dot {% if i < step %}done{% elif i == step %}current{% endif %}"></div>
-  {% endfor %}
-</div>
+<div class="ob-body" style="align-items:center;">
+  <div class="ob-inner" style="text-align:center;">
+    <div class="ob-eyebrow">Step three · learning your voice</div>
 
-<div class="onboard-card">
-  <div class="step-label">Step {{ step }} of {{ total }}</div>
-  <h1>Voice enrollment</h1>
-  <p>
-    Lumi learns your voice so it only responds to you.
-    We'll record 3 short clips (5 seconds each) from your microphone.
-  </p>
-  <p style="font-size:.85rem">
-    Make sure no other app is using your microphone, and the
-    <code>lumi</code> voice loop is not running.
-  </p>
-
-  <div id="enroll-status">
-    {% if clip_count == 0 %}
-    <button class="btn primary" hx-post="/onboarding/4/record" hx-target="#enroll-status">
-      Record clip 1/3
-    </button>
-    {% elif clip_count < 3 %}
-    <p class="msg ok">{{ clip_count }}/3 clips recorded.</p>
-    <button class="btn primary" hx-post="/onboarding/4/record" hx-target="#enroll-status">
-      Record clip {{ clip_count + 1 }}/3
-    </button>
-    {% else %}
-    <p class="msg ok">All 3 clips recorded.</p>
-    <button class="btn primary" hx-post="/onboarding/4/enroll" hx-target="#enroll-status">
-      Complete enrollment
-    </button>
-    {% endif %}
-  </div>
-
-  <hr>
-  <p style="font-size:.85rem">Prefer the command line?</p>
-  <p style="margin-bottom:.75rem"><code>uv run lumi --enroll</code></p>
-
-  <form method="POST" action="/onboarding/4/skip">
-    <div class="btn-row">
-      <a href="/onboarding/3" class="btn">← Back</a>
-      <button type="submit" class="btn">Skip for now</button>
+    <div class="ob-progress-dots">
+      {% for i in range(3) %}
+      <span class="{% if i < clip_count %}done{% elif i == clip_count %}current{% endif %}"></span>
+      {% endfor %}
     </div>
-  </form>
+
+    <div class="mono" style="font-size:11px;color:var(--iris-mute);letter-spacing:0.1em;text-transform:uppercase;">
+      {{ clip_count }} of 3 clips
+    </div>
+
+    <p class="ob-prompt-text">
+      <span class="say">Say:</span>
+      {% if clip_count == 0 %}"My name is {{ settings.owner_name or '___' }}, and I'm setting up Lumi today."
+      {% elif clip_count == 1 %}"Sometimes I work late. Sometimes I start early."
+      {% else %}"Remind me to drink water around three p.m."
+      {% endif %}
+    </p>
+
+    <div class="ob-mic">
+      <div class="ob-mic__ring"></div>
+      <div class="ob-mic__ring"></div>
+      <div class="ob-mic__ring"></div>
+      <div class="ob-mic__core">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <rect x="9" y="3" width="6" height="12" rx="3"/>
+          <path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>
+        </svg>
+      </div>
+    </div>
+
+    <div id="enroll-status" style="margin-top:24px;">
+      {% if clip_count == 0 %}
+      <button class="ob-btn ob-btn--primary" hx-post="/onboarding/4/record" hx-target="#enroll-status">
+        Record clip 1 / 3
+      </button>
+      {% elif clip_count < 3 %}
+      <p class="ob-msg ob-msg--ok" style="display:inline-block;">{{ clip_count }} / 3 recorded</p>
+      <br>
+      <button class="ob-btn ob-btn--primary" hx-post="/onboarding/4/record" hx-target="#enroll-status">
+        Record clip {{ clip_count + 1 }} / 3
+      </button>
+      {% else %}
+      <p class="ob-msg ob-msg--ok" style="display:inline-block;">All 3 clips recorded</p>
+      <br>
+      <button class="ob-btn ob-btn--primary" hx-post="/onboarding/4/enroll" hx-target="#enroll-status">
+        Complete enrollment
+      </button>
+      {% endif %}
+    </div>
+
+    <p class="mono" style="margin-top:32px;font-size:11px;color:var(--iris-mute-soft);letter-spacing:0.05em;">
+      Prefer the terminal? <code>uv run lumi --enroll</code>
+    </p>
+  </div>
 </div>
+
+<form method="POST" action="/onboarding/4/skip" style="display:contents;">
+  <div class="ob-footer">
+    <div class="ob-footer__left">
+      <a href="/onboarding/3" class="ob-back" aria-label="Back">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </a>
+    </div>
+    <div class="ob-footer__right">
+      <button type="submit" class="ob-btn ob-btn--ghost">Skip for now</button>
+    </div>
+  </div>
+</form>
 
 {% endblock %}

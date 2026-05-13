@@ -1,35 +1,81 @@
-{% extends "base.html" %}
+{% extends "onboarding/_base.html" %}
 {% block title %}Face — Lumi{% endblock %}
-{% block content %}
+{% block body %}
 
-<div class="progress-bar">
-  {% for i in range(1, total + 1) %}
-  <div class="progress-dot {% if i < step %}done{% elif i == step %}current{% endif %}"></div>
-  {% endfor %}
-</div>
+<form method="POST" action="/onboarding/6" style="display:contents;">
+  <div class="ob-body">
+    <div class="ob-inner ob-inner--wider">
+      <div class="ob-eyebrow">Step five</div>
+      <h1 class="ob-h1">Pick a face.</h1>
+      <p class="ob-lead">This is what shows on {{ settings.lumi_name }}'s little display.</p>
 
-<div class="onboard-card">
-  <div class="step-label">Step {{ step }} of {{ total }}</div>
-  <h1>Face style</h1>
-  <p>Choose how {{ settings.lumi_name }}'s face looks on the display.</p>
+      <div class="ob-face-grid">
+        {% for theme in face_themes %}
+        <label class="ob-pick">
+          <input type="radio" name="face_theme" value="{{ theme.id }}"
+                 {% if settings.face_theme == theme.id %}checked{% endif %}>
+          <div class="ob-card" style="padding:20px;">
+            {% if theme.id == 'pixel' %}
+            <div class="ob-face ob-face--pixel">
+              <div style="text-align:center;">
+                <span class="ob-face__pixel-eye" style="transform:scale(.85);"></span>
+                <span class="ob-face__pixel-eye" style="transform:scale(.85);"></span>
+                <span class="ob-face__pixel-mouth"></span>
+              </div>
+            </div>
+            {% elif theme.id == 'vector' %}
+            <div class="ob-face ob-face--vector">
+              <div style="text-align:center;">
+                <div>
+                  <span class="ob-face__vector-brow"></span>
+                  <span class="ob-face__vector-brow" style="transform:rotate(6deg);"></span>
+                </div>
+                <div style="margin-top:4px;">
+                  <span class="ob-face__vector-eye"></span>
+                  <span class="ob-face__vector-eye"></span>
+                </div>
+              </div>
+            </div>
+            {% else %}
+            <div class="ob-face ob-face--terminal">
+              <pre class="ob-face__terminal">  ( ^ )    ( ^ )
+        _
+       \_/</pre>
+            </div>
+            {% endif %}
+            <div class="ob-face-meta">
+              <span class="label">{{ theme.label }}</span>
+              <span class="ext">{{ theme.id }}.face</span>
+            </div>
+            <div class="ob-face-desc">{{ theme.desc }}</div>
+          </div>
+        </label>
+        {% endfor %}
+      </div>
 
-  <form method="POST" action="/onboarding/6">
-    <div class="option-grid">
-      {% for theme in face_themes %}
-      <label class="option-card">
-        <input type="radio" name="face_theme" value="{{ theme.id }}"
-               {% if settings.face_theme == theme.id %}checked{% endif %}
-               {% if theme.id != "pixel" %}disabled{% endif %}>
-        <div class="opt-label">{{ theme.label }}</div>
-        <div class="opt-desc">{{ theme.desc }}</div>
-      </label>
-      {% endfor %}
+      <div class="ob-color-row">
+        <span class="ob-field-label" style="margin:0;">Accent</span>
+        <input type="color" name="face_color" value="{{ settings.face_color or '#FF7AC9' }}">
+        <span class="mono" style="margin-left:auto;font-size:11px;color:var(--iris-mute-soft);">
+          {{ (settings.face_color or '#FF7AC9') | upper }}
+        </span>
+      </div>
     </div>
-    <div class="btn-row">
-      <a href="/onboarding/5" class="btn">← Back</a>
-      <button type="submit" class="btn primary">Continue →</button>
+  </div>
+
+  <div class="ob-footer">
+    <div class="ob-footer__left">
+      <a href="/onboarding/5" class="ob-back" aria-label="Back">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </a>
     </div>
-  </form>
-</div>
+    <div class="ob-footer__right">
+      <button type="submit" class="ob-btn ob-btn--primary">
+        Continue
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+      </button>
+    </div>
+  </div>
+</form>
 
 {% endblock %}

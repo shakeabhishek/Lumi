@@ -1,32 +1,65 @@
-{% extends "base.html" %}
+{% extends "onboarding/_base.html" %}
 {% block title %}WiFi — Lumi{% endblock %}
-{% block content %}
+{% block body %}
 
-<div class="progress-bar">
-  {% for i in range(1, total + 1) %}
-  <div class="progress-dot {% if i < step %}done{% elif i == step %}current{% endif %}"></div>
-  {% endfor %}
-</div>
+<form method="POST" action="/onboarding/2" class="ob-shell" style="display:contents;">
+  <div class="ob-body">
+    <div class="ob-inner">
+      <div class="ob-eyebrow">Step one</div>
+      <h1 class="ob-h1">Connect to WiFi.</h1>
+      <p class="ob-lead">
+        Lumi needs WiFi only for the skills you enable — email, calendar, weather.
+        Your conversations stay on the device.
+      </p>
 
-<div class="onboard-card">
-  <div class="step-label">Step {{ step }} of {{ total }}</div>
-  <h1>WiFi setup</h1>
-  <p>
-    WiFi is used only by skills that need the internet (weather, Wikipedia, etc.).
-    The local LLM, STT, and TTS all run fully offline.
-  </p>
+      <div class="ob-list">
+        {% set networks = [
+          {"name": "Home Studio",      "signal": 4, "locked": True},
+          {"name": "iPhone — yours",   "signal": 3, "locked": True},
+          {"name": "FRITZ!Box 7590",   "signal": 3, "locked": True},
+          {"name": "cafe.guest",       "signal": 2, "locked": False},
+          {"name": "eduroam",          "signal": 2, "locked": True},
+        ] %}
+        {% for net in networks %}
+        <label class="ob-list-row {% if loop.first %}selected{% endif %}">
+          <input type="radio" name="wifi_network" value="{{ net.name }}" {% if loop.first %}checked{% endif %}>
+          <span class="ob-signal">
+            {% for i in range(4) %}<i class="{% if i >= net.signal %}off{% endif %}" style="height:{{ 4 + i * 2.5 }}px"></i>{% endfor %}
+          </span>
+          <span style="font-size:15px;color:var(--iris-ink);flex:1;">{{ net.name }}</span>
+          {% if net.locked %}
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--iris-mute)" stroke-width="2" stroke-linecap="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+          {% endif %}
+          {% if loop.first %}<span class="ob-check-dot">✓</span>{% endif %}
+        </label>
+        {% endfor %}
+      </div>
 
-  <div class="msg info">
-    On a real Lumi device, you'd configure WiFi here. On this laptop, Lumi uses
-    your existing network connection — no setup needed.
+      <div style="margin-top:22px;">
+        <label class="ob-field-label">Password for Home Studio</label>
+        <input class="ob-input" type="password" name="wifi_password" placeholder="••••••••">
+      </div>
+
+      <p class="mono" style="margin-top:18px;font-size:11px;color:var(--iris-mute);letter-spacing:0.04em;">
+        On this laptop, Lumi uses your existing connection. This is what setup looks like on the real device.
+      </p>
+    </div>
   </div>
 
-  <form method="POST" action="/onboarding/2">
-    <div class="btn-row">
-      <a href="/onboarding/1" class="btn">← Back</a>
-      <button type="submit" class="btn primary">Continue →</button>
+  <div class="ob-footer">
+    <div class="ob-footer__left">
+      <a href="/onboarding/1" class="ob-back" aria-label="Back">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </a>
     </div>
-  </form>
-</div>
+    <div class="ob-footer__right">
+      <button type="submit" class="ob-btn ob-btn--ghost" formaction="/onboarding/2">Skip for now</button>
+      <button type="submit" class="ob-btn ob-btn--primary">
+        Continue
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+      </button>
+    </div>
+  </div>
+</form>
 
 {% endblock %}

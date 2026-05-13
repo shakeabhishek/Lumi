@@ -1,33 +1,42 @@
-{% extends "base.html" %}
+{% extends "onboarding/_base.html" %}
 {% block title %}Name — Lumi{% endblock %}
-{% block content %}
+{% block body %}
 
-<div class="progress-bar">
-  {% for i in range(1, total + 1) %}
-  <div class="progress-dot {% if i < step %}done{% elif i == step %}current{% endif %}"></div>
-  {% endfor %}
-</div>
+<form method="POST" action="/onboarding/3" style="display:contents;">
+  <div class="ob-body">
+    <div class="ob-inner ob-inner--wide">
+      <div class="ob-eyebrow">Step two</div>
+      <h1 class="ob-h1">What should I be called?</h1>
+      <p class="ob-lead">Pick a wake word. This is the name you'll say to get my attention.</p>
 
-<div class="onboard-card">
-  <div class="step-label">Step {{ step }} of {{ total }}</div>
-  <h1>Name your Lumi</h1>
-  <p>Pick a name that feels natural to say out loud. This becomes the wake word.</p>
-
-  <form method="POST" action="/onboarding/3">
-    <div class="option-grid" style="grid-template-columns:repeat(auto-fill,minmax(130px,1fr))">
-      {% for name in lumi_names %}
-      <label class="option-card" style="text-align:center">
-        <input type="radio" name="lumi_name" value="{{ name }}"
-               {% if settings.lumi_name == name %}checked{% endif %}>
-        <div class="opt-label">{{ name }}</div>
-      </label>
-      {% endfor %}
+      <div class="ob-name-grid">
+        {% for n in lumi_names %}
+        <label class="ob-pick">
+          <input type="radio" name="lumi_name" value="{{ n }}"
+                 {% if settings.lumi_name == n %}checked{% endif %}>
+          <div class="ob-card ob-name-card">
+            <div class="name">{{ n }}</div>
+            <div class="wake">"Hey, {{ n.lower() }}"</div>
+          </div>
+        </label>
+        {% endfor %}
+      </div>
     </div>
-    <div class="btn-row">
-      <a href="/onboarding/2" class="btn">← Back</a>
-      <button type="submit" class="btn primary">Continue →</button>
+  </div>
+
+  <div class="ob-footer">
+    <div class="ob-footer__left">
+      <a href="/onboarding/2" class="ob-back" aria-label="Back">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </a>
     </div>
-  </form>
-</div>
+    <div class="ob-footer__right">
+      <button type="submit" class="ob-btn ob-btn--primary">
+        Continue
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+      </button>
+    </div>
+  </div>
+</form>
 
 {% endblock %}

@@ -1,38 +1,62 @@
-{% extends "base.html" %}
+{% extends "onboarding/_base.html" %}
 {% block title %}Voice — Lumi{% endblock %}
-{% block content %}
+{% block body %}
 
-<div class="progress-bar">
-  {% for i in range(1, total + 1) %}
-  <div class="progress-dot {% if i < step %}done{% elif i == step %}current{% endif %}"></div>
-  {% endfor %}
-</div>
+{# Voice tone labels — pulled out of "Amy (US, warm)" #}
+{% set voice_meta = {
+  "en_US-amy-medium":     {"tag": "warm",   "desc": "Soft, close. The friend who remembers your coffee order."},
+  "en_US-lessac-medium":  {"tag": "clear",  "desc": "Crisp and even. Reads well aloud."},
+  "en_US-ryan-medium":    {"tag": "calm",   "desc": "Steady. Good for thinking out loud."},
+  "en_GB-jenny-diphone":  {"tag": "bright", "desc": "A little spring. Curious, gently up-tempo."},
+} %}
 
-<div class="onboard-card">
-  <div class="step-label">Step {{ step }} of {{ total }}</div>
-  <h1>{{ settings.lumi_name }}'s voice</h1>
-  <p>Pick a voice personality. All voices run fully on-device using Piper TTS.</p>
+<form method="POST" action="/onboarding/5" style="display:contents;">
+  <div class="ob-body">
+    <div class="ob-inner ob-inner--wider">
+      <div class="ob-eyebrow">Step four</div>
+      <h1 class="ob-h1">Pick how I sound.</h1>
+      <p class="ob-lead">You can change this any time. All voices run on-device via Piper.</p>
 
-  <form method="POST" action="/onboarding/5">
-    <div class="option-grid">
-      {% for v in piper_voices %}
-      <label class="option-card">
-        <input type="radio" name="piper_voice" value="{{ v.id }}"
-               {% if settings.piper_voice == v.id %}checked{% endif %}>
-        <div class="opt-label">{{ v.label.split("(")[0].strip() }}</div>
-        <div class="opt-desc">{{ v.label.split("(")[1].rstrip(")") if "(" in v.label else "" }}</div>
-      </label>
-      {% endfor %}
+      <div class="ob-voice-grid" style="grid-template-columns:repeat({{ piper_voices|length }}, 1fr);">
+        {% for v in piper_voices %}
+        {% set meta = voice_meta.get(v.id, {"tag": "voice", "desc": v.label}) %}
+        <label class="ob-pick">
+          <input type="radio" name="piper_voice" value="{{ v.id }}"
+                 {% if settings.piper_voice == v.id %}checked{% endif %}>
+          <div class="ob-card ob-voice-card">
+            <div class="tag">◡ {{ meta.tag }}</div>
+            <div class="label">{{ v.label.split('(')[0].strip() }}</div>
+            <div class="desc">{{ meta.desc }}</div>
+            <div style="margin-top:14px;display:flex;align-items:center;gap:12px;">
+              <span class="ob-btn ob-btn--secondary" style="height:36px;padding:0 14px;font-size:13px;border-radius:10px;cursor:default;">
+                <svg width="9" height="10" viewBox="0 0 10 12" fill="currentColor"><path d="M1 1L9 6L1 11Z"/></svg>
+                Hear sample
+              </span>
+            </div>
+          </div>
+        </label>
+        {% endfor %}
+      </div>
+
+      <p class="mono" style="margin-top:22px;font-size:11px;color:var(--iris-mute-soft);">
+        Voices auto-download on first use. On macOS, Lumi falls back to <code>say</code> until Piper voices are ready.
+      </p>
     </div>
-    <p style="font-size:.82rem">
-      Voices auto-download on first use. On macOS, Lumi falls back to the built-in
-      <code>say</code> command until Piper voices are downloaded.
-    </p>
-    <div class="btn-row">
-      <a href="/onboarding/4" class="btn">← Back</a>
-      <button type="submit" class="btn primary">Continue →</button>
+  </div>
+
+  <div class="ob-footer">
+    <div class="ob-footer__left">
+      <a href="/onboarding/4" class="ob-back" aria-label="Back">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </a>
     </div>
-  </form>
-</div>
+    <div class="ob-footer__right">
+      <button type="submit" class="ob-btn ob-btn--primary">
+        Continue
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+      </button>
+    </div>
+  </div>
+</form>
 
 {% endblock %}

@@ -1,36 +1,61 @@
-{% extends "base.html" %}
+{% extends "onboarding/_base.html" %}
 {% block title %}All set — Lumi{% endblock %}
-{% block content %}
+{% block body %}
 
-<div class="progress-bar">
-  {% for i in range(1, total + 1) %}
-  <div class="progress-dot done"></div>
-  {% endfor %}
-</div>
+<form method="POST" action="/onboarding/9" style="display:contents;">
+  <div class="ob-greet">
+    <div class="ob-glow"></div>
 
-<div class="onboard-card" style="text-align:center">
-  <div class="step-label">You're all set</div>
-  <h1 style="font-size:2rem;margin-bottom:.5rem">{{ settings.lumi_name }} is ready.</h1>
-  <p style="font-size:1.05rem;margin-bottom:1.5rem">
-    Start a conversation by running:<br>
-    <code style="font-size:1rem">uv run lumi --backend ollama</code>
-  </p>
-  <p>Press <strong>Enter</strong> to wake {{ settings.lumi_name }}, then speak.</p>
-  <p>Say <em>"switch to {{ settings.mode }} mode"</em> or <em>"set a timer for 5 minutes"</em> to try the skills.</p>
-
-  <hr style="margin:1.5rem 0">
-
-  <form method="POST" action="/onboarding/9" style="display:inline">
-    <div class="form-group" style="text-align:left;max-width:280px;margin:0 auto 1rem">
-      <label for="owner_name">What's your name? (optional)</label>
-      <input type="text" id="owner_name" name="owner_name"
-             placeholder="e.g. Alex"
-             value="{{ settings.owner_name }}">
+    <div style="position:relative;">
+      <div class="ob-face ob-face--pixel" style="width:260px;height:160px;border-radius:24px;display:flex;flex-direction:column;align-items:center;justify-content:center;">
+        <div>
+          <span class="ob-face__pixel-eye"></span>
+          <span class="ob-face__pixel-eye"></span>
+        </div>
+        <span class="ob-face__pixel-mouth"></span>
+      </div>
     </div>
-    <button type="submit" class="btn primary" style="font-size:1rem;padding:.75rem 2rem">
-      Go to dashboard →
-    </button>
-  </form>
-</div>
+
+    <div class="ob-bubble">
+      <span id="ob-typing"></span><span class="ob-cursor"></span>
+    </div>
+
+    <div class="ob-input-hint">
+      <span class="dot"></span>
+      <span style="font-size:14px;color:var(--iris-mute);">Speak, or type here.</span>
+      <span style="flex:1;"></span>
+      <span class="mono" style="font-size:10px;color:var(--iris-mute-soft);letter-spacing:0.06em;">
+        ⏎ to send · ⌥ space to mute
+      </span>
+    </div>
+
+    <div style="margin-top:36px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;justify-content:center;">
+      <label class="ob-field-label" style="margin:0;">Your name (optional)</label>
+      <input class="ob-input" type="text" name="owner_name"
+             placeholder="e.g. Alex" value="{{ settings.owner_name }}"
+             style="width:200px;height:42px;">
+      <button type="submit" class="ob-btn ob-btn--primary">
+        Go to dashboard
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+      </button>
+    </div>
+  </div>
+</form>
+
+<script>
+  (function () {
+    const name = {{ (settings.owner_name or 'there') | tojson }};
+    const greeting = "Hi " + name + ". What are you working on?";
+    const el = document.getElementById('ob-typing');
+    if (!el) return;
+    let i = 0;
+    const tick = () => {
+      i++;
+      el.textContent = greeting.slice(0, i);
+      if (i < greeting.length) setTimeout(tick, 35);
+    };
+    setTimeout(tick, 500);
+  })();
+</script>
 
 {% endblock %}
