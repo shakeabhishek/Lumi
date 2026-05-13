@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     face_height: int = 320
     face_fps: int = 30
     face_theme: FaceTheme = FaceTheme.PIXEL
+    # Foreground color as hex string. Terminal ignores this and uses phosphor green.
+    face_color: str = "#F5A623"
 
     # OpenClaw
     openclaw_enabled: bool = True
