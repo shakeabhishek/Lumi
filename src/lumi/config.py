@@ -69,8 +69,9 @@ class Settings(BaseSettings):
     face_height: int = 320
     face_fps: int = 30
     face_theme: FaceTheme = FaceTheme.PIXEL
-    # Foreground color as hex string. Terminal ignores this and uses phosphor green.
-    face_color: str = "#F5A623"
+    # Foreground hex color. Defaults per theme: pixel=#FF6B9D, vector=#F5A623, terminal=#33FF33.
+    # Set LUMI_FACE_COLOR to override (e.g. "#FF6B9D" for pink, "#00BFFF" for blue).
+    face_color: str = ""
 
     # OpenClaw
     openclaw_enabled: bool = True

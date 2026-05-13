@@ -15,9 +15,9 @@ _RENDERERS = {
 }
 
 _DEFAULT_COLORS = {
-    "pixel": "#F5A623",
-    "vector": "#F5A623",
-    "terminal": "#33FF33",  # phosphor green kept for terminal by default
+    "pixel": "#FF6B9D",     # cute pink
+    "vector": "#F5A623",    # warm amber
+    "terminal": "#33FF33",  # phosphor green
 }
 
 
@@ -31,7 +31,8 @@ class FaceEngine:
         w, h = display.size
         self._display = display
         renderer_cls = _RENDERERS.get(theme, PixelFaceRenderer)
-        fg = _parse_hex(color or _DEFAULT_COLORS.get(theme, "#F5A623"))
+        resolved = color if color else _DEFAULT_COLORS.get(theme, "#F5A623")
+        fg = _parse_hex(resolved)
         self._renderer = renderer_cls(w, h, fg_color=fg)
         self._state = LumiState.IDLE
         self._tick = 0
