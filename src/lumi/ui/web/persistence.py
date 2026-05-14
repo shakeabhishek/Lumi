@@ -58,7 +58,7 @@ class UserSettings(BaseModel):
     voice_id_enabled: bool = False
 
     # Face
-    face_theme: str = "pixel"
+    face_theme: str = "vector"
     face_color: str = ""  # empty = use per-theme default
 
     # Conversation mode

@@ -37,7 +37,8 @@ from . import clipboard as clip
 log = get_logger(__name__)
 
 _PENDING_FILENAME = ".pending_context.json"
-_COPY_WAIT_S = 0.08          # how long to wait for the OS to update the clipboard
+_RELEASE_WAIT_S = 0.15       # let the user release their hotkey modifiers first
+_COPY_WAIT_S = 0.25          # then wait for the OS clipboard to settle after simulated Cmd+C
 _MAX_TEXT_CHARS = 4000       # truncate runaway selections
 
 
@@ -107,6 +108,10 @@ def capture_selected_text(simulate_copy: bool = True) -> CaptureResult | None:
         text = original.strip()
         return CaptureResult(text=text, source="clipboard") if text else None
 
+    # Wait for the user to release their hotkey modifiers — otherwise macOS
+    # sees Cmd+Shift+L+Cmd+C as a garbage combination and ignores the copy.
+    time.sleep(_RELEASE_WAIT_S)
+
     kb = Controller()
     modifier = Key.cmd if _is_macos() else Key.ctrl
     with kb.pressed(modifier):
@@ -114,6 +119,10 @@ def capture_selected_text(simulate_copy: bool = True) -> CaptureResult | None:
         kb.release("c")
     time.sleep(_COPY_WAIT_S)
     after = clip.read() or ""
+    log.debug(
+        "send_to_lumi.capture", original_len=len(original),
+        after_len=len(after), changed=after != original,
+    )
 
     if after and after != original:
         return CaptureResult(text=after.strip()[:_MAX_TEXT_CHARS], source="selection")

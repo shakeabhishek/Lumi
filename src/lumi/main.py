@@ -289,6 +289,84 @@ def run(
 
 
 @app.command()
+def doctor() -> None:
+    """Diagnose send-to-Lumi: permissions, clipboard, hotkey, simulated copy."""
+    import time as _time  # noqa: PLC0415
+    from .host_helper import clipboard as _clip  # noqa: PLC0415
+    from .host_helper.send_to_lumi import default_combo, _is_macos  # noqa: PLC0415
+    from .ui.web.persistence import load_settings  # noqa: PLC0415
+
+    configure_logging("WARNING")
+    cfg = get_settings()
+    user = load_settings(cfg.data_dir)
+
+    def _ok(msg: str) -> None: typer.echo(f"  ✓ {msg}")
+    def _warn(msg: str) -> None: typer.echo(f"  ! {msg}")
+    def _fail(msg: str) -> None: typer.echo(f"  ✗ {msg}")
+    def _section(label: str) -> None: typer.echo(f"\n── {label} ──")
+
+    _section("settings")
+    if user.clipboard_enabled:
+        _ok("clipboard_enabled = true")
+    else:
+        _fail("clipboard_enabled = false — flip it in Settings → Privacy")
+    saved = user.hotkey_combo or default_combo()
+    _ok(f"hotkey_combo = {saved}")
+
+    _section("pynput")
+    try:
+        import pynput  # noqa: F401, PLC0415
+        _ok("pynput importable")
+    except ImportError:
+        _fail("pynput not installed — run: uv pip install -e '.[host]'")
+        return
+
+    _section("clipboard read")
+    before = _clip.read()
+    if before is None:
+        _fail("clipboard.read() returned None (pbpaste / xclip / wl-paste missing or empty)")
+    else:
+        _ok(f"current clipboard: {len(before)} chars{' (empty)' if not before else ''}")
+
+    _section("simulated copy self-test")
+    typer.echo("  → select some text in another app, then come back to this terminal")
+    typer.echo("  → press Enter to run the test (the test SIMULATES Cmd/Ctrl+C and reads clipboard)")
+    typer.confirm("  ready?", default=True, abort=False)
+    from pynput.keyboard import Controller, Key  # noqa: PLC0415
+
+    original = _clip.read() or ""
+    _time.sleep(0.2)
+    kb = Controller()
+    mod = Key.cmd if _is_macos() else Key.ctrl
+    try:
+        with kb.pressed(mod):
+            kb.press("c"); kb.release("c")
+        _time.sleep(0.25)
+    except Exception as exc:
+        _fail(f"simulating Cmd+C raised {type(exc).__name__}: {exc}")
+        _warn("on macOS: System Settings → Privacy & Security → Accessibility — "
+              "make sure your terminal (Terminal/iTerm/Warp/VS Code) is checked.")
+        return
+
+    after = _clip.read() or ""
+    if after and after != original:
+        preview = after[:60].replace("\n", " ")
+        _ok(f"simulated copy worked. captured: {preview}…")
+    elif after == original and after:
+        _warn("simulated copy did not change the clipboard. likely causes:")
+        _warn(" - no text was selected when you pressed Enter, OR")
+        _warn(" - macOS Accessibility permission denied for this terminal")
+    else:
+        _warn("clipboard still empty after simulated copy — same accessibility check")
+
+    _section("data dir")
+    _ok(f"data_dir = {cfg.data_dir}")
+    pending = cfg.data_dir / ".pending_context.json"
+    if pending.exists():
+        _warn(f"pending context file exists ({pending}) — the voice loop hasn't consumed it yet")
+
+
+@app.command()
 def hotkey(
     no_copy_sim: bool = typer.Option(
         False, "--no-copy-sim",
