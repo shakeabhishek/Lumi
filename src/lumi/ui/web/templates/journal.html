@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Journal — Lumi{% endblock %}
+{% block content %}
+<h1>Daily journal</h1>
+<p>
+  {{ settings.lumi_name }} writes a 3-bullet summary of each day's conversations.
+  Stored locally; nothing leaves the device.
+</p>
+
+<div class="card">
+  <h2>Today</h2>
+  <p style="font-size:.88rem">
+    Today's summary is generated from your audit log when you ask.
+    It runs through the local LLM, so the first request takes a few seconds.
+  </p>
+  <div class="btn-row" style="margin-bottom:.5rem">
+    <button class="btn primary"
+            hx-post="/journal/today"
+            hx-target="#today-result"
+            hx-swap="innerHTML"
+            hx-indicator="#today-spinner">
+      Generate today's summary
+    </button>
+    <span id="today-spinner" class="htmx-indicator" style="color:var(--muted);font-size:.85rem">
+      thinking…
+    </span>
+  </div>
+  <div id="today-result"></div>
+</div>
+
+{% if entries %}
+<h2 style="margin-top:1.5rem">Past days</h2>
+{% for entry in entries %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:.5rem">
+    <strong style="font-family:'Crimson Pro',serif;font-size:1.15rem">{{ entry.date }}</strong>
+    <span style="font-family:'Geist Mono',monospace;font-size:.78rem;color:var(--muted)">
+      {{ entry.n_turns }} turn{{ "s" if entry.n_turns != 1 else "" }}
+    </span>
+  </div>
+  <pre style="white-space:pre-wrap;font-family:inherit;font-size:.95rem;line-height:1.55">{{ entry.summary }}</pre>
+</div>
+{% endfor %}
+{% else %}
+<div class="empty-state">
+  No journal entries yet. Have a conversation, then come back and generate today's summary.
+</div>
+{% endif %}
+{% endblock %}
