@@ -1,0 +1,12 @@
+<div class="card" style="margin-top:1rem">
+  <div style="display:flex;gap:1rem;align-items:baseline;flex-wrap:wrap;margin-bottom:.6rem">
+    <span class="badge {{ handler }}">{{ handler }}</span>
+    <span style="font-family:'Geist Mono',monospace;font-size:.8rem;color:var(--muted)">{{ skill }}</span>
+    <span style="flex:1"></span>
+    <span style="font-family:'Geist Mono',monospace;font-size:.8rem;color:var(--muted)">{{ elapsed_ms }} ms</span>
+  </div>
+  <div style="font-size:.85rem;color:var(--muted);margin-bottom:.25rem">you said</div>
+  <div style="font-size:.95rem;margin-bottom:.75rem">{{ transcript }}</div>
+  <div style="font-size:.85rem;color:var(--muted);margin-bottom:.25rem">lumi replied</div>
+  <div style="font-size:.95rem;white-space:pre-wrap">{{ reply }}</div>
+</div>

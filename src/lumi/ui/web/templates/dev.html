@@ -36,6 +36,21 @@
 </div>
 
 <div class="card">
+  <h2>Skill test panel</h2>
+  <p style="font-size:.88rem;color:var(--muted);margin-bottom:.75rem">
+    Type a transcript as if you'd said it aloud. See which handler fires and the latency.
+    Uses a mock LLM (so it works without Ollama running), but native + OpenClaw skills run for real.
+  </p>
+  <form hx-post="/dev/test" hx-target="#test-result" hx-swap="innerHTML"
+        style="display:flex;gap:.5rem;align-items:center">
+    <input type="text" name="transcript" placeholder='e.g. "start a pomodoro for 25 minutes"'
+           required style="flex:1" autocomplete="off">
+    <button type="submit" class="btn primary">Run</button>
+  </form>
+  <div id="test-result"></div>
+</div>
+
+<div class="card">
   <h2>Pipeline latency
     <small style="font-weight:normal; font-size:.8em; margin-left:.5rem">
       auto-refresh every 5 s

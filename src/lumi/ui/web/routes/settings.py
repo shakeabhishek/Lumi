@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import io
+import shutil
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from ..persistence import FACE_THEMES, MODES, PIPER_VOICES, load_settings, save_settings
 
@@ -174,3 +179,69 @@ async def memory_get(request: Request) -> HTMLResponse:
         request, "settings/memory.html",
         {"settings": s, "conversations": conversations},
     )
+
+
+# ---------------------------------------------------------------------------
+# Data export — "take everything with you"
+# ---------------------------------------------------------------------------
+
+# Items that are user data (worth exporting) vs ephemeral caches (skip).
+# Excludes anything that can be re-derived: model downloads, embedding caches,
+# .ollama logs, etc.
+_EXPORT_ITEMS: tuple[str, ...] = (
+    "settings.json",
+    "audit_log.jsonl",
+    "perf.jsonl",
+    "notes.jsonl",
+    "owner_embedding.npy",
+    "chroma",  # ChromaDB directory; included whole
+)
+
+
+@router.get("/data/export")
+async def data_export(request: Request) -> StreamingResponse:
+    """Stream a ZIP of all user data on disk."""
+    data_dir: Path = request.app.state.data_dir
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name in _EXPORT_ITEMS:
+            src = data_dir / name
+            if not src.exists():
+                continue
+            if src.is_file():
+                zf.write(src, arcname=name)
+            else:
+                for child in src.rglob("*"):
+                    if child.is_file():
+                        zf.write(child, arcname=str(child.relative_to(data_dir)))
+    buf.seek(0)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="lumi-export-{ts}.zip"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Factory reset — "forget everything"
+# ---------------------------------------------------------------------------
+
+
+@router.post("/data/reset", response_class=RedirectResponse, status_code=303)
+async def data_reset(request: Request) -> str:
+    """Wipe all user data and reset to first-boot state.
+
+    Removes every file in data_dir except the directory itself. The next page
+    load triggers onboarding from step 1.
+    """
+    data_dir: Path = request.app.state.data_dir
+    for child in data_dir.iterdir():
+        try:
+            if child.is_file() or child.is_symlink():
+                child.unlink()
+            else:
+                shutil.rmtree(child, ignore_errors=True)
+        except OSError:
+            continue
+    return "/onboarding/1"

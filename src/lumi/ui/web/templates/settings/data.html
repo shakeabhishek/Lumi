@@ -57,4 +57,36 @@
     </div>
   </form>
 </div>
+
+<div class="card">
+  <h2>Your data</h2>
+  <p style="font-size:.88rem">
+    Everything {{ settings.lumi_name }} knows lives on this machine. You can take it
+    with you anytime, or wipe it all and start over.
+  </p>
+
+  <div class="skill-row">
+    <div>
+      <strong>Export everything</strong>
+      <div style="font-size:.82rem;color:var(--muted)">
+        Bundle settings, audit log, perf log, notes, memory, and voice enrollment into a single ZIP.
+      </div>
+    </div>
+    <a href="/settings/data/export" class="btn">Download .zip</a>
+  </div>
+
+  <div class="skill-row">
+    <div>
+      <strong>Forget everything</strong>
+      <div style="font-size:.82rem;color:var(--muted)">
+        Wipe all data and reset to first-boot state. <strong>This cannot be undone.</strong>
+      </div>
+    </div>
+    <form method="POST" action="/settings/data/reset"
+          onsubmit="return confirm('Wipe ALL Lumi data? This cannot be undone.');"
+          style="margin:0">
+      <button type="submit" class="btn danger">Reset</button>
+    </form>
+  </div>
+</div>
 {% endblock %}
