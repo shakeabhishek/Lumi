@@ -1,14 +1,4 @@
 <p align="center">
-  <img src="docs/assets/pixel-heart.svg" alt="Lumi" width="220">
-</p>
-
-<h1 align="center">Lumi</h1>
-
-<p align="center">
-  <em>Your AI companion. Always on. Always yours.</em>
-</p>
-
-<p align="center">
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)
 ![Raspberry Pi 5](https://img.shields.io/badge/Raspberry%20Pi%205-A22846?style=flat-square&logo=raspberrypi&logoColor=white)
@@ -18,6 +8,16 @@
 ![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black)
 ![Status](https://img.shields.io/badge/Status-Pre--launch-yellow?style=flat-square)
 
+</p>
+
+<p align="center">
+  <img src="docs/assets/pixel-heart.svg" alt="Lumi" width="220">
+</p>
+
+<h1 align="center">Lumi</h1>
+
+<p align="center">
+  <em>Your AI companion. Always on. Always yours.</em>
 </p>
 
 **A portable physical AI desk companion that runs a local LLM on dedicated AI hardware — no cloud, no subscription, no data leaving the device by default. Plug it into any computer via USB-C and Lumi becomes part of your day.**
