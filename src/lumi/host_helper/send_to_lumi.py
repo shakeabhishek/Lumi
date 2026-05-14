@@ -53,6 +53,40 @@ def _is_macos() -> bool:
     return sys.platform == "darwin"
 
 
+# ── hotkey combo handling ───────────────────────────────────────────────────
+
+_MOD_TOKENS = {"cmd", "ctrl", "alt", "shift", "meta", "super", "win"}
+
+
+def default_combo() -> str:
+    """Platform-appropriate default combo, in the user-facing dotted form."""
+    return "cmd+shift+l" if _is_macos() else "ctrl+shift+l"
+
+
+def to_pynput_combo(combo: str) -> str:
+    """Translate `cmd+shift+l` to `<cmd>+<shift>+l` for pynput.GlobalHotKeys.
+
+    Modifier tokens get wrapped in angle brackets; the final key is left bare.
+    On non-macOS, `cmd` is normalized to `ctrl` since pynput's <cmd> doesn't
+    map cleanly outside macOS.
+    """
+    parts = [p.strip().lower() for p in combo.split("+") if p.strip()]
+    if not _is_macos():
+        parts = ["ctrl" if p == "cmd" else p for p in parts]
+    out = []
+    for p in parts:
+        if p in _MOD_TOKENS:
+            out.append(f"<{p}>")
+        else:
+            out.append(p)
+    return "+".join(out)
+
+
+def display_combo(combo: str) -> str:
+    """Pretty-print a combo for terminal banners (Cmd+Shift+L)."""
+    return "+".join(p.strip().capitalize() for p in combo.split("+") if p.strip())
+
+
 def capture_selected_text(simulate_copy: bool = True) -> CaptureResult | None:
     """Try to grab the user's current selection, falling back to clipboard.
 
@@ -132,9 +166,16 @@ class HotkeyDaemon:
     tab alongside the Lumi voice loop and web UI.
     """
 
-    def __init__(self, data_dir: Path, simulate_copy: bool = True) -> None:
+    def __init__(
+        self,
+        data_dir: Path,
+        simulate_copy: bool = True,
+        combo: str | None = None,
+    ) -> None:
         self._data_dir = data_dir
         self._simulate_copy = simulate_copy
+        # Empty string and None both mean "use platform default".
+        self._combo = combo.strip() if combo else default_combo()
 
     def run(self) -> None:
         try:
@@ -144,9 +185,9 @@ class HotkeyDaemon:
                 "pynput not installed — install with: uv pip install -e '.[host]'"
             ) from exc
 
-        combo = "<cmd>+<shift>+l" if _is_macos() else "<ctrl>+<shift>+l"
-        log.info("send_to_lumi.daemon_start", combo=combo, data_dir=str(self._data_dir))
-        print(f"\n  ✦  Send-to-Lumi listening. Press {combo.replace('<', '').replace('>', '').upper()} from anywhere.\n")
+        pynput_combo = to_pynput_combo(self._combo)
+        log.info("send_to_lumi.daemon_start", combo=pynput_combo, data_dir=str(self._data_dir))
+        print(f"\n  ✦  Send-to-Lumi listening. Press {display_combo(self._combo)} from anywhere.\n")
 
         def _on_hotkey() -> None:
             result = capture_selected_text(simulate_copy=self._simulate_copy)
@@ -159,7 +200,7 @@ class HotkeyDaemon:
             preview = result.text[:60].replace("\n", " ")
             print(f"  ✦  Sent to Lumi ({result.source}, {len(result.text)} chars): {preview}…")
 
-        with keyboard.GlobalHotKeys({combo: _on_hotkey}) as h:
+        with keyboard.GlobalHotKeys({pynput_combo: _on_hotkey}) as h:
             try:
                 h.join()
             except KeyboardInterrupt:

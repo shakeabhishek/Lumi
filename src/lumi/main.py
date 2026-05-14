@@ -300,6 +300,7 @@ def hotkey(
     macOS the first time it simulates a keystroke.
     """
     from .host_helper.send_to_lumi import HotkeyDaemon  # noqa: PLC0415
+    from .ui.web.persistence import load_settings  # noqa: PLC0415
 
     configure_logging("INFO")
     cfg = get_settings()
@@ -310,7 +311,12 @@ def hotkey(
             err=True,
         )
         raise typer.Exit(1)
-    HotkeyDaemon(data_dir=cfg.data_dir, simulate_copy=not no_copy_sim).run()
+    user = load_settings(cfg.data_dir)
+    HotkeyDaemon(
+        data_dir=cfg.data_dir,
+        simulate_copy=not no_copy_sim,
+        combo=user.hotkey_combo or None,   # falls back to platform default
+    ).run()
 
 
 @app.command()

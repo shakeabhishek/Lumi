@@ -132,7 +132,9 @@ async def modes_post(
 
 @router.get("/data", response_class=HTMLResponse)
 async def data_get(request: Request) -> HTMLResponse:
-    return _render(request, "settings/data.html")
+    from ....host_helper.send_to_lumi import default_combo  # noqa: PLC0415
+
+    return _render(request, "settings/data.html", default_hotkey=default_combo())
 
 
 @router.post("/data", response_class=RedirectResponse, status_code=303)
@@ -143,6 +145,7 @@ async def data_post(
     camera: Annotated[str, Form()] = "",
     wifi_skills: Annotated[str, Form()] = "",
     memory_enabled: Annotated[str, Form()] = "",
+    hotkey_combo: Annotated[str, Form()] = "",
 ) -> str:
     data_dir = request.app.state.data_dir
     s = load_settings(data_dir)
@@ -151,6 +154,7 @@ async def data_post(
     s.camera_enabled = camera == "on"
     s.wifi_skills_enabled = wifi_skills == "on"
     s.memory_enabled = memory_enabled == "on"
+    s.hotkey_combo = hotkey_combo.strip()
     save_settings(data_dir, s)
     return "/settings/data"
 

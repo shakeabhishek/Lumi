@@ -112,3 +112,53 @@ def test_format_hint_includes_text_and_source() -> None:
     hint = format_hint({"text": "x = 42", "source": "selection"})
     assert "x = 42" in hint
     assert "selection" in hint
+
+
+# ── combo handling ──────────────────────────────────────────────────────────
+
+
+def test_default_combo_per_platform() -> None:
+    from lumi.host_helper import send_to_lumi as m
+
+    with patch.object(m, "_is_macos", return_value=True):
+        assert m.default_combo() == "cmd+shift+l"
+    with patch.object(m, "_is_macos", return_value=False):
+        assert m.default_combo() == "ctrl+shift+l"
+
+
+def test_to_pynput_combo_wraps_modifiers() -> None:
+    from lumi.host_helper.send_to_lumi import to_pynput_combo
+
+    with patch("lumi.host_helper.send_to_lumi._is_macos", return_value=True):
+        assert to_pynput_combo("cmd+shift+l") == "<cmd>+<shift>+l"
+        assert to_pynput_combo("alt+k") == "<alt>+k"
+
+
+def test_to_pynput_combo_normalizes_cmd_on_linux() -> None:
+    """On non-macOS, `cmd` should become `<ctrl>` since pynput's <cmd> doesn't carry."""
+    from lumi.host_helper.send_to_lumi import to_pynput_combo
+
+    with patch("lumi.host_helper.send_to_lumi._is_macos", return_value=False):
+        assert to_pynput_combo("cmd+shift+l") == "<ctrl>+<shift>+l"
+
+
+def test_display_combo_capitalizes() -> None:
+    from lumi.host_helper.send_to_lumi import display_combo
+
+    assert display_combo("cmd+shift+l") == "Cmd+Shift+L"
+
+
+def test_hotkey_daemon_uses_explicit_combo() -> None:
+    from pathlib import Path as _Path
+    from lumi.host_helper.send_to_lumi import HotkeyDaemon
+
+    d = HotkeyDaemon(data_dir=_Path("/tmp/x"), combo="alt+space")
+    assert d._combo == "alt+space"
+
+
+def test_hotkey_daemon_empty_combo_falls_back_to_default() -> None:
+    from pathlib import Path as _Path
+    from lumi.host_helper.send_to_lumi import HotkeyDaemon, default_combo
+
+    d = HotkeyDaemon(data_dir=_Path("/tmp/x"), combo="")
+    assert d._combo == default_combo()

@@ -47,8 +47,25 @@
         </div>
         {% endfor %}
       </div>
+
+      <div class="ob-card" style="margin-top:18px;">
+        <div class="name" style="font-size:15px;font-weight:500;">Send-to-Lumi shortcut</div>
+        <div class="desc" style="font-size:13px;color:var(--iris-mute);margin-top:2px;">
+          Press this combination anywhere on your desktop and Lumi grabs your selected text for the next conversation. Requires clipboard permission above.
+        </div>
+        <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
+          <input id="hotkey-input" name="hotkey_combo" type="text" readonly
+                 class="ob-input" style="max-width:240px;font-family:'Geist Mono',monospace;font-size:14px;text-align:center;cursor:pointer;"
+                 value="{{ default_hotkey }}"
+                 placeholder="click and press keys"
+                 data-default="{{ default_hotkey }}">
+          <button type="button" class="ob-btn ob-btn--ghost" id="hotkey-reset">reset</button>
+        </div>
+      </div>
     </div>
   </div>
+
+  <script src="/static/hotkey_capture.js" defer></script>
 
   <div class="ob-footer">
     <div class="ob-footer__left">

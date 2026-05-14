@@ -52,11 +52,30 @@
         {% if settings.memory_enabled %}checked{% endif %}></label>
     </div>
 
+    <div class="skill-row" style="align-items:flex-start;flex-wrap:wrap;gap:.8rem">
+      <div style="flex:1;min-width:240px">
+        <strong>Send-to-Lumi shortcut</strong>
+        <div style="font-size:.82rem;color:var(--muted)">
+          Press from any app to grab your selected text and queue it as context.
+          Requires clipboard permission above.
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:.5rem">
+        <input id="hotkey-input" name="hotkey_combo" type="text" readonly
+               value="{{ settings.hotkey_combo or default_hotkey }}"
+               data-default="{{ default_hotkey }}"
+               placeholder="click and press keys"
+               style="font-family:'Geist Mono',monospace;font-size:.92rem;text-align:center;width:200px;cursor:pointer">
+        <button type="button" class="btn" id="hotkey-reset">reset</button>
+      </div>
+    </div>
+
     <div class="btn-row" style="margin-top:1.25rem">
       <button type="submit" class="btn primary">Save</button>
     </div>
   </form>
 </div>
+<script src="/static/hotkey_capture.js" defer></script>
 
 <div class="card">
   <h2>Your data</h2>

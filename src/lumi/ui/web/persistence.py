@@ -77,6 +77,9 @@ class UserSettings(BaseModel):
     camera_enabled: bool = False
     wifi_skills_enabled: bool = True
 
+    # Send-to-Lumi hotkey (empty = platform default: cmd+shift+l on macOS, ctrl+shift+l elsewhere)
+    hotkey_combo: str = ""
+
     # System prompt override (empty = use defaults from prompts.py)
     system_prompt_override: str = ""
 

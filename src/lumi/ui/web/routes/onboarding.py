@@ -39,6 +39,8 @@ TOTAL_STEPS = 9
 
 
 def _render(request: Request, step: int, **ctx: object) -> HTMLResponse:
+    from ....host_helper.send_to_lumi import default_combo  # noqa: PLC0415
+
     settings = load_settings(request.app.state.data_dir)
     return request.app.state.templates.TemplateResponse(
         request, f"onboarding/step_{step}.html",
@@ -50,6 +52,7 @@ def _render(request: Request, step: int, **ctx: object) -> HTMLResponse:
             "piper_voices": PIPER_VOICES,
             "face_themes": FACE_THEMES,
             "modes": MODES,
+            "default_hotkey": settings.hotkey_combo or default_combo(),
             **ctx,
         },
     )
@@ -248,6 +251,7 @@ async def step7(
     clipboard: Annotated[str, Form()] = "",
     camera: Annotated[str, Form()] = "",
     wifi_skills: Annotated[str, Form()] = "on",
+    hotkey_combo: Annotated[str, Form()] = "",
 ) -> str:
     data_dir = request.app.state.data_dir
     s = load_settings(data_dir)
@@ -255,6 +259,7 @@ async def step7(
     s.clipboard_enabled = clipboard == "on"
     s.camera_enabled = camera == "on"
     s.wifi_skills_enabled = wifi_skills == "on"
+    s.hotkey_combo = hotkey_combo.strip()
     s.onboarding_step = 8
     save_settings(data_dir, s)
     return "/onboarding/8"
