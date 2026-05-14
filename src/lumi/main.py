@@ -38,6 +38,14 @@ log = get_logger(__name__)
 def _make_wake_source(cfg: Settings) -> WakeSource:
     if cfg.wake == WakeStrategy.PUSH_TO_TALK:
         return PushToTalkWake()
+    if cfg.wake == WakeStrategy.WAKE_WORD:
+        from .audio.wake_word import OpenWakeWordWake  # noqa: PLC0415
+
+        return OpenWakeWordWake(
+            model=cfg.wake_word_model,
+            threshold=cfg.wake_word_threshold,
+            input_device=cfg.audio_input_device,
+        )
     raise NotImplementedError(f"Wake strategy not yet implemented: {cfg.wake}")
 
 

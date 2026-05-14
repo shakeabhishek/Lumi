@@ -91,6 +91,8 @@ class Settings(BaseSettings):
     # Runtime
     mode: Mode = Mode.GENERAL
     wake: WakeStrategy = WakeStrategy.PUSH_TO_TALK
+    wake_word_model: str = "hey_jarvis"   # openwakeword model name; see audio/wake_word.py
+    wake_word_threshold: float = 0.6
     log_level: str = "INFO"
 
     # Paths

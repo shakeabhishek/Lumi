@@ -53,6 +53,11 @@ web = ["fastapi>=0.111", "uvicorn>=0.30", "jinja2>=3.1", "python-multipart>=0.0.
 host = ["pynput>=1.7", "psutil>=5.9"]
 # Speaker verification
 voice = ["resemblyzer>=0.1.1"]
+# Wake-word detection: openwakeword has no py3.12 wheel as of writing, so the
+# wake extra is intentionally NOT registered here. To enable continuous wake
+# listening on the laptop, install manually:
+#   uv pip install --python 3.11 openwakeword
+# Lumi's WAKE_WORD strategy lazy-imports openwakeword; it falls back gracefully.
 
 [project.scripts]
 lumi = "lumi.main:app"

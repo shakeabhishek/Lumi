@@ -1,14 +1,23 @@
 """Wake-word detection.
 
-V1 ships with a curated palette of pre-trained names — see CLAUDE.md. Until we
-wire OpenWakeWord (Pi) or Porcupine, dev uses push-to-talk: press Enter to wake.
+Two sources, picked by config:
+  - PushToTalkWake: press Enter to wake. Default for headless dev.
+  - OpenWakeWordWake: continuous mic listening with on-device ONNX models.
+    Lazy-imports openwakeword + sounddevice so the package stays optional.
 
 The interface (`WakeSource.wait_for_wake`) is what the runtime depends on, so
-swapping push-to-talk for real wake-word detection later is a one-class change.
+swapping detectors is a one-class change.
+
+A note on names: openwakeword ships pre-trained models for "alexa",
+"hey_jarvis", "hey_mycroft", "hey_rhasspy". "Hey Lumi" isn't pre-trained, so
+laptop dev uses one of those as a proxy. On the Pi we'll either train a
+custom Lumi model (openwakeword has a notebook) or swap to Porcupine, which
+generates custom wake words from the web UI.
 """
 
 from __future__ import annotations
 
+import threading
 from abc import ABC, abstractmethod
 
 from ..log import get_logger
@@ -36,11 +45,93 @@ class PushToTalkWake(WakeSource):
 
 
 class OpenWakeWordWake(WakeSource):
-    """TODO: implement when we move to the Pi. Listens to a streaming mic feed and
-    fires when the configured wake word is detected."""
+    """Continuous mic listening via openwakeword (local, on-device, ONNX).
 
-    def __init__(self, model: str) -> None:
-        self._model = model
+    Runs a background thread that streams 16 kHz mono audio and feeds 1280-sample
+    (80 ms) frames into the model. `wait_for_wake()` blocks on a threading.Event
+    that the background thread sets when the model's score crosses `threshold`.
+    Cooldown prevents back-to-back fires from a single utterance.
+    """
+
+    _FRAME_LEN = 1280            # 80 ms at 16 kHz — openwakeword's required chunk size
+    _SAMPLE_RATE = 16000
+
+    def __init__(
+        self,
+        model: str = "hey_jarvis",
+        threshold: float = 0.6,
+        cooldown_s: float = 2.0,
+        input_device: int | str | None = None,
+    ) -> None:
+        self._model_name = model
+        self._threshold = threshold
+        self._cooldown_s = cooldown_s
+        self._input_device = input_device
+        self._event = threading.Event()
+        self._oww: object | None = None
+        self._stream: object | None = None
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+
+    # ── public ──────────────────────────────────────────────────────────────
 
     def wait_for_wake(self) -> None:
-        raise NotImplementedError("OpenWakeWord wake source — implement on Pi")
+        self._ensure_started()
+        self._event.wait()
+        self._event.clear()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._stream is not None:
+            try:
+                self._stream.stop()  # type: ignore[attr-defined]
+                self._stream.close()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        self._stream = None
+
+    # ── internals ───────────────────────────────────────────────────────────
+
+    def _ensure_started(self) -> None:
+        if self._thread is not None:
+            return
+        self._oww = self._load_model()
+        self._open_stream()
+        self._thread = threading.Thread(target=self._listen, daemon=True)
+        self._thread.start()
+        log.info("wake.openwakeword.started", model=self._model_name, threshold=self._threshold)
+
+    def _load_model(self) -> object:
+        from openwakeword.model import Model  # noqa: PLC0415
+
+        return Model(wakeword_models=[self._model_name], inference_framework="onnx")
+
+    def _open_stream(self) -> None:
+        import sounddevice as sd  # noqa: PLC0415
+
+        self._stream = sd.InputStream(
+            samplerate=self._SAMPLE_RATE,
+            channels=1,
+            dtype="int16",
+            blocksize=self._FRAME_LEN,
+            device=self._input_device,
+        )
+        self._stream.start()  # type: ignore[attr-defined]
+
+    def _listen(self) -> None:
+        import numpy as np  # noqa: PLC0415
+        from time import monotonic  # noqa: PLC0415
+
+        last_fire = 0.0
+        try:
+            while not self._stop.is_set():
+                frame, _overflowed = self._stream.read(self._FRAME_LEN)  # type: ignore[attr-defined]
+                samples = np.frombuffer(frame, dtype=np.int16) if isinstance(frame, bytes) else frame[:, 0]
+                scores = self._oww.predict(samples)  # type: ignore[union-attr]
+                score = float(scores.get(self._model_name, 0.0))
+                if score >= self._threshold and (monotonic() - last_fire) >= self._cooldown_s:
+                    log.info("wake.fired", score=round(score, 3))
+                    last_fire = monotonic()
+                    self._event.set()
+        except Exception as exc:
+            log.warning("wake.listen_error", error=str(exc))
