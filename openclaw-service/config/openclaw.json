@@ -61,7 +61,23 @@
       },
       "timer":            { "enabled": true },
       "unit_converter":   { "enabled": true },
-      "wikipedia_lookup": { "enabled": true }
+      "wikipedia_lookup": { "enabled": true },
+      "currency_exchange":{ "enabled": true },
+      "news_headlines":   { "enabled": true },
+      "gmail_read": {
+        "enabled": false,
+        "env": {
+          "LUMI_GMAIL_ADDRESS":      "__LUMI_GMAIL_ADDRESS__",
+          "LUMI_GMAIL_APP_PASSWORD": "__LUMI_GMAIL_APP_PASSWORD__"
+        }
+      },
+      "calendar_read": {
+        "enabled": false,
+        "env": {
+          "LUMI_CAL_ADDRESS":      "__LUMI_CAL_ADDRESS__",
+          "LUMI_CAL_APP_PASSWORD": "__LUMI_CAL_APP_PASSWORD__"
+        }
+      }
     }
   },
 
