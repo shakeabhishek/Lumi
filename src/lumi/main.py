@@ -1,12 +1,14 @@
 """Lumi — CLI entry point.
 
-Usage:
-  lumi                          # normal run (push-to-talk, Ollama backend)
-  lumi --backend mock           # no Ollama needed; great for first-run testing
-  lumi --mode code              # start in developer mode
-  lumi --enroll                 # record voice enrollment clips and exit
-  LUMI_LOG_LEVEL=DEBUG lumi     # verbose logs
-  lumi --list-devices           # show available audio devices and exit
+Subcommands:
+  lumi run                          # voice loop (push-to-talk, Ollama backend)
+  lumi run --backend mock           # no Ollama needed; great for first-run testing
+  lumi run --mode code              # start in developer mode
+  lumi run --enroll                 # record voice enrollment clips and exit
+  lumi run --list-devices           # show available audio devices and exit
+  lumi web                          # FastAPI dashboard at http://localhost:8080
+  lumi hotkey                       # global send-to-Lumi hotkey daemon
+  LUMI_LOG_LEVEL=DEBUG lumi run     # verbose logs
 """
 
 from __future__ import annotations

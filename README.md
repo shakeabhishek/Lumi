@@ -224,8 +224,10 @@ bash scripts/lumi-up.sh
 Visit `http://localhost:8080` for the web UI. To run individual pieces by hand:
 
 ```bash
-uv run lumi web        # web dashboard only
-uv run lumi            # voice loop (mock backend) only
+uv run lumi web                       # web dashboard only
+uv run lumi run --backend ollama      # voice loop with local Ollama
+uv run lumi run --backend mock        # voice loop with mock LLM (no Ollama needed)
+uv run lumi hotkey                    # send-to-Lumi global hotkey daemon
 ```
 
 ### Contributing
