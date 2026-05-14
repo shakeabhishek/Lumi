@@ -58,7 +58,8 @@ class VectorFaceRenderer:
     def _load(self) -> None:
         import pygame  # noqa: PLC0415
 
-        paths = ensure_cached(self._models_dir)
+        # Fetch at 2x render size so smoothscale-down looks crisp.
+        paths = ensure_cached(self._models_dir, size=max(self._emoji_size * 2, 256))
         for state, path in paths.items():
             try:
                 surf = pygame.image.load(str(path)).convert_alpha()

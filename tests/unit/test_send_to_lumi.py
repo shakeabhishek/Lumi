@@ -121,9 +121,9 @@ def test_default_combo_per_platform() -> None:
     from lumi.host_helper import send_to_lumi as m
 
     with patch.object(m, "_is_macos", return_value=True):
-        assert m.default_combo() == "cmd+shift+l"
+        assert m.default_combo() == "cmd+alt+l"
     with patch.object(m, "_is_macos", return_value=False):
-        assert m.default_combo() == "ctrl+shift+l"
+        assert m.default_combo() == "ctrl+alt+l"
 
 
 def test_to_pynput_combo_wraps_modifiers() -> None:

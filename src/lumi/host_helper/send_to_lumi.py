@@ -60,8 +60,13 @@ _MOD_TOKENS = {"cmd", "ctrl", "alt", "shift", "meta", "super", "win"}
 
 
 def default_combo() -> str:
-    """Platform-appropriate default combo, in the user-facing dotted form."""
-    return "cmd+shift+l" if _is_macos() else "ctrl+shift+l"
+    """Platform-appropriate default combo, in the user-facing dotted form.
+
+    Cmd+Option+L (macOS) and Ctrl+Alt+L (Linux/Windows) — Option/Alt instead
+    of Shift makes the combo less likely to collide with built-in app shortcuts
+    (Cmd+Shift+L is "open URL location" in some browsers, "list" in others).
+    """
+    return "cmd+alt+l" if _is_macos() else "ctrl+alt+l"
 
 
 def to_pynput_combo(combo: str) -> str:
@@ -132,6 +137,34 @@ def capture_selected_text(simulate_copy: bool = True) -> CaptureResult | None:
     return CaptureResult(text=text[:_MAX_TEXT_CHARS], source="clipboard")
 
 
+def notify(title: str, body: str) -> None:
+    """Fire a small OS notification so the user sees confirmation outside the terminal.
+
+    Best-effort and silent on failure — never raises. macOS uses osascript;
+    Linux tries notify-send; Windows is a no-op (winrt would require a heavy
+    optional dep). Falls back to a terminal print on Windows + macOS-no-osa.
+    """
+    import shutil  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+
+    if _is_macos():
+        if shutil.which("osascript") is None:
+            return
+        body_esc = body.replace('"', '\\"')
+        title_esc = title.replace('"', '\\"')
+        script = f'display notification "{body_esc}" with title "{title_esc}"'
+        try:
+            subprocess.run(["osascript", "-e", script], timeout=2.0, check=False)
+        except Exception:
+            pass
+        return
+    if sys.platform.startswith("linux") and shutil.which("notify-send"):
+        try:
+            subprocess.run(["notify-send", title, body], timeout=2.0, check=False)
+        except Exception:
+            pass
+
+
 def write_pending(data_dir: Path, result: CaptureResult) -> Path:
     """Drop the captured text where the voice loop will find it."""
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -199,15 +232,18 @@ class HotkeyDaemon:
         print(f"\n  ✦  Send-to-Lumi listening. Press {display_combo(self._combo)} from anywhere.\n")
 
         def _on_hotkey() -> None:
+            log.info("send_to_lumi.hotkey_fired")
             result = capture_selected_text(simulate_copy=self._simulate_copy)
             if result is None:
                 log.info("send_to_lumi.no_text")
                 print("  …  nothing to send (no selection, empty clipboard)")
+                notify("Lumi", "Nothing to send (no selection)")
                 return
             write_pending(self._data_dir, result)
             log.info("send_to_lumi.captured", source=result.source, chars=len(result.text))
             preview = result.text[:60].replace("\n", " ")
             print(f"  ✦  Sent to Lumi ({result.source}, {len(result.text)} chars): {preview}…")
+            notify("Sent to Lumi", f"{result.source} · {len(result.text)} chars")
 
         with keyboard.GlobalHotKeys({pynput_combo: _on_hotkey}) as h:
             try:

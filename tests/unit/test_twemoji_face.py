@@ -29,22 +29,23 @@ def test_cache_dir_under_models(tmp_path: Path) -> None:
 def test_ensure_cached_writes_each_state(tmp_path: Path) -> None:
     """Mock httpx.get → ensure_cached writes a file per state and returns them."""
     fake_resp = MagicMock()
-    fake_resp.content = b"\x89PNGfake"
+    fake_resp.content = b"\x89PNG" + b"fake"   # valid PNG magic header
     fake_resp.raise_for_status.return_value = None
     with patch("httpx.get", return_value=fake_resp) as mock_get:
-        result = ensure_cached(tmp_path)
+        result = ensure_cached(tmp_path, size=320)
 
     assert set(result.keys()) == set(LumiState)
     for state in LumiState:
         assert result[state].exists()
-        assert result[state].read_bytes() == b"\x89PNGfake"
+        # File names should embed the requested size so different sizes coexist.
+        assert "_320.png" in result[state].name
     assert mock_get.call_count == 4
 
 
 def test_ensure_cached_skips_existing(tmp_path: Path) -> None:
     """A second call shouldn't re-fetch files that are already on disk."""
     fake_resp = MagicMock()
-    fake_resp.content = b"\x89PNGfake"
+    fake_resp.content = b"\x89PNG" + b"fake"
     fake_resp.raise_for_status.return_value = None
     with patch("httpx.get", return_value=fake_resp) as mock_get:
         ensure_cached(tmp_path)
@@ -56,9 +57,19 @@ def test_ensure_cached_skips_existing(tmp_path: Path) -> None:
     assert second_calls == first_calls   # zero additional network calls
 
 
+def test_ensure_cached_rejects_non_png_response(tmp_path: Path) -> None:
+    """If wsrv.nl returns HTML or junk, we should NOT cache it."""
+    fake_resp = MagicMock()
+    fake_resp.content = b"<html>error</html>"
+    fake_resp.raise_for_status.return_value = None
+    with patch("httpx.get", return_value=fake_resp):
+        result = ensure_cached(tmp_path)
+    assert result == {}            # nothing valid was cached
+
+
 def test_ensure_cached_omits_failed_states(tmp_path: Path) -> None:
     """Network failure on one codepoint should not block the others."""
-    fake_ok = MagicMock(); fake_ok.content = b"png"; fake_ok.raise_for_status.return_value = None
+    fake_ok = MagicMock(); fake_ok.content = b"\x89PNG" + b"ok"; fake_ok.raise_for_status.return_value = None
 
     call_count = {"n": 0}
     def side_effect(*_args, **_kwargs):
