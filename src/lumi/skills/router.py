@@ -11,6 +11,7 @@ Every dispatch is recorded in AuditLog when one is provided.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 
 from ..audio.tts import TTS
 from ..log import get_logger
@@ -19,6 +20,8 @@ from .audit_log import AuditLog
 from .base import NativeSkill
 from .native.clipboard_skill import ClipboardSkill
 from .native.mode_switch import ModeSwitchSkill
+from .native.notes_skill import NotesSkill
+from .native.pomodoro_skill import PomodoroSkill
 from .native.reminder_skill import ReminderSkill
 from .native.system_stats_skill import SystemStatsSkill
 from .native.timer import TimerSkill
@@ -40,15 +43,19 @@ class SkillRouter:
         bridge: OpenClawBridge | None = None,
         audit_log: AuditLog | None = None,
         clipboard_enabled: bool = False,
+        data_dir: Path | None = None,
     ) -> None:
         self._native: list[NativeSkill] = [
             ReminderSkill(tts=tts),   # before TimerSkill — more specific "remind me to X" pattern
+            PomodoroSkill(tts=tts),   # before TimerSkill — "pomodoro" anchors avoid generic timer match
             TimerSkill(tts=tts),
             ModeSwitchSkill(conversation=conversation),
             VolumeSkill(),
             SystemStatsSkill(),
             ClipboardSkill(enabled=clipboard_enabled),
         ]
+        if data_dir is not None:
+            self._native.append(NotesSkill(data_dir=data_dir))
         self._bridge = bridge
         self._conversation = conversation
         self._audit = audit_log

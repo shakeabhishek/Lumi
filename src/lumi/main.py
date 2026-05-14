@@ -248,6 +248,7 @@ def run(
         bridge=bridge,
         audit_log=audit_log,
         clipboard_enabled=cfg.clipboard_enabled,
+        data_dir=cfg.data_dir,
     )
     perf_log = PerfLog(cfg.data_dir)
 
