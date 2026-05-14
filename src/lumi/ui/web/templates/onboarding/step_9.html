@@ -1,19 +1,16 @@
 {% extends "onboarding/_base.html" %}
+{% from "onboarding/_macros.html" import pixel_heart %}
 {% block title %}All set — Lumi{% endblock %}
 {% block body %}
 
 <form method="POST" action="/onboarding/9" style="display:contents;">
   <div class="ob-greet">
+    <div class="ob-blob ob-blob--pink"></div>
+    <div class="ob-blob ob-blob--blue"></div>
     <div class="ob-glow"></div>
 
-    <div style="position:relative;">
-      <div class="ob-face ob-face--pixel" style="width:260px;height:160px;border-radius:24px;display:flex;flex-direction:column;align-items:center;justify-content:center;">
-        <div>
-          <span class="ob-face__pixel-eye"></span>
-          <span class="ob-face__pixel-eye"></span>
-        </div>
-        <span class="ob-face__pixel-mouth"></span>
-      </div>
+    <div class="ob-pixel-heart-wrap" style="position:relative;">
+      {{ pixel_heart(size=160) }}
     </div>
 
     <div class="ob-bubble">

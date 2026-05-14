@@ -1,4 +1,5 @@
 {% extends "onboarding/_base.html" %}
+{% from "onboarding/_macros.html" import pixel_heart %}
 {% block title %}Face — Lumi{% endblock %}
 {% block body %}
 
@@ -17,30 +18,22 @@
           <div class="ob-card" style="padding:20px;">
             {% if theme.id == 'pixel' %}
             <div class="ob-face ob-face--pixel">
-              <div style="text-align:center;">
-                <span class="ob-face__pixel-eye" style="transform:scale(.85);"></span>
-                <span class="ob-face__pixel-eye" style="transform:scale(.85);"></span>
-                <span class="ob-face__pixel-mouth"></span>
-              </div>
+              {{ pixel_heart(size=120) }}
             </div>
             {% elif theme.id == 'vector' %}
             <div class="ob-face ob-face--vector">
-              <div style="text-align:center;">
-                <div>
-                  <span class="ob-face__vector-brow"></span>
-                  <span class="ob-face__vector-brow" style="transform:rotate(6deg);"></span>
-                </div>
-                <div style="margin-top:4px;">
-                  <span class="ob-face__vector-eye"></span>
-                  <span class="ob-face__vector-eye"></span>
-                </div>
+              {# Twemoji — cycles through Lumi's 4 states (idle / listen / think / speak)
+                 served via jsDelivr CDN. #}
+              <div class="ob-vector-states">
+                <img src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@latest/assets/svg/1f60d.svg" alt="idle"     title="idle">
+                <img src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@latest/assets/svg/1f917.svg" alt="listen"   title="listening">
+                <img src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@latest/assets/svg/1f914.svg" alt="think"    title="thinking">
+                <img src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@latest/assets/svg/1f604.svg" alt="speak"    title="speaking">
               </div>
             </div>
             {% else %}
             <div class="ob-face ob-face--terminal">
-              <pre class="ob-face__terminal">  ( ^ )    ( ^ )
-        _
-       \_/</pre>
+              <pre class="ob-face__terminal ob-face__terminal--big">ʕ♥ᴥ♥ʔ</pre>
             </div>
             {% endif %}
             <div class="ob-face-meta">

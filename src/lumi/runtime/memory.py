@@ -7,10 +7,17 @@ are not installed (memory extra not activated).
 
 from __future__ import annotations
 
+import os
 import uuid
 from pathlib import Path
 
 from ..log import get_logger
+
+# Workaround for protobuf version mismatch in chromadb's bundled opentelemetry.
+# Must be set BEFORE chromadb is imported. Forces the pure-Python protobuf
+# implementation, which is slower but compatible. Memory writes are infrequent
+# (one per turn) so the perf cost is negligible.
+os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 
 log = get_logger(__name__)
 
