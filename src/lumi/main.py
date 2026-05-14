@@ -273,7 +273,12 @@ def run(
 
     display = make_display(cfg.face_width, cfg.face_height)
     sm = StateMachine()
-    face = FaceEngine(display=display, theme=cfg.face_theme, color=cfg.face_color)
+    face = FaceEngine(
+        display=display,
+        theme=cfg.face_theme,
+        color=cfg.face_color,
+        models_dir=cfg.models_dir,
+    )
     sm.on_state_change(face.set_state)
 
     with typer.progressbar(length=1, label="Loading Whisper model") as progress:

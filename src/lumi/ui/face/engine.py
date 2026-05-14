@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ...hardware.base import Display
 from ...runtime.state_machine import LumiState
 from .pixel import PixelFaceRenderer
@@ -16,7 +18,7 @@ _RENDERERS = {
 
 _DEFAULT_COLORS = {
     "pixel": "#FF6B9D",     # cute pink
-    "vector": "#F5A623",    # warm amber
+    "vector": "#F5A623",    # warm amber (only for fallback line drawing)
     "terminal": "#33FF33",  # phosphor green
 }
 
@@ -27,13 +29,23 @@ def _parse_hex(hex_color: str) -> tuple[int, int, int]:
 
 
 class FaceEngine:
-    def __init__(self, display: Display, theme: str = "pixel", color: str | None = None) -> None:
+    def __init__(
+        self,
+        display: Display,
+        theme: str = "vector",
+        color: str | None = None,
+        models_dir: Path | None = None,
+    ) -> None:
         w, h = display.size
         self._display = display
-        renderer_cls = _RENDERERS.get(theme, PixelFaceRenderer)
+        renderer_cls = _RENDERERS.get(theme, VectorFaceRenderer)
         resolved = color if color else _DEFAULT_COLORS.get(theme, "#F5A623")
         fg = _parse_hex(resolved)
-        self._renderer = renderer_cls(w, h, fg_color=fg)
+        # Only VectorFaceRenderer takes models_dir; others ignore.
+        if renderer_cls is VectorFaceRenderer:
+            self._renderer = renderer_cls(w, h, fg_color=fg, models_dir=models_dir)
+        else:
+            self._renderer = renderer_cls(w, h, fg_color=fg)
         self._state = LumiState.IDLE
         self._tick = 0
 
