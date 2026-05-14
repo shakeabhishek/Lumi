@@ -177,6 +177,17 @@ Lumi has WiFi (used only by skills you explicitly enable), but the LLM never cal
 - Multi-user voice profiles
 - Custom wake-word training
 - Claude Code integration
+- **Send-to-Lumi tier 3: right-click "Send to Lumi" menus** — macOS Services bundle, Windows registry helper, Linux DE-specific extensions
+- **Send-to-Lumi tier 4: browser extension** — Chrome/Firefox right-click "Ask Lumi about this" without depending on OS-level Accessibility permissions
+
+### Send selected text to Lumi (V1, available now)
+
+Lumi has a host-side helper that grabs the text you're looking at and queues it as context for your next conversation. Two ways in:
+
+- **Global hotkey**: `Cmd+Shift+L` (macOS) / `Ctrl+Shift+L` (Linux/Windows) from any app. Simulates `Cmd+C`, reads the clipboard, queues the result. If nothing is selected, falls back to whatever's already on the clipboard. Run with: `uv run lumi hotkey`
+- **HTTP endpoint**: `POST /api/context` with `text=...` (for scripts, browser extensions, or future right-click integrations)
+
+Permission gated on `clipboard_enabled`. The voice loop picks up queued context at the top of its next turn and injects it into the LLM's system prompt; the file is deleted after consumption. Audit log records the source + length, never the body.
 
 ---
 

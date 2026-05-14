@@ -21,6 +21,7 @@ STATIC_DIR = _HERE / "static"
 
 
 def create_app(data_dir: Path) -> FastAPI:
+    from .routes.context_api import router as context_router
     from .routes.dashboard import router as dashboard_router
     from .routes.dev import router as dev_router
     from .routes.journal import router as journal_router
@@ -42,5 +43,6 @@ def create_app(data_dir: Path) -> FastAPI:
     app.include_router(skills_router, prefix="/skills")
     app.include_router(journal_router, prefix="/journal")
     app.include_router(dev_router, prefix="/dev")
+    app.include_router(context_router, prefix="/api")
 
     return app

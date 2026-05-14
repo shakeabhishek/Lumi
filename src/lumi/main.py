@@ -22,6 +22,7 @@ from .audio.wake_word import PushToTalkWake, WakeSource
 from .config import LLMBackendName, Mode, Settings, WakeStrategy, get_settings
 from .hardware.audio_io import SoundDeviceInput
 from .hardware.display import make_display
+from .host_helper.send_to_lumi import consume_pending, format_hint
 from .llm import make_llm_backend
 from .log import configure_logging, get_logger
 from .runtime.conversation import ConversationManager
@@ -144,6 +145,14 @@ def _voice_loop(
         if window_ctx:
             conversation.set_context_hint(f"User's active window: {window_ctx}")
             log.info("context.active_window", window=window_ctx)
+
+        # Hotkey-injected context ("Send to Lumi"). Replaces any earlier hint
+        # for this turn — the explicit user action wins over the implicit
+        # active-window grab.
+        pending = consume_pending(cfg.data_dir) if cfg.clipboard_enabled else None
+        if pending:
+            conversation.set_context_hint(format_hint(pending))
+            log.info("context.hotkey", source=pending.get("source"), chars=len(pending.get("text", "")))
 
         sm.transition(LumiState.THINK)
         face.show()
@@ -275,6 +284,33 @@ def run(
         typer.echo("\nGoodbye.")
         display.close()
         sys.exit(0)
+
+
+@app.command()
+def hotkey(
+    no_copy_sim: bool = typer.Option(
+        False, "--no-copy-sim",
+        help="Skip the simulated Cmd+C — only read what's already on the clipboard (Tier 1 only).",
+    ),
+) -> None:
+    """Run the global-hotkey 'Send to Lumi' daemon (Cmd+Shift+L / Ctrl+Shift+L).
+
+    Captures the currently selected text from any app and queues it as context
+    for Lumi's next conversation turn. Requires Accessibility permission on
+    macOS the first time it simulates a keystroke.
+    """
+    from .host_helper.send_to_lumi import HotkeyDaemon  # noqa: PLC0415
+
+    configure_logging("INFO")
+    cfg = get_settings()
+    if not cfg.clipboard_enabled:
+        typer.echo(
+            "Clipboard reading is disabled. Enable it in Settings → Privacy "
+            "(or set LUMI_CLIPBOARD_ENABLED=true) before running the hotkey daemon.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    HotkeyDaemon(data_dir=cfg.data_dir, simulate_copy=not no_copy_sim).run()
 
 
 @app.command()

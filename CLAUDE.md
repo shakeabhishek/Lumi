@@ -401,6 +401,7 @@ Build the host-side helper that runs on the user's computer.
 - USB HID injection module (test against another laptop / VM)
 - Clipboard reading (macOS / Windows / Linux)
 - Active window detection (cross-platform)
+- Send-to-Lumi global hotkey (Cmd/Ctrl+Shift+L) — simulates Cmd+C, reads selection, queues as context for the next conversation turn. Implementation in `src/lumi/host_helper/send_to_lumi.py`; CLI: `lumi hotkey`; HTTP twin: `POST /api/context`. Permission-gated on `clipboard_enabled`. Right-click menus + browser extension are V2.
 - First-run helper app (USB mass storage trick simulation)
 - End-to-end integration testing across all features
 - **Failure mode hardening**:
@@ -676,6 +677,8 @@ Features deferred from V1 to keep V1 shippable:
 | Sound design | Startup chime, listening tone, confirmation chimes |
 | Onboard fine-tuning | Adapt to user's writing style |
 | Claude Code integration | Developer-focused features |
+| **Send-to-Lumi tier 3 (right-click menu)** | macOS Services bundle (`NSServices` plist), Windows registry helper, Linux DE-specific menu entries. V1 ships tier 1+2 (global hotkey + simulated-copy selection capture) which covers the major UX; right-click is per-platform fiddly for marginal gain. |
+| **Send-to-Lumi tier 4 (browser extension)** | Chrome/Firefox extension with right-click "Ask Lumi about this". Best UX inside the browser since it doesn't depend on Accessibility permissions. Half-a-day each browser; deferred to V2. |
 
 ---
 

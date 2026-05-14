@@ -17,11 +17,13 @@ cd "$LUMI_ROOT"
 # ── flags ────────────────────────────────────────────────────────────────────
 START_OPENCLAW=1
 START_WEB=1
+START_HOTKEY=0
 WEB_PORT=8080
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-openclaw) START_OPENCLAW=0; shift ;;
     --no-web)      START_WEB=0;      shift ;;
+    --hotkey)      START_HOTKEY=1;   shift ;;
     --web-port)    WEB_PORT="$2";    shift 2 ;;
     -h|--help)
       sed -n '2,12p' "$0"; exit 0 ;;
@@ -135,6 +137,15 @@ if [[ $START_OPENCLAW -eq 1 ]]; then
   fi
 else
   step "2/3  openclaw  ${c_dim}(skipped)${c_reset}"
+fi
+
+# ── 3. send-to-Lumi hotkey daemon (optional) ────────────────────────────────
+if [[ $START_HOTKEY -eq 1 ]]; then
+  step "3a  send-to-Lumi hotkey"
+  uv run --extra dev --extra web --extra host --extra memory lumi hotkey \
+    >"$LUMI_ROOT/.hotkey.log" 2>&1 &
+  PIDS+=("$!")
+  ok "hotkey daemon started (pid $!, log .hotkey.log). press Cmd/Ctrl+Shift+L to send"
 fi
 
 # ── 3. web UI ────────────────────────────────────────────────────────────────
