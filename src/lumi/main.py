@@ -291,6 +291,7 @@ def run(
 @app.command()
 def doctor() -> None:
     """Diagnose send-to-Lumi: permissions, clipboard, hotkey, simulated copy."""
+    import os as _os  # noqa: PLC0415
     import time as _time  # noqa: PLC0415
     from .host_helper import clipboard as _clip  # noqa: PLC0415
     from .host_helper.send_to_lumi import default_combo, _is_macos  # noqa: PLC0415
@@ -304,6 +305,19 @@ def doctor() -> None:
     def _warn(msg: str) -> None: typer.echo(f"  ! {msg}")
     def _fail(msg: str) -> None: typer.echo(f"  ✗ {msg}")
     def _section(label: str) -> None: typer.echo(f"\n── {label} ──")
+
+    if _is_macos():
+        _section("macOS host")
+        term_program = _os.environ.get("TERM_PROGRAM", "(unknown)")
+        _ok(f"running under: {term_program}")
+        typer.echo(
+            "  ! On macOS, Accessibility permission is required for the GLOBAL HOTKEY\n"
+            "    AND the simulated Cmd+C. Grant it to the terminal app you launched\n"
+            "    lumi from, not to Python:\n"
+            "      System Settings → Privacy & Security → Accessibility → '+'\n"
+            f"    Add: {term_program if term_program != '(unknown)' else 'your terminal'}\n"
+            "    Then fully quit and relaunch that terminal."
+        )
 
     _section("settings")
     if user.clipboard_enabled:
