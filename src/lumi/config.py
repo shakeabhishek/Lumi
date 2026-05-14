@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     wake_word_threshold: float = 0.6
     log_level: str = "INFO"
 
+    # MCP (Model Context Protocol) server endpoints — scaffolding for V2.
+    # Each entry: {"name": "...", "command": "...", "args": [...], "enabled": bool}.
+    # Lumi V1 does not activate any of these; see skills/mcp_bridge.py.
+    mcp_servers: list[dict] = Field(default_factory=list)
+
     # Paths
     data_dir: Path = Field(default_factory=lambda: Path("./data"))
     models_dir: Path = Field(default_factory=lambda: Path("./models"))
