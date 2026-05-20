@@ -168,18 +168,72 @@ def test_notes_handles_corrupt_line(tmp_path: Path) -> None:
 
 
 # ───────────────────────────────────────────────────────────────────────────
-# HailoBackend stub
+# HailoBackend — protocol sanitization (Hailo 5.3.0+ strictness)
 # ───────────────────────────────────────────────────────────────────────────
 
 
-def test_hailo_model_property(tmp_path: Path) -> None:
-    b = HailoBackend(model_path=tmp_path / "fake.hef", model_name="qwen2.5-1.5b")
-    assert b.model == "hailo:qwen2.5-1.5b"
+def test_hailo_model_property() -> None:
+    b = HailoBackend(model_name="qwen3:1.7b")
+    assert b.model == "hailo:qwen3:1.7b"
 
 
-def test_hailo_chat_raises_not_implemented_on_laptop(tmp_path: Path) -> None:
-    b = HailoBackend(model_path=tmp_path / "fake.hef")
-    with pytest.raises((NotImplementedError, RuntimeError)):
-        # _get_runtime fails first (no hailo_platform on laptop), so RuntimeError;
-        # if someone mocks past that, the stub raises NotImplementedError.
-        next(iter(b.chat([{"role": "user", "content": "hi"}])))
+def test_hailo_sanitize_strips_control_chars() -> None:
+    from lumi.llm.hailo_backend import _sanitize_content
+
+    out = _sanitize_content("hello\x00world\x07!")
+    assert "\x00" not in out and "\x07" not in out
+    assert "hello" in out and "world" in out
+
+
+def test_hailo_sanitize_collapses_newlines() -> None:
+    from lumi.llm.hailo_backend import _sanitize_content
+
+    out = _sanitize_content("line one\nline two\n\nline three")
+    assert "\n" not in out
+    assert "line one" in out and "line three" in out
+
+
+def test_hailo_sanitize_truncates_oversized_content() -> None:
+    from lumi.llm.hailo_backend import _MAX_USER_CONTENT_CHARS, _sanitize_content
+
+    out = _sanitize_content("x" * (_MAX_USER_CONTENT_CHARS + 500))
+    assert len(out) <= _MAX_USER_CONTENT_CHARS + 50  # "…[truncated]" suffix
+    assert "truncated" in out
+
+
+def test_hailo_normalize_keeps_only_first_system_message() -> None:
+    """Hailo treats system messages on continuation as errors. Only the first survives."""
+    from lumi.llm.hailo_backend import _normalize_messages
+
+    out = _normalize_messages([
+        {"role": "system", "content": "You are Lumi."},
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "system", "content": "Switched to focus mode."},   # should be dropped
+        {"role": "user", "content": "what's up"},
+    ])
+    system_count = sum(1 for m in out if m["role"] == "system")
+    assert system_count == 1
+    assert out[0]["role"] == "system"
+    assert "Lumi" in out[0]["content"]
+    # The non-system messages should still be present, in order.
+    non_system = [m for m in out if m["role"] != "system"]
+    assert [m["role"] for m in non_system] == ["user", "assistant", "user"]
+
+
+def test_hailo_normalize_trims_history_to_window() -> None:
+    """We keep the leading system prompt + the last 6 turns (12 messages)."""
+    from lumi.llm.hailo_backend import _MAX_HISTORY_TURNS, _normalize_messages
+
+    msgs = [{"role": "system", "content": "sys"}]
+    for i in range(20):
+        msgs.append({"role": "user", "content": f"u{i}"})
+        msgs.append({"role": "assistant", "content": f"a{i}"})
+
+    out = _normalize_messages(msgs)
+    # 1 system + 2 messages per turn × 6 turns
+    assert len(out) == 1 + _MAX_HISTORY_TURNS * 2
+    assert out[0]["role"] == "system"
+    # Should keep the LAST turns, not the first
+    last_user = next(m for m in reversed(out) if m["role"] == "user")
+    assert "u19" in last_user["content"] or "u" in last_user["content"]

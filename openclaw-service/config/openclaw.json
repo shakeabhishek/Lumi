@@ -7,11 +7,11 @@
         "api": "ollama",
         "models": [
           {
-            "id": "qwen2.5:1.5b",
-            "name": "qwen2.5:1.5b",
+            "id": "qwen3:1.7b",
+            "name": "qwen3:1.7b",
             "input": ["text"],
-            "contextWindow": 8192,
-            "maxTokens": 2048
+            "contextWindow": 32768,
+            "maxTokens": 4096
           }
         ]
       }
@@ -20,7 +20,7 @@
 
   "agents": {
     "defaults": {
-      "model": { "primary": "ollama/qwen2.5:1.5b" },
+      "model": { "primary": "ollama/qwen3:1.7b" },
       "sandbox": { "mode": "off" }
     }
   },
