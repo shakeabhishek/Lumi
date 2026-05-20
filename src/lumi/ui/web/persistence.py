@@ -80,12 +80,13 @@ class UserSettings(BaseModel):
     # Send-to-Lumi hotkey (empty = platform default: cmd+shift+l on macOS, ctrl+shift+l elsewhere)
     hotkey_combo: str = ""
 
-    # Cloud LLM fallback — V1 stores these but does NOT route to them.
-    # V2 will read this config and decide per turn (local first, cloud on
-    # low-confidence / explicit escalation / long context).
-    cloud_llm_provider: str = ""        # "", "openai", "anthropic", "gemini"
-    cloud_llm_api_key: str = ""         # stored locally in user_settings.json
-    cloud_llm_model: str = ""           # provider-specific model id; empty = provider default
+    # Cloud LLM fallback — V1 stores config; V2 wires the routing.
+    # The API KEY ITSELF is NOT in this file — it lives in the OS keychain
+    # via lumi.runtime.secrets. user_settings.json holds only the
+    # non-sensitive flag below so the UI knows a key is set.
+    cloud_llm_provider: str = ""           # "", "openai", "anthropic", "gemini"
+    cloud_llm_api_key_set: bool = False    # mirror of "is there a secret in the keychain?"
+    cloud_llm_model: str = ""              # provider-specific model id; empty = provider default
 
     # System prompt override (empty = use defaults from prompts.py)
     system_prompt_override: str = ""
@@ -104,9 +105,46 @@ def load_settings(data_dir: Path) -> UserSettings:
     if not p.exists():
         return UserSettings()
     try:
-        return UserSettings.model_validate_json(p.read_text(encoding="utf-8"))
+        # Read raw JSON first so we can lift any legacy plaintext API key out
+        # of the file and into the OS keychain before constructing the model.
+        import json as _json  # noqa: PLC0415
+        raw = _json.loads(p.read_text(encoding="utf-8"))
+        _migrate_plaintext_api_key(data_dir, raw)
+        return UserSettings.model_validate(raw)
     except Exception:
         return UserSettings()
+
+
+def _migrate_plaintext_api_key(data_dir: Path, raw: dict) -> None:
+    """One-time migration: previously cloud_llm_api_key was stored in this JSON.
+
+    If we see one, move it to the OS keychain, set the boolean flag, and
+    rewrite the file without the plaintext field. Silent no-op if the key
+    field isn't present or empty.
+    """
+    if "cloud_llm_api_key" not in raw:
+        return
+    legacy = raw.pop("cloud_llm_api_key", "") or ""
+    if not legacy:
+        raw["cloud_llm_api_key_set"] = False
+        _atomic_write(data_dir, raw)
+        return
+    try:
+        from ...runtime.secrets import set_secret  # noqa: PLC0415
+        set_secret("cloud_llm_api_key", legacy)
+        raw["cloud_llm_api_key_set"] = True
+    except Exception:
+        # If the keychain isn't reachable we leave the flag false; the user
+        # will be asked to re-enter the key. Better than holding plaintext.
+        raw["cloud_llm_api_key_set"] = False
+    _atomic_write(data_dir, raw)
+
+
+def _atomic_write(data_dir: Path, raw: dict) -> None:
+    import json as _json  # noqa: PLC0415
+    p = _settings_path(data_dir)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(_json.dumps(raw, indent=2), encoding="utf-8")
 
 
 def save_settings(data_dir: Path, settings: UserSettings) -> None:

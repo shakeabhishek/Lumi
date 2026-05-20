@@ -16,6 +16,17 @@
   so it works the moment V2 lands.
 </div>
 
+{% if not secrets_available %}
+<div class="msg err">
+  <strong>OS keychain unreachable.</strong> The <code>keyring</code> package or a
+  system credential store (macOS Keychain / Linux Secret Service / Windows Credential
+  Manager) isn't available, so {{ settings.lumi_name }} can't store an API key
+  securely on this machine. Install with <code>uv pip install -e '.[secrets]'</code>
+  and reload. <em>For your safety, API keys submitted while this banner is showing
+  will not be saved.</em>
+</div>
+{% endif %}
+
 <div class="card">
   <form method="POST" action="/settings/cloud">
 
@@ -36,12 +47,14 @@
     <div class="form-group">
       <label for="api_key">API key</label>
       <input id="api_key" type="password" name="cloud_llm_api_key"
-             value="{{ settings.cloud_llm_api_key }}"
-             placeholder="sk-… / sk-ant-… / AIza…"
+             value=""
+             placeholder="{{ 'enter to update — current: ' ~ key_mask if settings.cloud_llm_api_key_set else 'sk-ant-… / sk-… / AIza…' }}"
              autocomplete="off">
       <div class="form-hint">
-        Stored locally only. Never sent anywhere except to the chosen provider's API.
-        Use a key dedicated to {{ settings.lumi_name }} so you can rotate it cleanly.
+        Stored in your OS keychain ({{ "macOS Keychain" if request.app.state.platform == "darwin" else "secret service" }}),
+        not in any file on disk. The value is never displayed back to the UI —
+        only the masked indicator {{ "(currently " ~ key_mask ~ ")" if settings.cloud_llm_api_key_set else "" }} is shown.
+        Leave this field blank to keep the existing key; click <em>clear</em> to remove it.
       </div>
     </div>
 
@@ -62,6 +75,12 @@
 
     <div class="btn-row">
       <button type="submit" class="btn primary">Save</button>
+      {% if settings.cloud_llm_api_key_set %}
+      <button type="submit" name="clear_key" value="1" class="btn danger"
+              onclick="return confirm('Remove the stored API key from the OS keychain?');">
+        Clear key
+      </button>
+      {% endif %}
       <a href="/settings/personality" class="btn">Back</a>
     </div>
   </form>

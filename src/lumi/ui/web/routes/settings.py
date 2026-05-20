@@ -256,11 +256,19 @@ async def data_reset(request: Request) -> str:
 # ---------------------------------------------------------------------------
 
 _VALID_PROVIDERS = ("", "openai", "anthropic", "gemini")
+_CLOUD_KEY_NAME = "cloud_llm_api_key"
 
 
 @router.get("/cloud", response_class=HTMLResponse)
 async def cloud_get(request: Request) -> HTMLResponse:
-    return _render(request, "settings/cloud.html")
+    from ....runtime import secrets  # noqa: PLC0415
+
+    existing = secrets.get_secret(_CLOUD_KEY_NAME)
+    return _render(
+        request, "settings/cloud.html",
+        key_mask=secrets.mask(existing),
+        secrets_available=secrets.is_available(),
+    )
 
 
 @router.post("/cloud", response_class=RedirectResponse, status_code=303)
@@ -269,14 +277,30 @@ async def cloud_post(
     cloud_llm_provider: Annotated[str, Form()] = "",
     cloud_llm_api_key: Annotated[str, Form()] = "",
     cloud_llm_model: Annotated[str, Form()] = "",
+    clear_key: Annotated[str, Form()] = "",
 ) -> str:
+    from ....runtime import secrets  # noqa: PLC0415
+
     data_dir = request.app.state.data_dir
     s = load_settings(data_dir)
     provider = cloud_llm_provider.strip().lower()
     if provider not in _VALID_PROVIDERS:
         provider = ""
     s.cloud_llm_provider = provider
-    s.cloud_llm_api_key = cloud_llm_api_key.strip()
     s.cloud_llm_model = cloud_llm_model.strip()
+
+    # API key handling:
+    #   - if "clear" was pressed → delete the keychain entry, flag = false
+    #   - if a non-empty value posted → store via keychain, flag = true
+    #   - if blank value posted → leave existing keychain entry alone
+    if clear_key:
+        secrets.delete_secret(_CLOUD_KEY_NAME)
+        s.cloud_llm_api_key_set = False
+    elif cloud_llm_api_key.strip():
+        try:
+            secrets.set_secret(_CLOUD_KEY_NAME, cloud_llm_api_key.strip())
+            s.cloud_llm_api_key_set = True
+        except secrets.BackendUnavailable:
+            s.cloud_llm_api_key_set = False
     save_settings(data_dir, s)
     return "/settings/cloud"

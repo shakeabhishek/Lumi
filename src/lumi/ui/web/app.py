@@ -31,8 +31,11 @@ def create_app(data_dir: Path) -> FastAPI:
 
     app = FastAPI(title="Lumi", docs_url=None, redoc_url=None)
 
+    import sys  # noqa: PLC0415
+
     app.state.data_dir = data_dir
     app.state.templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+    app.state.platform = sys.platform
 
     STATIC_DIR.mkdir(parents=True, exist_ok=True)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
