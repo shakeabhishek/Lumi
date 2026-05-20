@@ -1,6 +1,9 @@
 ---
 name: weather
 description: Get current weather conditions for any city or location
+primaryEnv: OPENWEATHERMAP_API_KEY
+requiredEnv:
+  - OPENWEATHERMAP_API_KEY
 ---
 
 Fetch and report current weather for the requested location using the OpenWeatherMap API.
