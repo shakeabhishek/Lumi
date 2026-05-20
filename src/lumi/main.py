@@ -419,6 +419,36 @@ def hotkey(
 
 
 @app.command()
+def keys(
+    action: str = typer.Argument("list", help="set | get | delete | list"),
+    name: str = typer.Argument("", help="Key name, e.g. openweathermap_api_key"),
+) -> None:
+    """Manage API keys in the OS keychain (no plaintext on disk)."""
+    from .runtime import secrets as _secrets  # noqa: PLC0415
+
+    KNOWN = ("openweathermap_api_key", "cloud_llm_api_key")
+    if action == "list":
+        for k in KNOWN:
+            typer.echo(f"  {k:30s} {_secrets.mask(_secrets.get_secret(k))}")
+        return
+    if not name:
+        typer.echo("Provide a key name. Known: " + ", ".join(KNOWN), err=True)
+        raise typer.Exit(1)
+    if action == "get":
+        typer.echo(_secrets.mask(_secrets.get_secret(name)))
+    elif action == "set":
+        value = typer.prompt(f"Value for {name}", hide_input=True)
+        _secrets.set_secret(name, value.strip())
+        typer.echo(f"Stored {name} in OS keychain.")
+    elif action == "delete":
+        _secrets.delete_secret(name)
+        typer.echo(f"Deleted {name} from OS keychain.")
+    else:
+        typer.echo(f"Unknown action: {action}. Use set/get/delete/list.", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
 def web(
     port: int = typer.Option(8080, "--port", help="Port to listen on"),
     host: str = typer.Option("0.0.0.0", "--host", help="Host to bind"),  # noqa: S104
