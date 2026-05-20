@@ -419,6 +419,24 @@ def hotkey(
 
 
 @app.command()
+def skills() -> None:
+    """List skills discovered from OpenClaw manifests + their V1 runtime status."""
+    from .skills.openclaw_bridge import OPENCLAW_SKILLS_DIR, _SKILL_IMPLS, discover_skills  # noqa: PLC0415
+
+    catalog = discover_skills(OPENCLAW_SKILLS_DIR)
+    typer.echo(f"OpenClaw catalog: {OPENCLAW_SKILLS_DIR}")
+    if not catalog:
+        typer.echo("  (none — run `bash openclaw-service/setup.sh`)")
+        return
+    typer.echo("  {:<22} {:<12} {}".format("name", "v1 status", "description"))
+    typer.echo("  " + "-" * 72)
+    for name, manifest in catalog:
+        status = "active" if name in _SKILL_IMPLS else "v2-only"
+        desc = (manifest.get("description") or "")[:40]
+        typer.echo(f"  {name:<22} {status:<12} {desc}")
+
+
+@app.command()
 def keys(
     action: str = typer.Argument("list", help="set | get | delete | list"),
     name: str = typer.Argument("", help="Key name, e.g. openweathermap_api_key"),

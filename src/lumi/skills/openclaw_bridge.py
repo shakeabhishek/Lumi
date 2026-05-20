@@ -1,26 +1,35 @@
-"""Tool-calling bridge — Ollama with skill tool definitions.
+"""Tool-calling bridge — OpenClaw manifests as catalog, Ollama as runtime.
 
-We previously proxied through OpenClaw's `/v1/chat/completions` gateway,
-but the gateway does NOT forward skill manifests as OpenAI tool definitions
-to the underlying model — so qwen2.5:1.5b just hallucinated answers without
-ever calling a skill. The Phase 1 viability test used the direct Ollama
-`/api/chat` path with tool definitions and passed at 94%. This bridge does
-that, in Python, for the Lumi runtime.
+V1 hybrid design (honest about what each piece does):
 
-For each call:
-  1. POST to /api/chat with our tool definitions and the user's transcript.
-  2. If the model emits a tool_call, execute the corresponding skill function.
-  3. POST back the tool result so the model can compose a natural reply.
-  4. Return that reply. If the model never called a tool, return None so
-     the skill router falls through to its plain-LLM path with full history.
+  * **OpenClaw is the catalog.** Skill manifests live in
+    `~/.openclaw/workspace/skills/<name>/SKILL.md`. The frontmatter (name,
+    description, required env vars) is the single source of truth for
+    *what skills exist*. Drop a new manifest into that directory and Lumi
+    sees it on next start.
 
-API keys live in the OS keychain via lumi.runtime.secrets, never on disk
-in plaintext.
+  * **Ollama is the runtime.** V1's qwen2.5:1.5b doesn't reliably follow
+    OpenClaw's text-based orchestration format (designed for Claude/GPT),
+    but it does score 94% on OpenAI-style tool calling. So we convert each
+    manifest into a function tool definition and let Ollama drive the
+    model with our tool defs.
+
+  * **Lumi provides the implementation.** Each manifest in the catalog
+    needs a matching Python implementation in this file's `_SKILL_IMPLS`
+    registry. Manifests without an impl are listed in `lumi skills` but
+    log a "V2-only" warning and aren't exposed to the model.
+
+When V2's cloud LLM lands, we'll route through OpenClaw's gateway with a
+model strong enough to drive its orchestration — and the same manifests
+work without changes.
 """
 
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -30,62 +39,7 @@ from ..runtime import secrets
 
 log = get_logger(__name__)
 
-
-def _tool(name: str, description: str, properties: dict[str, dict], required: list[str]) -> dict:
-    return {
-        "type": "function",
-        "function": {
-            "name": name,
-            "description": description,
-            "parameters": {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-            },
-        },
-    }
-
-
-_TOOLS: list[dict] = [
-    _tool(
-        "get_weather",
-        "Get current weather conditions for a city or location",
-        {
-            "location": {
-                "type": "string",
-                "description": "City name, optionally with country, e.g. 'London' or 'Tokyo, JP'",
-            }
-        },
-        ["location"],
-    ),
-    _tool(
-        "lookup_wikipedia",
-        "Look up a topic on Wikipedia and return a one-paragraph summary",
-        {"topic": {"type": "string", "description": "Topic to search for"}},
-        ["topic"],
-    ),
-    _tool(
-        "get_exchange_rate",
-        "Convert an amount from one currency to another using live exchange rates",
-        {
-            "amount": {"type": "number", "description": "Amount to convert"},
-            "from_currency": {"type": "string", "description": "ISO 4217 source code, e.g. 'USD'"},
-            "to_currency": {"type": "string", "description": "ISO 4217 target code, e.g. 'EUR'"},
-        },
-        ["amount", "from_currency", "to_currency"],
-    ),
-    _tool(
-        "get_news_headlines",
-        "Get the top 3-5 news headlines from a public RSS source",
-        {
-            "source": {
-                "type": "string",
-                "description": "One of: bbc, npr, hn, reuters. Default 'bbc'.",
-            }
-        },
-        [],
-    ),
-]
+OPENCLAW_SKILLS_DIR = Path.home() / ".openclaw" / "workspace" / "skills"
 
 
 # ── Tool implementations ────────────────────────────────────────────────────
@@ -94,7 +48,7 @@ _TOOLS: list[dict] = [
 def _weather(location: str) -> str:
     key = secrets.get_secret("openweathermap_api_key")
     if not key:
-        return "OpenWeatherMap API key is not configured. Run `lumi keys set openweathermap` to store one."
+        return "OpenWeatherMap API key is not configured. Run `lumi keys set openweathermap_api_key`."
     try:
         r = httpx.get(
             "https://api.openweathermap.org/data/2.5/weather",
@@ -170,8 +124,6 @@ _NEWS_FEEDS = {
 
 
 def _news_headlines(source: str = "bbc") -> str:
-    import re  # noqa: PLC0415
-
     url = _NEWS_FEEDS.get(source.lower(), _NEWS_FEEDS["bbc"])
     try:
         r = httpx.get(
@@ -179,7 +131,6 @@ def _news_headlines(source: str = "bbc") -> str:
             headers={"User-Agent": "Lumi/1.0"},
         )
         r.raise_for_status()
-        # Tiny RSS title extractor — avoids pulling in feedparser.
         titles = re.findall(r"<title>(.*?)</title>", r.text, flags=re.IGNORECASE | re.DOTALL)
         # First title is usually the feed name; skip it.
         items = [t.strip() for t in titles[1:6] if t.strip()]
@@ -188,31 +139,146 @@ def _news_headlines(source: str = "bbc") -> str:
         return f"News fetch failed: {exc}"
 
 
-def _dispatch(name: str, args: dict[str, Any]) -> str:
-    if name == "get_weather":
-        return _weather(str(args.get("location", "")))
-    if name == "lookup_wikipedia":
-        return _wikipedia(str(args.get("topic", "")))
-    if name == "get_exchange_rate":
-        return _exchange_rate(
+# ── Skill registry: maps OpenClaw skill name → tool schema + python impl ───
+#
+# Adding a new skill requires:
+#   1. A SKILL.md in ~/.openclaw/workspace/skills/<name>/  (catalog entry)
+#   2. An entry in this dict (runtime impl)
+# The OpenClaw catalog drives discovery. This registry drives execution.
+
+_SKILL_IMPLS: dict[str, dict[str, Any]] = {
+    "weather": {
+        "tool_name": "get_weather",
+        "parameters": {
+            "location": {
+                "type": "string",
+                "description": "City name, optionally with country, e.g. 'London' or 'Tokyo, JP'",
+            }
+        },
+        "required": ["location"],
+        "callable": lambda args: _weather(str(args.get("location", ""))),
+    },
+    "wikipedia_lookup": {
+        "tool_name": "lookup_wikipedia",
+        "parameters": {
+            "topic": {"type": "string", "description": "Topic to search for on Wikipedia"},
+        },
+        "required": ["topic"],
+        "callable": lambda args: _wikipedia(str(args.get("topic", ""))),
+    },
+    "currency_exchange": {
+        "tool_name": "get_exchange_rate",
+        "parameters": {
+            "amount": {"type": "number", "description": "Amount to convert"},
+            "from_currency": {"type": "string", "description": "ISO 4217 source code, e.g. 'USD'"},
+            "to_currency": {"type": "string", "description": "ISO 4217 target code, e.g. 'EUR'"},
+        },
+        "required": ["amount", "from_currency", "to_currency"],
+        "callable": lambda args: _exchange_rate(
             float(args.get("amount", 1)),
             str(args.get("from_currency", "")),
             str(args.get("to_currency", "")),
-        )
-    if name == "get_news_headlines":
-        return _news_headlines(str(args.get("source", "bbc")))
-    return f"Unknown tool: {name}"
+        ),
+    },
+    "news_headlines": {
+        "tool_name": "get_news_headlines",
+        "parameters": {
+            "source": {
+                "type": "string",
+                "description": "One of: bbc, npr, hn, reuters. Default 'bbc'.",
+            }
+        },
+        "required": [],
+        "callable": lambda args: _news_headlines(str(args.get("source", "bbc"))),
+    },
+}
+
+
+# ── Catalog discovery: read SKILL.md manifests from the OpenClaw workspace ─
+
+
+def _parse_frontmatter(text: str) -> dict[str, Any]:
+    """Tiny YAML-ish parser for SKILL.md frontmatter. Handles `key: value`
+    and simple list values. Returns {} if no frontmatter."""
+    if not text.startswith("---"):
+        return {}
+    end = text.find("\n---", 3)
+    if end < 0:
+        return {}
+    block = text[3:end].strip()
+    out: dict[str, Any] = {}
+    current_key: str | None = None
+    for raw in block.splitlines():
+        line = raw.rstrip()
+        if not line:
+            continue
+        if line.startswith("  - ") and current_key:
+            out.setdefault(current_key, [])
+            if isinstance(out[current_key], list):
+                out[current_key].append(line[4:].strip())
+            continue
+        if ":" in line:
+            key, _, val = line.partition(":")
+            key = key.strip()
+            val = val.strip()
+            current_key = key
+            if val:
+                out[key] = val
+    return out
+
+
+def discover_skills(
+    skills_dir: Path = OPENCLAW_SKILLS_DIR,
+) -> list[tuple[str, dict[str, Any]]]:
+    """Read every SKILL.md frontmatter in `skills_dir`. Returns (name, manifest)."""
+    if not skills_dir.exists():
+        return []
+    out: list[tuple[str, dict[str, Any]]] = []
+    for sub in sorted(skills_dir.iterdir()):
+        if not sub.is_dir():
+            continue
+        md = sub / "SKILL.md"
+        if not md.exists():
+            continue
+        try:
+            fm = _parse_frontmatter(md.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        name = fm.get("name") or sub.name
+        out.append((name, fm))
+    return out
+
+
+def _build_tools(catalog: list[tuple[str, dict[str, Any]]]) -> tuple[list[dict], dict[str, Callable]]:
+    """Build OpenAI-style tool defs + dispatch table for skills we have impls for."""
+    tools: list[dict] = []
+    dispatch: dict[str, Callable] = {}
+    for name, manifest in catalog:
+        impl = _SKILL_IMPLS.get(name)
+        if impl is None:
+            log.info("bridge.skill_v2_only", name=name, description=manifest.get("description", ""))
+            continue
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": impl["tool_name"],
+                "description": manifest.get("description", impl["tool_name"]),
+                "parameters": {
+                    "type": "object",
+                    "properties": impl["parameters"],
+                    "required": impl["required"],
+                },
+            },
+        })
+        dispatch[impl["tool_name"]] = impl["callable"]
+    return tools, dispatch
 
 
 # ── Bridge ──────────────────────────────────────────────────────────────────
 
 
 class OpenClawBridge:
-    """Single-turn tool-calling client backed by Ollama.
-
-    Kept the class name for backwards compat with the skill router and config;
-    the underlying transport is now Ollama, not the OpenClaw gateway.
-    """
+    """Tool-calling client. Catalog from OpenClaw manifests, runtime via Ollama."""
 
     def __init__(
         self,
@@ -220,29 +286,41 @@ class OpenClawBridge:
         token: str = "",                # noqa: ARG002  unused; kept for router signature compat
         model: str = "qwen2.5:1.5b",
         timeout: float = 30.0,
+        skills_dir: Path | None = None,
     ) -> None:
         # `url` historically pointed at the OpenClaw gateway. If the caller
-        # passes an openclaw URL (port 18789), silently swap it for Ollama's.
+        # passes the old openclaw URL (port 18789), silently swap for Ollama.
         if "18789" in url or "openclaw" in url:
             url = "http://127.0.0.1:11434"
         self._url = url.rstrip("/")
         self._model = model
         self._timeout = timeout
+        catalog = discover_skills(skills_dir or OPENCLAW_SKILLS_DIR)
+        self._tools, self._dispatch = _build_tools(catalog)
+        log.info(
+            "bridge.ready",
+            catalog_total=len(catalog),
+            tools_loaded=len(self._tools),
+            v2_only=[n for n, _ in catalog if n not in _SKILL_IMPLS],
+        )
+
+    # public surface
+
+    def loaded_tools(self) -> list[str]:
+        return [t["function"]["name"] for t in self._tools]
 
     def send(self, text: str) -> str | None:
-        """Return the model's reply, or None to defer to the router's LLM path.
-
-        Returns None when:
-          - the model didn't call any tool AND produced no useful text
-          - any HTTP or parse error occurs
-        """
+        """Return the model's reply, or None to defer to the router's LLM path."""
+        if not self._tools:
+            log.info("bridge.no_tools")
+            return None
         try:
             first = httpx.post(
                 f"{self._url}/api/chat",
                 json={
                     "model": self._model,
                     "messages": [{"role": "user", "content": text}],
-                    "tools": _TOOLS,
+                    "tools": self._tools,
                     "stream": False,
                 },
                 timeout=self._timeout,
@@ -267,8 +345,13 @@ class OpenClawBridge:
             except json.JSONDecodeError:
                 args = {}
 
+        handler = self._dispatch.get(name)
+        if handler is None:
+            log.warning("bridge.unknown_tool", name=name)
+            return None
+
         log.info("bridge.tool_call", tool=name, args=args)
-        tool_result = _dispatch(name, args)
+        tool_result = handler(args)
 
         try:
             second = httpx.post(
