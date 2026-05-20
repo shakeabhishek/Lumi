@@ -80,6 +80,13 @@ class UserSettings(BaseModel):
     # Send-to-Lumi hotkey (empty = platform default: cmd+shift+l on macOS, ctrl+shift+l elsewhere)
     hotkey_combo: str = ""
 
+    # Cloud LLM fallback — V1 stores these but does NOT route to them.
+    # V2 will read this config and decide per turn (local first, cloud on
+    # low-confidence / explicit escalation / long context).
+    cloud_llm_provider: str = ""        # "", "openai", "anthropic", "gemini"
+    cloud_llm_api_key: str = ""         # stored locally in user_settings.json
+    cloud_llm_model: str = ""           # provider-specific model id; empty = provider default
+
     # System prompt override (empty = use defaults from prompts.py)
     system_prompt_override: str = ""
 

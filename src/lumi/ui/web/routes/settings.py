@@ -249,3 +249,34 @@ async def data_reset(request: Request) -> str:
         except OSError:
             continue
     return "/onboarding/1"
+
+
+# ---------------------------------------------------------------------------
+# Cloud LLM fallback config (V2 routing reads these)
+# ---------------------------------------------------------------------------
+
+_VALID_PROVIDERS = ("", "openai", "anthropic", "gemini")
+
+
+@router.get("/cloud", response_class=HTMLResponse)
+async def cloud_get(request: Request) -> HTMLResponse:
+    return _render(request, "settings/cloud.html")
+
+
+@router.post("/cloud", response_class=RedirectResponse, status_code=303)
+async def cloud_post(
+    request: Request,
+    cloud_llm_provider: Annotated[str, Form()] = "",
+    cloud_llm_api_key: Annotated[str, Form()] = "",
+    cloud_llm_model: Annotated[str, Form()] = "",
+) -> str:
+    data_dir = request.app.state.data_dir
+    s = load_settings(data_dir)
+    provider = cloud_llm_provider.strip().lower()
+    if provider not in _VALID_PROVIDERS:
+        provider = ""
+    s.cloud_llm_provider = provider
+    s.cloud_llm_api_key = cloud_llm_api_key.strip()
+    s.cloud_llm_model = cloud_llm_model.strip()
+    save_settings(data_dir, s)
+    return "/settings/cloud"

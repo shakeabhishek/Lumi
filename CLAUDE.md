@@ -667,7 +667,7 @@ Features deferred from V1 to keep V1 shippable:
 | Rotary encoder + knob | Volume + mute dial with NeoPixel ring |
 | Cloud backup integration | Sync to user's Drive / Dropbox / iCloud |
 | ElevenLabs premium voice option | Higher-quality TTS as paid upgrade |
-| Cloud LLM fallback (Claude API) | For complex queries beyond local LLM capability |
+| Cloud LLM fallback with intelligent routing | Lumi tries the local LLM first; if confidence/quality is low, escalates the same turn to a configured cloud provider. Admin console (V1) already collects provider (Anthropic / OpenAI / Gemini), API key, and model name; V2 wires the routing. Architecture: a new `RoutedBackend` wraps `OllamaBackend` (or `HailoBackend`) plus the cloud client and decides per turn. Decision signal candidates: local model self-evaluation, length/topicality heuristics, explicit user marker, or a small classifier. Each cloud call logged in audit log as `source=cloud:{provider}`. Only the current turn + recent history + system prompt are sent — never the memory store, audit log, clipboard, or voice embedding. |
 | **Expanded OpenClaw skill set** | Write actions (email send, calendar create, music control), multi-step chained skills, Home Assistant control — needs cloud LLM |
 | **MCP protocol integrations** | Connect directly to MCP servers (Google Drive, Slack, etc.) |
 | Premium enclosure | Frosted translucent shell, underside glow, matte finish |
