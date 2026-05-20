@@ -12,7 +12,17 @@ Currently in **pre-hardware design phase**. All major architecture decisions are
 
 **Phase 1 complete.** Voice loop (19/19 tests passing) and OpenClaw viability gate both cleared. Moving into Phase 2.
 
-V1 now includes **OpenClaw integration** for the skills/agent layer. OpenClaw is the most-starred open-source AI agent framework as of 2026 and provides a mature skills ecosystem. Lumi uses OpenClaw as a service for extensible integrations while keeping its core architecture (voice + face + gesture + local LLM) independent.
+V1 uses an **OpenClaw-as-catalog hybrid**: skill manifests live in
+`~/.openclaw/workspace/skills/<name>/SKILL.md` (the OpenClaw format), but
+the runtime executes them via Python implementations driven by direct
+Ollama tool calling. The reason for this honest split is that OpenClaw's
+HTTP gateway surfaces skills to the LLM as system-prompt text in its own
+text-invocation format, which a 1.5B model can't drive reliably (94% on
+OpenAI-style tool calling vs ~0% on OpenClaw's format). The full OpenClaw
+runtime lands in V2 alongside the cloud LLM (or qwen3:1.7b on Hailo via
+the adapter — see Phase 5). For V1, OpenClaw acts as the catalog
+source-of-truth: drop a new manifest in, register a Python impl in
+`_SKILL_IMPLS`, and the skill works.
 
 ---
 
@@ -426,14 +436,45 @@ Build the host-side helper that runs on the user's computer.
 
 Migrate from laptop mocks to real Pi 5 + AI HAT+ 2.
 
+**Reference deployment**: the proven Pi 5 + Hailo + OpenClaw stack lives at
+[tishyk/hailo-ollama-openclaw-adapter](https://github.com/tishyk/hailo-ollama-openclaw-adapter)
+— pinned to **OpenClaw 2026.04.20**, uses a FastAPI translator on port 11435
+between OpenClaw and Hailo-Ollama, runs `qwen3:1.7b` on Hailo-10H. Their setup
+confirms three things we need to know:
+
+1. **OpenClaw versions matter.** Pin to `2026.04.20`; later releases broke
+   concurrency handling and the auth-profile schema. We hit this exact bug
+   on `2026.5.7` — the HTTP /v1/chat/completions endpoint surfaces skills
+   via system-prompt text rather than tool_calls, which our 1.5B model can't
+   drive. Pinning to 2026.04.20 OR using OpenClaw's dashboard/session API
+   (not the bare HTTP shim) is the right path.
+2. **Hailo isn't fully Ollama-compatible.** It has its own slightly-different
+   /api/chat semantics. The adapter normalizes (strict JSON, no newlines in
+   content, no system-role on continuation). Lumi must use this adapter on
+   the Pi — `HailoBackend` should HTTP-call the adapter on 11435, not Hailo
+   on 8000 directly.
+3. **Skill orchestration happens in OpenClaw's session/dashboard layer**, not
+   `/v1/chat/completions`. To make community OpenClaw skills work, Lumi needs
+   to drive OpenClaw via its session API (or run a headless dashboard agent
+   that Lumi proxies to). The thin HTTP shim we tried in V1 was the wrong
+   integration surface.
+
 **Tasks**
 - Flash base Pi OS Lite 64-bit, set up Pi dev environment
 - Install Node.js 20+ on Pi (for OpenClaw)
+- **Install OpenClaw 2026.04.20** specifically (not latest):
+  `pnpm add -g openclaw@2026.04.20`
+- **Install hailo-ollama-adapter** in a Python venv:
+  `pip3 install git+https://github.com/tishyk/hailo-ollama-openclaw-adapter.git@2026.04.20`
 - Configure ALSA with ReSpeaker 2-Mics HAT
 - Install Hailo runtime, load LLM models in `.hef` format
-- **Migrate OpenClaw LLM provider** from Ollama to Hailo runtime
-  - Same provider interface, different backend
-  - Validate tool-calling reliability still ≥80% on Hailo
+- **HailoBackend points at the adapter** (`http://127.0.0.1:11435`), not Hailo
+  directly. The adapter speaks the Ollama wire protocol so HailoBackend can be
+  almost identical to OllamaBackend (only host changes).
+- **Migrate skill orchestration** from our V1 hybrid (Python tools registry
+  + Ollama tool_calls) to OpenClaw's session API — community skills become
+  available without per-skill Python ports.
+- Validate tool-calling reliability still ≥80% on Hailo via the new path
 - Configure USB gadget composite mode in `/boot/config.txt`
 - Configure SPI display driver (Waveshare 3.5")
 - Configure Camera Module 3 Wide via libcamera
