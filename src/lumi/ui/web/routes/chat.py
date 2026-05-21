@@ -26,7 +26,6 @@ from ....llm import make_llm_backend
 from ....runtime.conversation import ConversationManager
 from ....runtime.memory import MemoryStore
 from ....skills.audit_log import AuditLog
-from ....skills.openclaw_bridge import OpenClawBridge
 from ....skills.router import SkillRouter
 from ..persistence import load_settings
 
@@ -64,23 +63,12 @@ def _get_or_build_session(request: Request) -> ChatSession:
     llm = make_llm_backend(cfg)
     memory = MemoryStore(data_dir) if user.memory_enabled and MemoryStore.is_available() else None
     conv = ConversationManager(llm, mode=cfg.mode, memory=memory)
-    runtime_mode = "openclaw_cloud" if (
-        user.openclaw_enabled and user.cloud_llm_api_key_set and user.cloud_llm_provider
-    ) else "ollama"
-    # PII pseudonymizer for cloud mode. Seeded with the owner's name from
-    # onboarding so it gets replaced before any cloud call. Re-instantiated
-    # per session so the mapping doesn't leak across users.
-    pseudo = None
-    if runtime_mode == "openclaw_cloud":
-        from ....runtime.privacy import Pseudonymizer  # noqa: PLC0415
-        from ....skills.openclaw_operator import ensure_config_perms  # noqa: PLC0415
+    # Shared session helper — same wiring as the voice loop in main.py, so
+    # cloud-mode + PII masking can't drift between the two surfaces.
+    from ....runtime.session import build_cloud_bridge  # noqa: PLC0415
 
-        ensure_config_perms()           # lock down legacy world-readable configs
-        extra = [user.owner_name] if user.owner_name else []
-        pseudo = Pseudonymizer(extra_names=extra)
-    bridge = (
-        OpenClawBridge(runtime_mode=runtime_mode, pseudonymizer=pseudo)
-        if user.openclaw_enabled else None
+    bridge, pseudo, _mode = build_cloud_bridge(
+        user, openclaw_enabled=user.openclaw_enabled,
     )
     audit = AuditLog(data_dir)
     sk_router = SkillRouter(

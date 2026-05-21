@@ -31,7 +31,7 @@ from .runtime.conversation import ConversationManager
 from .runtime.memory import MemoryStore
 from .runtime.perf import PerfLog, PipelineTimer
 from .runtime.state_machine import LumiState, StateMachine
-from .skills import AuditLog, OpenClawBridge, SkillRouter
+from .skills import AuditLog, SkillRouter
 from .ui.face.engine import FaceEngine
 
 app = typer.Typer(name="lumi", add_completion=False, pretty_exceptions_enable=False)
@@ -257,10 +257,15 @@ def run(
     tts = make_tts(cfg.piper_voice, cfg.models_dir / "piper")
     wake = _make_wake_source(cfg)
 
-    bridge: OpenClawBridge | None = None
-    if cfg.openclaw_enabled:
-        bridge = OpenClawBridge(cfg.openclaw_url, cfg.openclaw_token)
     audit_log = AuditLog(cfg.data_dir)
+
+    from .runtime.session import build_cloud_bridge  # noqa: PLC0415
+    from .ui.web.persistence import load_settings as _load_user  # noqa: PLC0415
+
+    _user = _load_user(cfg.data_dir)
+    bridge, pseudo, _mode = build_cloud_bridge(
+        _user, openclaw_enabled=cfg.openclaw_enabled,
+    )
     router = SkillRouter(
         conversation=conversation,
         tts=tts,
@@ -268,14 +273,12 @@ def run(
         audit_log=audit_log,
         clipboard_enabled=cfg.clipboard_enabled,
         data_dir=cfg.data_dir,
+        pseudonymizer=pseudo,
     )
     perf_log = PerfLog(cfg.data_dir)
 
     display = make_display(cfg.face_width, cfg.face_height)
     sm = StateMachine()
-    from .ui.web.persistence import load_settings as _load_user  # noqa: PLC0415
-
-    _user = _load_user(cfg.data_dir)
     face = FaceEngine(
         display=display,
         theme=cfg.face_theme,
