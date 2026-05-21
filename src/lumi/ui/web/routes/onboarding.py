@@ -131,13 +131,22 @@ async def step3(
 # ---------------------------------------------------------------------------
 
 
+def _enroll_partial(request: Request, **ctx: object) -> HTMLResponse:
+    """Render the small enrollment-status fragment that HTMX swaps into
+    #enroll-status. Centralises all the markup the inline f-strings used
+    to hold, and keeps exception text off the page (audit #14)."""
+    return request.app.state.templates.TemplateResponse(
+        request, "onboarding/_enroll_partial.html", ctx,
+    )
+
+
 @router.post("/4/record", response_class=HTMLResponse)
 async def record_clip(request: Request) -> HTMLResponse:
     """Record one 5-second clip from the server's microphone."""
     data_dir = request.app.state.data_dir
     n = _clip_count(data_dir)
     if n >= 3:
-        return HTMLResponse('<p class="msg ok">Already have 3 clips — click Complete.</p>')
+        return _enroll_partial(request, state="already_done")
     try:
         from ....hardware.audio_io import SoundDeviceInput  # noqa: PLC0415
         from ....config import get_settings  # noqa: PLC0415
@@ -147,20 +156,17 @@ async def record_clip(request: Request) -> HTMLResponse:
         clip = mic.record(5.0)
         np.save(_clips_dir(data_dir) / f"clip_{n}.npy", clip)
         n += 1
-    except Exception as exc:
-        return HTMLResponse(f'<p class="msg err">Recording failed: {exc}</p>')
+    except Exception:
+        # Log the real exception server-side via FastAPI's logger but never
+        # leak it to the UI — it can carry file paths and audio-driver
+        # internals that aren't useful to the user.
+        import logging  # noqa: PLC0415
+        logging.getLogger(__name__).exception("onboarding.record_failed")
+        return _enroll_partial(request, state="error", error_kind="recording")
 
     if n < 3:
-        return HTMLResponse(
-            f'<p class="msg ok">Clip {n}/3 recorded.</p>'
-            f'<button class="btn" hx-post="/onboarding/4/record" hx-target="#enroll-status">'
-            f"Record clip {n + 1}/3</button>"
-        )
-    return HTMLResponse(
-        '<p class="msg ok">All 3 clips recorded.</p>'
-        '<button class="btn primary" hx-post="/onboarding/4/enroll" hx-target="#enroll-status">'
-        "Complete enrollment</button>"
-    )
+        return _enroll_partial(request, state="recorded", n_recorded=n)
+    return _enroll_partial(request, state="all_recorded")
 
 
 @router.post("/4/enroll", response_class=HTMLResponse)
@@ -169,7 +175,7 @@ async def enroll(request: Request) -> HTMLResponse:
     clips_dir = _clips_dir(data_dir)
     clip_files = sorted(clips_dir.glob("clip_*.npy"))
     if len(clip_files) < 3:
-        return HTMLResponse('<p class="msg err">Need 3 clips — record them first.</p>')
+        return _enroll_partial(request, state="error", error_kind="missing_clips")
     try:
         from ....audio.voice_id import VoiceID  # noqa: PLC0415
         from ....config import get_settings  # noqa: PLC0415
@@ -185,12 +191,11 @@ async def enroll(request: Request) -> HTMLResponse:
         s.voice_id_enabled = True
         s.onboarding_step = 5
         save_settings(data_dir, s)
-        return HTMLResponse(
-            '<p class="msg ok">Enrolled! '
-            '<a href="/onboarding/5" class="btn primary">Continue →</a></p>'
-        )
-    except Exception as exc:
-        return HTMLResponse(f'<p class="msg err">Enrollment failed: {exc}</p>')
+        return _enroll_partial(request, state="enrolled")
+    except Exception:
+        import logging  # noqa: PLC0415
+        logging.getLogger(__name__).exception("onboarding.enroll_failed")
+        return _enroll_partial(request, state="error", error_kind="enrollment")
 
 
 @router.post("/4/skip", response_class=RedirectResponse, status_code=303)

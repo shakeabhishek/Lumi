@@ -1,0 +1,50 @@
+{# Renders one of four states for the voice-enrollment HTMX flow at /onboarding/4.
+
+   Used by /onboarding/4/record and /onboarding/4/enroll. Replaces the
+   hand-rolled HTMLResponse f-strings the routes used to return.
+
+   Required context:
+     state: one of "recorded" | "all_recorded" | "enrolled" | "error"
+     n_recorded:   (state == recorded)    int 1..3
+     error_kind:   (state == error)       short word: "recording" | "enrollment" | "missing_clips"
+#}
+
+{% if state == "recorded" %}
+  <p class="msg ok">Clip {{ n_recorded }}/3 recorded.</p>
+  <button class="btn" hx-post="/onboarding/4/record" hx-target="#enroll-status">
+    Record clip {{ n_recorded + 1 }}/3
+  </button>
+
+{% elif state == "all_recorded" %}
+  <p class="msg ok">All 3 clips recorded.</p>
+  <button class="btn primary" hx-post="/onboarding/4/enroll" hx-target="#enroll-status">
+    Complete enrollment
+  </button>
+
+{% elif state == "already_done" %}
+  <p class="msg ok">Already have 3 clips — click Complete.</p>
+  <button class="btn primary" hx-post="/onboarding/4/enroll" hx-target="#enroll-status">
+    Complete enrollment
+  </button>
+
+{% elif state == "enrolled" %}
+  <p class="msg ok">
+    Enrolled!
+    <a href="/onboarding/5" class="btn primary">Continue →</a>
+  </p>
+
+{% elif state == "error" %}
+  {% if error_kind == "recording" %}
+    <p class="msg err">Recording failed — check your microphone and try again.</p>
+    <button class="btn" hx-post="/onboarding/4/record" hx-target="#enroll-status">
+      Try again
+    </button>
+  {% elif error_kind == "enrollment" %}
+    <p class="msg err">Enrollment failed — the clips may have been silent. Re-record below.</p>
+    <button class="btn" hx-post="/onboarding/4/record" hx-target="#enroll-status">
+      Record again
+    </button>
+  {% elif error_kind == "missing_clips" %}
+    <p class="msg err">Need 3 clips — record them first.</p>
+  {% endif %}
+{% endif %}
