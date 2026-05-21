@@ -24,6 +24,7 @@ from ....config import get_settings
 from ....host_helper.send_to_lumi import consume_pending
 from ....llm import make_llm_backend
 from ....runtime.conversation import ConversationManager
+from ....runtime.errors import safe_error_message
 from ....runtime.memory import MemoryStore
 from ....skills.audit_log import AuditLog
 from ....skills.router import SkillRouter
@@ -139,7 +140,7 @@ async def chat_send(
         try:
             reply = session.router.handle(msg)
         except Exception as exc:
-            reply = f"(router error: {exc})"
+            reply = safe_error_message(exc, where="chat.send")
         elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
 
         last = AuditLog(data_dir).get_recent(n=1)

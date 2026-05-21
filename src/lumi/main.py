@@ -28,6 +28,7 @@ from .host_helper.send_to_lumi import consume_pending, format_hint
 from .llm import make_llm_backend
 from .log import configure_logging, get_logger
 from .runtime.conversation import ConversationManager
+from .runtime.errors import safe_error_message
 from .runtime.memory import MemoryStore
 from .runtime.perf import PerfLog, PipelineTimer
 from .runtime.state_machine import LumiState, StateMachine
@@ -196,10 +197,8 @@ def _voice_loop(
                 reply_text = "".join(collected)
                 typer.echo("")  # newline after streamed output
         except Exception as exc:
-            log.error("router.error", error=str(exc))
-            reply_text = "Sorry, something went wrong. Please try again."
+            reply_text = safe_error_message(exc, where="voice.router")
             typer.echo(f"Lumi: {reply_text}")
-            typer.echo(f"[error: {exc}]", err=True)
             sm.transition(LumiState.SPEAK)
             face.show()
             try:
