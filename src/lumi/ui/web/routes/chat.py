@@ -73,6 +73,9 @@ def _get_or_build_session(request: Request) -> ChatSession:
     pseudo = None
     if runtime_mode == "openclaw_cloud":
         from ....runtime.privacy import Pseudonymizer  # noqa: PLC0415
+        from ....skills.openclaw_operator import ensure_config_perms  # noqa: PLC0415
+
+        ensure_config_perms()           # lock down legacy world-readable configs
         extra = [user.owner_name] if user.owner_name else []
         pseudo = Pseudonymizer(extra_names=extra)
     bridge = (

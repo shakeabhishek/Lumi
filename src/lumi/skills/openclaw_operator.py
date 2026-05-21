@@ -13,13 +13,54 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
+import tempfile
 from pathlib import Path
 
 from ..log import get_logger
 from ..runtime import secrets
 
 log = get_logger(__name__)
+
+
+def _write_config_securely(cfg_path: Path, cfg: dict) -> None:
+    """Atomic write + 0600 perms. The file holds a plaintext cloud API key
+    (OpenClaw doesn't support keychain refs yet), so it must not be world
+    or group readable, and must not appear half-written on crash."""
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(
+        prefix=cfg_path.name + ".", suffix=".tmp", dir=str(cfg_path.parent)
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+        os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)  # 0600 before publishing
+        os.replace(tmp, cfg_path)
+    except Exception:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def ensure_config_perms() -> None:
+    """One-shot remediation: tighten perms on ~/.openclaw/openclaw.json if it
+    holds any of our cloud providers (i.e. contains a plaintext API key) and
+    isn't already 0600. Safe to call repeatedly; no-op if file missing or
+    already locked down. Called from app startup paths."""
+    cfg_path = _openclaw_config_path()
+    if not cfg_path.exists():
+        return
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        providers = cfg.get("models", {}).get("providers", {}) or {}
+        if not any(p in _PROVIDERS for p in providers):
+            return                  # nothing sensitive in the file
+        mode = cfg_path.stat().st_mode & 0o777
+        if mode != (stat.S_IRUSR | stat.S_IWUSR):
+            os.chmod(cfg_path, stat.S_IRUSR | stat.S_IWUSR)
+            log.info("openclaw.config_perms_tightened", old_mode=oct(mode))
+    except (OSError, json.JSONDecodeError) as exc:
+        log.warning("openclaw.config_perms_check_failed", error=str(exc))
 
 
 # Lumi's provider name → OpenClaw provider config shape.
@@ -94,7 +135,7 @@ def sync_to_openclaw(provider: str, model: str = "") -> tuple[bool, str]:
     cfg.setdefault("agents", {}).setdefault("defaults", {})["model"] = {
         "primary": f"{provider}/{model}",
     }
-    cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    _write_config_securely(cfg_path, cfg)
     log.info("openclaw.operator_synced", provider=provider, model=model)
 
     restarted = _restart_gateway()
@@ -105,13 +146,18 @@ def sync_to_openclaw(provider: str, model: str = "") -> tuple[bool, str]:
 
 
 def _revert_to_ollama(cfg_path: Path) -> tuple[bool, str]:
-    """User cleared the cloud key → flip OpenClaw back to local Ollama."""
+    """User cleared the cloud key → flip OpenClaw back to local Ollama AND
+    purge every cloud provider entry so the API key doesn't survive on disk."""
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    providers = cfg.get("models", {}).get("providers", {})
+    purged = [p for p in list(providers) if p in _PROVIDERS]
+    for p in purged:
+        providers.pop(p, None)
     cfg.setdefault("agents", {}).setdefault("defaults", {})["model"] = {
         "primary": "ollama/qwen2.5:7b",
     }
-    cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
-    log.info("openclaw.operator_reverted_to_local")
+    _write_config_securely(cfg_path, cfg)
+    log.info("openclaw.operator_reverted_to_local", purged=purged)
     restarted = _restart_gateway()
     return True, (
         "OpenClaw reverted to local qwen2.5:7b"
