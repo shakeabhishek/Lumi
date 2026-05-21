@@ -15,6 +15,8 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .csrf import CSRFMiddleware, csrf_token_for
+
 _HERE = Path(__file__).parent
 TEMPLATES_DIR = _HERE / "templates"
 STATIC_DIR = _HERE / "static"
@@ -34,8 +36,14 @@ def create_app(data_dir: Path) -> FastAPI:
 
     import sys  # noqa: PLC0415
 
+    app.add_middleware(CSRFMiddleware)
+
     app.state.data_dir = data_dir
-    app.state.templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+    templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+    # Expose csrf_token() to every template so forms/HTMX calls can include
+    # the token without each route having to thread it manually.
+    templates.env.globals["csrf_token"] = csrf_token_for
+    app.state.templates = templates
     app.state.platform = sys.platform
 
     STATIC_DIR.mkdir(parents=True, exist_ok=True)

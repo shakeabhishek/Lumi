@@ -6,6 +6,27 @@
   <title>{% block title %}Lumi{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
   <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+  {# CSRF: tell HTMX to include the token on every request, expose the
+     token as a meta tag for inline JS, and inject a hidden csrf_token
+     input into every form right before submission so we don't have to
+     thread the token through every template by hand. #}
+  <meta name="csrf-token" content="{{ csrf_token(request) }}">
+  <script>
+    const __LUMI_CSRF__ = '{{ csrf_token(request) }}';
+    document.addEventListener('htmx:configRequest', function(evt) {
+      evt.detail.headers['X-CSRF-Token'] = __LUMI_CSRF__;
+    });
+    document.addEventListener('submit', function(evt) {
+      const form = evt.target;
+      if (!(form instanceof HTMLFormElement)) return;
+      if (form.querySelector('input[name="csrf_token"]')) return;
+      const inp = document.createElement('input');
+      inp.type = 'hidden';
+      inp.name = 'csrf_token';
+      inp.value = __LUMI_CSRF__;
+      form.appendChild(inp);
+    }, true);
+  </script>
 </head>
 <body>
   <nav>
