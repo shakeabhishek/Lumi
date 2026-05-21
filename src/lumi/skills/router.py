@@ -78,7 +78,8 @@ class SkillRouter:
             if response:
                 log.info("router.openclaw")
                 if self._audit:
-                    self._audit.log("openclaw", "openclaw", transcript, response)
+                    src = "openclaw" if self._bridge.runtime_mode == "openclaw_cloud" else "tool"
+                    self._audit.log(src, src, transcript, response)
                 return response
             log.info("router.openclaw_miss")
 
@@ -109,7 +110,8 @@ class SkillRouter:
             if response:
                 log.info("router.openclaw")
                 if self._audit:
-                    self._audit.log("openclaw", "openclaw", transcript, response)
+                    src = "openclaw" if self._bridge.runtime_mode == "openclaw_cloud" else "tool"
+                    self._audit.log(src, src, transcript, response)
                 yield response
                 return
             log.info("router.openclaw_miss")

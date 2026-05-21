@@ -54,6 +54,20 @@
 
     <div class="skill-row" style="align-items:flex-start;flex-wrap:wrap;gap:.8rem">
       <div style="flex:1;min-width:240px">
+        <strong>Weather location</strong>
+        <div style="font-size:.82rem;color:var(--muted)">
+          City for the weather chip on Lumi's display. Only the city name leaves
+          the device. Leave blank to hide weather entirely.
+        </div>
+      </div>
+      <input name="weather_location" type="text"
+             value="{{ settings.weather_location }}"
+             placeholder="e.g. San Francisco"
+             style="width:240px">
+    </div>
+
+    <div class="skill-row" style="align-items:flex-start;flex-wrap:wrap;gap:.8rem">
+      <div style="flex:1;min-width:240px">
         <strong>Send-to-Lumi shortcut</strong>
         <div style="font-size:.82rem;color:var(--muted)">
           Press from any app to grab your selected text and queue it as context.

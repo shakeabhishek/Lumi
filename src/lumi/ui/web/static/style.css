@@ -308,6 +308,7 @@ input[type=color] { padding: 4px; height: 44px; cursor: pointer; }
   letter-spacing: 0.02em;
 }
 .badge.native   { background: #DCFCE7; color: #15803d; }
+.badge.tool     { background: #FFF7DD; color: #92580f; }
 .badge.openclaw { background: var(--amber-light); color: var(--amber-dark); }
 .badge.llm      { background: #EDE9FE; color: #6D28D9; }
 

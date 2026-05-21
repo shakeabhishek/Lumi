@@ -18,7 +18,9 @@ from ..log import get_logger
 
 log = get_logger(__name__)
 
-Source = Literal["native", "openclaw", "llm"]
+Source = Literal["native", "tool", "openclaw", "llm"]
+# "tool"     = bridge in ollama mode (local Python tool impls)
+# "openclaw" = bridge in openclaw_cloud mode (real OpenClaw agent loop)
 
 
 class AuditLog:

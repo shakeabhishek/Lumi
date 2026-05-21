@@ -252,6 +252,7 @@ async def step7(
     camera: Annotated[str, Form()] = "",
     wifi_skills: Annotated[str, Form()] = "on",
     hotkey_combo: Annotated[str, Form()] = "",
+    weather_location: Annotated[str, Form()] = "",
 ) -> str:
     data_dir = request.app.state.data_dir
     s = load_settings(data_dir)
@@ -260,6 +261,7 @@ async def step7(
     s.camera_enabled = camera == "on"
     s.wifi_skills_enabled = wifi_skills == "on"
     s.hotkey_combo = hotkey_combo.strip()
+    s.weather_location = weather_location.strip()
     s.onboarding_step = 8
     save_settings(data_dir, s)
     return "/onboarding/8"

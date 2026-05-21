@@ -273,11 +273,15 @@ def run(
 
     display = make_display(cfg.face_width, cfg.face_height)
     sm = StateMachine()
+    from .ui.web.persistence import load_settings as _load_user  # noqa: PLC0415
+
+    _user = _load_user(cfg.data_dir)
     face = FaceEngine(
         display=display,
         theme=cfg.face_theme,
         color=cfg.face_color,
         models_dir=cfg.models_dir,
+        weather_location=_user.weather_location or "San Francisco",
     )
     sm.on_state_change(face.set_state)
 

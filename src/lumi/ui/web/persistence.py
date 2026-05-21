@@ -80,6 +80,10 @@ class UserSettings(BaseModel):
     # Send-to-Lumi hotkey (empty = platform default: cmd+shift+l on macOS, ctrl+shift+l elsewhere)
     hotkey_combo: str = ""
 
+    # City Lumi uses for the weather chip on the device display.
+    # Empty = no weather shown (just the clock). Asked in onboarding step 7.
+    weather_location: str = ""
+
     # Cloud LLM fallback — V1 stores config; V2 wires the routing.
     # The API KEY ITSELF is NOT in this file — it lives in the OS keychain
     # via lumi.runtime.secrets. user_settings.json holds only the

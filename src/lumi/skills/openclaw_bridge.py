@@ -321,6 +321,11 @@ class OpenClawBridge:
     def loaded_tools(self) -> list[str]:
         return [t["function"]["name"] for t in self._tools]
 
+    @property
+    def runtime_mode(self) -> str:
+        """'ollama' (local Python tool execution) or 'openclaw_cloud' (real OpenClaw agent loop)."""
+        return self._mode
+
     def send(self, text: str) -> str | None:
         """Return the model's reply, or None to defer to the router's LLM path."""
         if self._mode == "openclaw_cloud":

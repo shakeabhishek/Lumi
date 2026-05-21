@@ -49,6 +49,18 @@
       </div>
 
       <div class="ob-card" style="margin-top:18px;">
+        <div class="name" style="font-size:15px;font-weight:500;">Where are you?</div>
+        <div class="desc" style="font-size:13px;color:var(--iris-mute);margin-top:2px;">
+          City for the weather shown on Lumi's display. Only a city name leaves the device,
+          never coordinates. Leave blank to hide the weather entirely.
+        </div>
+        <input name="weather_location" type="text"
+               class="ob-input" style="max-width:260px;margin-top:10px;"
+               placeholder="e.g. San Francisco, Tokyo, Berlin"
+               value="{{ settings.weather_location }}">
+      </div>
+
+      <div class="ob-card" style="margin-top:18px;">
         <div class="name" style="font-size:15px;font-weight:500;">Send-to-Lumi shortcut</div>
         <div class="desc" style="font-size:13px;color:var(--iris-mute);margin-top:2px;">
           Press this combination anywhere on your desktop and Lumi grabs your selected text for the next conversation. Requires clipboard permission above.
