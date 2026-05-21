@@ -1,36 +1,49 @@
 """Ambient idle scenes — what Lumi shows when she's not actively talking.
 
 The brief: tamagotchi-ish, soothing, alive without being busy. Rather than
-just floating the face, when IDLE Lumi can play an ambient scene.
+just floating the face, when IDLE Lumi can play an ambient scene. The
+ScreenCompositor swaps a scene in for the face area when state == IDLE.
+State transitions (LISTEN/THINK/SPEAK) bring the face back instantly.
 
-Each scene implements:
+Scene catalog
+─────────────
 
-    class Scene:
-        def render(self, surface: pygame.Surface, tick: int, w: int, h: int) -> None: ...
+Procedural (zero assets, ship today):
+  - RainScene   : rainfall on a deep blue night gradient
+  - SnowScene   : drifting snow on slate
 
-The ScreenCompositor swaps a scene in for the face area when state == IDLE
-and a scene is configured. State transitions (LISTEN/THINK/SPEAK) bring
-the face back.
+Sprite-based (drop in PNG frames at src/lumi/ui/face/assets/sprites/<name>/):
+  - SpriteLoopScene : generic frame loop. Add a directory with frame_001.png,
+                      frame_002.png, … and a small `manifest.json`:
+                      {"fps": 6, "scale": 4, "anchor": "center", "background": "#0a0e1e"}
+                      then register it in SCENES below.
 
-Scenes available now:
-  - RainScene  : ambient rainfall on a deep night palette. Procedural,
-                 zero assets, very soothing. Default for V1.
+Free/CC0 sprite sources worth pulling from:
+  - kenney.nl/assets (CC0) — "1-Bit Pack", "Toon Characters", "Pixel Platformer"
+  - opengameart.org (CC0/CC-BY) — search "sleeping cat", "idle creature"
+  - itch.io (filter free) — Pixel Frog, Penzilla, MrBubbleWand are reliable
+  - The shut-down Glitch game's art dump (public domain) — softer storybook
+    style, less pixel-y
 
-Sketched out (not yet implemented — easy to add):
-  - AuroraScene  : color washes drifting across the screen
-  - SnowScene    : winter variant of rain
-  - CatScene     : sprite-based "sleeping cat that occasionally twitches"
-  - MarioScene   : sprite-based pixel character walking left↔right
-  - ClockOnlyScene : just a big serif clock, no face
+To wire a downloaded sprite pack:
+  1. Drop frames in src/lumi/ui/face/assets/sprites/sleeping-cat/
+     (frame_001.png, frame_002.png, … all same size)
+  2. Add a manifest.json in that directory
+  3. Add to SCENES: "cat": lambda: SpriteLoopScene("sleeping-cat")
+  4. Add "cat" to FACE_THEMES' idle_scene dropdown options in
+     src/lumi/ui/web/templates/settings/face.html
 
-Add a new scene by subclassing nothing (it's just a duck-typed protocol)
-and registering it in `SCENES` below.
+Add a new procedural scene by subclassing nothing (it's just a duck-typed
+protocol) and registering it in SCENES below.
 """
 
 from __future__ import annotations
 
+import json
+import math
 import random
-from typing import Protocol
+from pathlib import Path
+from typing import Any, Protocol
 
 
 class IdleScene(Protocol):
@@ -161,13 +174,187 @@ class SnowScene:
             )
 
 
+# ── Generic sprite-loop scene (drop PNG frames in, no code) ────────────────
+
+
+_SPRITES_DIR = Path(__file__).parent / "assets" / "sprites"
+
+
+class SpriteLoopScene:
+    """Loops PNG frames from <repo>/src/lumi/ui/face/assets/sprites/<name>/.
+
+    Directory layout:
+        sleeping-cat/
+            manifest.json    (optional — fps/scale/background/anchor)
+            frame_001.png
+            frame_002.png
+            …
+
+    manifest.json (all keys optional):
+        {
+            "fps": 6,
+            "scale": 4,
+            "anchor": "center" | "bottom" | "top",
+            "background": "#0a0e1e"
+        }
+    """
+
+    def __init__(self, sprite_dir_name: str) -> None:
+        self._dir = _SPRITES_DIR / sprite_dir_name
+        self._frames: list[object] = []     # pygame.Surface
+        self._loaded = False
+        # Manifest defaults
+        self._fps = 6
+        self._scale = 4
+        self._anchor = "center"
+        self._bg = (10, 14, 30)
+
+    def _ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+        self._loaded = True
+        if not self._dir.is_dir():
+            return
+        # Load manifest
+        mf = self._dir / "manifest.json"
+        if mf.exists():
+            try:
+                m: dict[str, Any] = json.loads(mf.read_text())
+                self._fps = int(m.get("fps", self._fps))
+                self._scale = int(m.get("scale", self._scale))
+                self._anchor = m.get("anchor", self._anchor)
+                if isinstance(m.get("background"), str) and m["background"].startswith("#"):
+                    h = m["background"].lstrip("#")
+                    self._bg = (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+            except (json.JSONDecodeError, OSError, ValueError):
+                pass
+
+        import pygame  # noqa: PLC0415
+
+        frame_paths = sorted(p for p in self._dir.iterdir() if p.suffix.lower() == ".png")
+        for p in frame_paths:
+            try:
+                img = pygame.image.load(str(p))
+                if self._scale > 1:
+                    img = pygame.transform.scale(
+                        img, (img.get_width() * self._scale, img.get_height() * self._scale),
+                    )
+                self._frames.append(img)
+            except Exception:
+                continue
+
+    def render(self, surface: object, tick: int, w: int, h: int) -> None:
+        import pygame  # noqa: PLC0415
+
+        self._ensure_loaded()
+        surface.fill(self._bg)
+        if not self._frames:
+            # No sprites available — show a soft placeholder so it's obvious why
+            font = pygame.font.Font(None, 14)
+            msg = font.render(
+                f"sprite folder is empty: {self._dir.name}", True, (160, 160, 170),
+            )
+            surface.blit(msg, ((w - msg.get_width()) // 2, h // 2))
+            return
+        # Advance one frame every (30 / fps) ticks (render loop is ~30Hz)
+        ticks_per_frame = max(1, 30 // self._fps)
+        idx = (tick // ticks_per_frame) % len(self._frames)
+        sprite = self._frames[idx]
+        x = (w - sprite.get_width()) // 2
+        if self._anchor == "bottom":
+            y = h - sprite.get_height() - 20
+        elif self._anchor == "top":
+            y = 20
+        else:
+            y = (h - sprite.get_height()) // 2
+        surface.blit(sprite, (x, y))
+
+
+# ── Procedural placeholder: "Sleeping cat" until real sprites land ─────────
+
+
+class SleepingCatPlaceholderScene:
+    """Tiny procedurally-drawn cat curled up on a windowsill, breathing slowly.
+
+    Pure pygame primitives — no sprite assets needed. Serves as a working
+    'cat' scene users can pick today; replace with a real CC0 sprite later
+    by adding src/lumi/ui/face/assets/sprites/sleeping-cat/ and switching the
+    SCENES['cat'] entry to SpriteLoopScene('sleeping-cat').
+    """
+
+    _BG_TOP = (28, 36, 64)
+    _BG_BOT = (12, 16, 32)
+    _CAT_BODY = (255, 184, 130)        # warm peachy ginger
+    _CAT_STRIPE = (210, 130, 80)
+    _CAT_EAR = (235, 160, 110)
+
+    def render(self, surface: object, tick: int, w: int, h: int) -> None:
+        import pygame  # noqa: PLC0415
+
+        # Cozy gradient backdrop
+        for y in range(h):
+            t = y / max(h - 1, 1)
+            r = int(self._BG_TOP[0] * (1 - t) + self._BG_BOT[0] * t)
+            g = int(self._BG_TOP[1] * (1 - t) + self._BG_BOT[1] * t)
+            b = int(self._BG_TOP[2] * (1 - t) + self._BG_BOT[2] * t)
+            pygame.draw.line(surface, (r, g, b), (0, y), (w, y))
+
+        # A few drifting stars
+        for i in range(8):
+            sx = int((i * 73 + tick // 6) % w)
+            sy = int((i * 41) % (h // 2))
+            pygame.draw.circle(surface, (220, 220, 240), (sx, sy), 1)
+
+        # Windowsill — a flat band
+        sill_y = int(h * 0.78)
+        pygame.draw.rect(surface, (40, 30, 24), (0, sill_y, w, h - sill_y))
+
+        # Cat — breathing ellipse on the sill
+        breath = int(2 * math.sin(tick / 28))
+        cx = w // 2
+        cy = sill_y - 28 + breath
+        body_w = 80
+        body_h = 38
+
+        # Body
+        pygame.draw.ellipse(surface, self._CAT_BODY,
+                             (cx - body_w // 2, cy - body_h // 2, body_w, body_h))
+        # Stripes
+        for i in range(-1, 2):
+            ex = cx + i * 18
+            pygame.draw.ellipse(surface, self._CAT_STRIPE,
+                                 (ex - 4, cy - body_h // 2 + 2, 8, body_h - 4))
+        # Head (a small circle to the left so it looks curled up)
+        head_x = cx - body_w // 2 + 16
+        head_y = cy - 6
+        pygame.draw.circle(surface, self._CAT_BODY, (head_x, head_y), 16)
+        # Ears
+        pygame.draw.polygon(surface, self._CAT_EAR,
+                             [(head_x - 12, head_y - 8), (head_x - 4, head_y - 16), (head_x - 4, head_y - 4)])
+        pygame.draw.polygon(surface, self._CAT_EAR,
+                             [(head_x + 4, head_y - 4), (head_x + 4, head_y - 16), (head_x + 12, head_y - 8)])
+        # Closed eyes (two small arcs)
+        pygame.draw.line(surface, (60, 30, 20), (head_x - 6, head_y - 1), (head_x - 1, head_y - 1), 2)
+        pygame.draw.line(surface, (60, 30, 20), (head_x + 2, head_y - 1), (head_x + 7, head_y - 1), 2)
+
+        # A small "Z" floating up to suggest sleep, every ~3s
+        if (tick // 5) % 20 < 6:
+            zfont = pygame.font.Font(None, 18)
+            phase = (tick // 5) % 20
+            z_alpha = max(0, 255 - phase * 30)
+            z_img = zfont.render("z", True, (220, 220, 255))
+            z_img.set_alpha(z_alpha)
+            surface.blit(z_img, (head_x + 12, head_y - 20 - phase))
+
+
 # ── Registry ────────────────────────────────────────────────────────────────
 
 
-SCENES: dict[str, type] = {
-    "none":   type("_NoScene", (), {"render": lambda self, s, t, w, h: None}),
-    "rain":   RainScene,
-    "snow":   SnowScene,
+SCENES: dict[str, Any] = {
+    "none":  type("_NoScene", (), {"render": lambda self, s, t, w, h: None}),
+    "rain":  RainScene,
+    "snow":  SnowScene,
+    "cat":   SleepingCatPlaceholderScene,
 }
 
 

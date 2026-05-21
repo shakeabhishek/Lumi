@@ -100,7 +100,7 @@ async def face_post(
     s = load_settings(data_dir)
     s.face_theme = face_theme
     s.face_color = face_color
-    s.idle_scene = idle_scene if idle_scene in {"none", "rain", "snow"} else "none"
+    s.idle_scene = idle_scene if idle_scene in {"none", "rain", "snow", "cat"} else "none"
     save_settings(data_dir, s)
     return "/settings/face"
 
