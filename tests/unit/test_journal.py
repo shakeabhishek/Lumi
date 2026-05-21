@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timezone
+from datetime import date
 from pathlib import Path
 
 from lumi.llm.ollama_backend import MockLLMBackend

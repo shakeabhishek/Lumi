@@ -6,7 +6,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 
 from lumi.audio.voice_id import VoiceID, _THRESHOLD
 

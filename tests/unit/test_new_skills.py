@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import time
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from lumi.skills.native.reminder_skill import ReminderSkill
 from lumi.skills.native.system_stats_skill import SystemStatsSkill

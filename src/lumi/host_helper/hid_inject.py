@@ -6,7 +6,6 @@ On Pi hardware: will write directly to /dev/hidg0 (USB HID gadget).
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 from ..log import get_logger
@@ -89,7 +88,6 @@ _ASCII_TO_HID: dict[str, tuple[int, int]] = {}
 
 
 def _build_hid_table() -> None:
-    import string  # noqa: PLC0415
 
     _lower = "abcdefghijklmnopqrstuvwxyz"
     for i, c in enumerate(_lower):

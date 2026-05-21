@@ -9,8 +9,6 @@ from lumi.host_helper.hid_inject import is_available, press_hotkey, type_text
 
 
 def test_type_text_uses_pynput_when_no_gadget(tmp_path: Path) -> None:
-    mock_kb = MagicMock()
-    mock_controller_cls = MagicMock(return_value=mock_kb)
     with (
         patch("lumi.host_helper.hid_inject._HID_DEVICE", tmp_path / "hidg0"),
         patch("lumi.host_helper.hid_inject._type_pynput") as mock_pynput,
@@ -54,7 +52,6 @@ def test_is_available_true_when_pynput_importable(tmp_path: Path) -> None:
 
 
 def test_is_available_false_when_nothing(tmp_path: Path, monkeypatch: object) -> None:
-    import sys
 
     with (
         patch("lumi.host_helper.hid_inject._HID_DEVICE", tmp_path / "hidg0"),

@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
 
 from lumi.llm.hailo_backend import HailoBackend
 from lumi.skills.native.notes_skill import NotesSkill

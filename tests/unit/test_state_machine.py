@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from lumi.runtime.state_machine import LumiState, StateMachine
 

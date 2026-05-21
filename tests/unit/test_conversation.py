@@ -44,7 +44,6 @@ def test_focus_mode_system_prompt_differs_from_general(backend: MockLLMBackend) 
     focus_mgr = ConversationManager(backend, mode=Mode.FOCUS)
     general_mgr.chat("test")
     focus_mgr.chat("test")
-    general_prompt = general_mgr._backend.received_messages  # type: ignore[attr-defined]
     # focus backend received a different system prompt
     focus_sent = backend.received_messages[0]
     assert "focus" in focus_sent[0]["content"].lower()

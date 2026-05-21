@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from lumi.vision.camera import MockCamera, make_camera
 from lumi.vision.gestures import GestureType, MockGestureDetector, make_gesture_detector

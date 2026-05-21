@@ -7,7 +7,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import httpx
-import pytest
 
 from lumi.skills import openclaw_bridge as obridge
 from lumi.skills.openclaw_bridge import OpenClawBridge

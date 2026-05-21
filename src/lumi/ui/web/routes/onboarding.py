@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Annotated
 
 import numpy as np
-from fastapi import APIRouter, Form, Request, UploadFile
+from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..persistence import (

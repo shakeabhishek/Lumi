@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
 
 from lumi.runtime.memory import MemoryStore
 

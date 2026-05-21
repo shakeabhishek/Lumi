@@ -182,12 +182,10 @@ class Pseudonymizer:
 
     def _mask_with_presidio(self, text: str) -> str:
         """Optional NER-based name masking. Silent no-op if Presidio missing."""
+        analyzer = _get_presidio_analyzer()
+        if analyzer is None:
+            return text
         try:
-            from presidio_analyzer import AnalyzerEngine  # noqa: PLC0415
-
-            analyzer = _get_presidio_analyzer()
-            if analyzer is None:
-                return text
             results = analyzer.analyze(text=text, entities=["PERSON"], language="en")
             # Apply replacements right-to-left so earlier indices stay valid.
             for r in sorted(results, key=lambda r: r.start, reverse=True):

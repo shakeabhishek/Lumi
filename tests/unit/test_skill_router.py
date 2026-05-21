@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
 
-from lumi.config import Mode
 from lumi.llm.ollama_backend import MockLLMBackend
 from lumi.runtime.conversation import ConversationManager
 from lumi.skills.base import NativeSkill, SkillResult
