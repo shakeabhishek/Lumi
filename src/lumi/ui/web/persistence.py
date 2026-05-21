@@ -7,6 +7,9 @@ data_dir so everything the user configured is in one place.
 
 from __future__ import annotations
 
+import json as _json
+import os as _os
+import tempfile as _tempfile
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -116,7 +119,6 @@ def load_settings(data_dir: Path) -> UserSettings:
     try:
         # Read raw JSON first so we can lift any legacy plaintext API key out
         # of the file and into the OS keychain before constructing the model.
-        import json as _json  # noqa: PLC0415
         raw = _json.loads(p.read_text(encoding="utf-8"))
         _migrate_plaintext_api_key(data_dir, raw)
         return UserSettings.model_validate(raw)
@@ -149,14 +151,31 @@ def _migrate_plaintext_api_key(data_dir: Path, raw: dict) -> None:
     _atomic_write(data_dir, raw)
 
 
+def _atomic_write_text(path: Path, payload: str) -> None:
+    """Write `payload` to `path` atomically via tempfile + os.replace.
+
+    A crash mid-write must not leave user_settings.json half-flushed —
+    the next launch reads the truncated file as invalid JSON and we
+    fall back to a brand-new UserSettings(), silently wiping the user's
+    onboarding state, voice ID flag, skill toggles, etc.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = _tempfile.mkstemp(
+        prefix=path.name + ".", suffix=".tmp", dir=str(path.parent),
+    )
+    try:
+        with _os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(payload)
+        _os.replace(tmp, path)
+    except Exception:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
 def _atomic_write(data_dir: Path, raw: dict) -> None:
-    import json as _json  # noqa: PLC0415
-    p = _settings_path(data_dir)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(_json.dumps(raw, indent=2), encoding="utf-8")
+    """Back-compat wrapper for the migration path. Atomic now too."""
+    _atomic_write_text(_settings_path(data_dir), _json.dumps(raw, indent=2))
 
 
 def save_settings(data_dir: Path, settings: UserSettings) -> None:
-    p = _settings_path(data_dir)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(settings.model_dump_json(indent=2), encoding="utf-8")
+    _atomic_write_text(_settings_path(data_dir), settings.model_dump_json(indent=2))

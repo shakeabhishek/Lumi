@@ -72,3 +72,38 @@ class TestLoadSave:
         save_settings(tmp_path, s)
         loaded = load_settings(tmp_path)
         assert loaded.enabled_skills == ["weather", "timer"]
+
+
+class TestAtomicWrite:
+    """Audit #11 — a crash mid-write must not corrupt the user's settings file."""
+
+    def test_failed_write_leaves_existing_file_intact(self, tmp_path: Path) -> None:
+        from unittest.mock import patch  # noqa: PLC0415
+
+        # Seed a valid settings file.
+        save_settings(tmp_path, UserSettings(lumi_name="Atlas"))
+        original = (tmp_path / "user_settings.json").read_text()
+
+        # Now simulate a crash inside os.replace (after the tmp file has
+        # been written). The existing file must be unchanged.
+        with patch("lumi.ui.web.persistence._os.replace", side_effect=OSError("disk full")):  # type: ignore[attr-defined]
+            try:
+                save_settings(tmp_path, UserSettings(lumi_name="Nova"))
+            except OSError:
+                pass
+
+        assert (tmp_path / "user_settings.json").read_text() == original
+
+    def test_failed_write_leaves_no_orphan_tmpfile(self, tmp_path: Path) -> None:
+        from unittest.mock import patch  # noqa: PLC0415
+
+        save_settings(tmp_path, UserSettings(lumi_name="Atlas"))
+
+        with patch("lumi.ui.web.persistence._os.replace", side_effect=OSError("nope")):  # type: ignore[attr-defined]
+            try:
+                save_settings(tmp_path, UserSettings(lumi_name="Nova"))
+            except OSError:
+                pass
+
+        leftover = list(tmp_path.glob("user_settings.json.*.tmp"))
+        assert leftover == []
