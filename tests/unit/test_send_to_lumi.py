@@ -45,6 +45,40 @@ def test_capture_returns_selection_when_clipboard_changes() -> None:
     assert result.text == "newly-selected-text"
 
 
+def test_capture_restores_original_clipboard_after_selection_grab() -> None:
+    """When the user has a selection AND something already on the clipboard,
+    the hotkey shouldn't trash the existing clipboard. Capture the selection,
+    then write the original back so paste-elsewhere still works."""
+    reads = iter(["important previous clipboard", "the user's selection"])
+    fake_controller_mod = MagicMock()
+    with (
+        patch("lumi.host_helper.send_to_lumi.clip.read", side_effect=lambda: next(reads)),
+        patch("lumi.host_helper.send_to_lumi.clip.write") as mock_write,
+        patch.dict("sys.modules", {"pynput.keyboard": fake_controller_mod}),
+    ):
+        result = capture_selected_text(simulate_copy=True)
+
+    assert result is not None
+    assert result.source == "selection"
+    assert result.text == "the user's selection"
+    mock_write.assert_called_once_with("important previous clipboard")
+
+
+def test_capture_does_not_restore_when_no_selection_was_taken() -> None:
+    """If the simulated copy didn't change the clipboard (no selection),
+    we never wrote to the clipboard — so no restore is needed and we
+    shouldn't call clip.write at all."""
+    fake_controller_mod = MagicMock()
+    with (
+        patch("lumi.host_helper.send_to_lumi.clip.read", return_value="static-clip"),
+        patch("lumi.host_helper.send_to_lumi.clip.write") as mock_write,
+        patch.dict("sys.modules", {"pynput.keyboard": fake_controller_mod}),
+    ):
+        capture_selected_text(simulate_copy=True)
+
+    mock_write.assert_not_called()
+
+
 def test_capture_falls_back_to_clipboard_when_unchanged() -> None:
     """Nothing was selected (clipboard stayed the same) → return existing clipboard."""
     fake_controller_mod = MagicMock()

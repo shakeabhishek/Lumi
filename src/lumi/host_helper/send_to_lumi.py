@@ -97,9 +97,11 @@ def capture_selected_text(simulate_copy: bool = True) -> CaptureResult | None:
     """Try to grab the user's current selection, falling back to clipboard.
 
     With simulate_copy=True (default): we send Cmd+C / Ctrl+C, wait briefly,
-    then read the clipboard. If the clipboard changed, that's the selection.
-    If it didn't change, no text was selected — return what was on the
-    clipboard already (so the hotkey still does something useful).
+    then read the clipboard. If the clipboard changed, that's the selection;
+    we restore the user's *original* clipboard contents so the hotkey
+    doesn't trash whatever they were holding for a paste later.
+    If the clipboard didn't change, no text was selected — return what was
+    already there so the hotkey still does something useful.
     """
     original = clip.read() or ""
     if not simulate_copy:
@@ -130,7 +132,18 @@ def capture_selected_text(simulate_copy: bool = True) -> CaptureResult | None:
     )
 
     if after and after != original:
+        # The user had a selection that's now on the clipboard. Take it,
+        # then put back what they had before so we don't trash their
+        # clipboard manager state.
+        if original:
+            clip.write(original)
+        elif original == "":
+            # They had nothing — restoring empty would still work, but
+            # most platforms can't "clear" without leaving the captured
+            # text behind. Best effort: write empty string.
+            clip.write("")
         return CaptureResult(text=after.strip()[:_MAX_TEXT_CHARS], source="selection")
+
     text = original.strip()
     if not text:
         return None
