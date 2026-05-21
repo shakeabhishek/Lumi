@@ -146,7 +146,9 @@ def _voice_loop(
         window_ctx = _get_active_window_context(cfg)
         if window_ctx:
             conversation.set_context_hint(f"User's active window: {window_ctx}")
-            log.info("context.active_window", window=window_ctx)
+            # Don't log the window title itself — it often contains the
+            # name of the document the user is editing (potentially PII).
+            log.info("context.active_window", chars=len(window_ctx))
 
         # Hotkey-injected context ("Send to Lumi"). Replaces any earlier hint
         # for this turn — the explicit user action wins over the implicit

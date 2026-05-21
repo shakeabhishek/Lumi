@@ -23,6 +23,23 @@ def test_chat_returns_full_reply(manager: ConversationManager) -> None:
     assert manager.chat("Hello") == "I am Lumi."
 
 
+def test_chat_does_not_log_raw_transcript(
+    manager: ConversationManager, caplog
+) -> None:
+    """Structured logs may be tail'd / mirrored — they must never carry the
+    raw user transcript or the assistant reply. Length is fine; content isn't.
+    Audit log (with cloud-mode pseudonymization) is the proper home for text."""
+    import logging  # noqa: PLC0415
+
+    with caplog.at_level(logging.INFO, logger="lumi"):
+        manager.chat("my email is alice@example.com and ssn 123-45-6789")
+
+    blob = "\n".join(r.getMessage() for r in caplog.records) + "\n" + caplog.text
+    assert "alice@example.com" not in blob
+    assert "123-45-6789" not in blob
+    assert "I am Lumi" not in blob
+
+
 def test_chat_appends_user_and_assistant_to_history(manager: ConversationManager) -> None:
     manager.chat("Hello")
     assert len(manager._history) == 2

@@ -69,12 +69,15 @@ class ConversationManager:
     def chat(self, user_text: str) -> str:
         """Add user turn, stream LLM reply, return the full reply string."""
         self._history.append({"role": "user", "content": user_text})
-        log.info("conversation.user", text=user_text)
+        # Length only — raw transcript could be PII, and the audit log is the
+        # proper place for content (it goes through the pseudonymizer in
+        # cloud mode). Structured logs may be tail'd, mirrored, or shipped.
+        log.info("conversation.user", chars=len(user_text))
 
         reply = "".join(self._backend.chat(self._build_messages())).strip()
 
         self._history.append({"role": "assistant", "content": reply})
-        log.info("conversation.assistant", text=reply)
+        log.info("conversation.assistant", chars=len(reply))
         if self._memory:
             self._memory.store_turn(user_text, reply)
         return reply
@@ -85,7 +88,7 @@ class ConversationManager:
         Appends the full assembled reply to history once the stream is exhausted.
         """
         self._history.append({"role": "user", "content": user_text})
-        log.info("conversation.user", text=user_text)
+        log.info("conversation.user", chars=len(user_text))
 
         buffer: list[str] = []
         for chunk in self._backend.chat(self._build_messages()):
@@ -94,6 +97,6 @@ class ConversationManager:
 
         reply = "".join(buffer).strip()
         self._history.append({"role": "assistant", "content": reply})
-        log.info("conversation.assistant", text=reply)
+        log.info("conversation.assistant", chars=len(reply))
         if self._memory:
             self._memory.store_turn(user_text, reply)
