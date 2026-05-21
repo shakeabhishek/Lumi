@@ -163,11 +163,21 @@ def notify(title: str, body: str) -> None:
     if _is_macos():
         if shutil.which("osascript") is None:
             return
-        body_esc = body.replace('"', '\\"')
-        title_esc = title.replace('"', '\\"')
-        script = f'display notification "{body_esc}" with title "{title_esc}"'
+        # Pass title/body through `on run argv` so AppleScript's parser never
+        # sees the user content as syntax — defuses any " / ` / \ / quote
+        # collisions today, and any future caller-controlled values.
+        script = (
+            "on run argv\n"
+            "  set t to item 1 of argv\n"
+            "  set b to item 2 of argv\n"
+            "  display notification b with title t\n"
+            "end run"
+        )
         try:
-            subprocess.run(["osascript", "-e", script], timeout=2.0, check=False)
+            subprocess.run(
+                ["osascript", "-e", script, title, body],
+                timeout=2.0, check=False,
+            )
         except Exception:
             pass
         return

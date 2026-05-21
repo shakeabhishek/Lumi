@@ -142,6 +142,43 @@ def test_consume_deletes_even_on_corrupt_file(tmp_path: Path) -> None:
     assert not (tmp_path / ".pending_context.json").exists()
 
 
+def test_notify_passes_content_via_argv_not_interpolation() -> None:
+    """Audit #19 — title/body must be argv, not interpolated into the
+    AppleScript source. A title containing a quote shouldn't end up
+    inside the -e string at all."""
+    if not _is_macos_helper():
+        return            # mac-only path
+    from unittest.mock import patch  # noqa: PLC0415
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/osascript"),
+        patch("subprocess.run") as mock_run,
+    ):
+        from lumi.host_helper.send_to_lumi import notify  # noqa: PLC0415
+        notify(title='trick"title', body='trick"body`whoami`')
+
+    assert mock_run.called
+    args, _kwargs = mock_run.call_args
+    cmd = args[0]
+    # The user-controlled strings are argv positions 3 and 4 (after
+    # ["osascript", "-e", <script>]).
+    assert cmd[0] == "osascript"
+    assert cmd[1] == "-e"
+    script_text = cmd[2]
+    # The script never contains the user content.
+    assert 'trick"title' not in script_text
+    assert 'whoami' not in script_text
+    # They're in argv where AppleScript treats them as opaque strings.
+    assert 'trick"title' in cmd[3:]
+    assert 'trick"body`whoami`' in cmd[3:]
+
+
+def _is_macos_helper() -> bool:
+    """Inline import-guard so the patched test runs on CI's mac runners only."""
+    import sys  # noqa: PLC0415
+    return sys.platform == "darwin"
+
+
 def test_format_hint_includes_text_and_source() -> None:
     hint = format_hint({"text": "x = 42", "source": "selection"})
     assert "x = 42" in hint
