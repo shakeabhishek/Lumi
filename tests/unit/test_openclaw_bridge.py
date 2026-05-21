@@ -226,6 +226,89 @@ def test_build_tools_only_includes_skills_with_impls() -> None:
     assert "made_up" not in loaded   # no impl → excluded
 
 
+def _cloud_bridge(skills_dir=None) -> OpenClawBridge:
+    """Build a cloud-mode bridge with a real Pseudonymizer for output handling."""
+    from lumi.runtime.privacy import Pseudonymizer  # noqa: PLC0415
+    return OpenClawBridge(
+        runtime_mode="openclaw_cloud",
+        pseudonymizer=Pseudonymizer(use_presidio=False),
+        skills_dir=skills_dir or _fake_skills_dir(),
+    )
+
+
+def test_cloud_failure_notice_starts_empty() -> None:
+    bridge = _cloud_bridge()
+    assert bridge.cloud_failure_notice() is None
+
+
+def test_cloud_failure_notice_set_when_npx_missing() -> None:
+    """If `npx openclaw` isn't installed, the bridge should record a
+    user-readable explanation that mentions installing Node.js."""
+    bridge = _cloud_bridge()
+    with patch("subprocess.run", side_effect=FileNotFoundError("npx")):
+        result = bridge.send("hello")
+    assert result is None
+    notice = bridge.cloud_failure_notice()
+    assert notice is not None
+    assert "Node.js" in notice or "npx" in notice
+
+
+def test_cloud_failure_notice_is_one_shot() -> None:
+    """Once the user has been told, the same notice doesn't fire again
+    until a new failure (or a recovery) flips the state."""
+    bridge = _cloud_bridge()
+    with patch("subprocess.run", side_effect=FileNotFoundError("npx")):
+        bridge.send("first turn")
+    first = bridge.cloud_failure_notice()
+    second = bridge.cloud_failure_notice()
+    third = bridge.cloud_failure_notice()
+    assert first is not None
+    assert second is None
+    assert third is None
+
+
+def test_cloud_failure_notice_classifies_timeout() -> None:
+    bridge = _cloud_bridge()
+    with patch(
+        "subprocess.run",
+        side_effect=__import__("subprocess").TimeoutExpired(cmd="npx", timeout=5),
+    ):
+        bridge.send("anything")
+    notice = bridge.cloud_failure_notice()
+    assert notice is not None
+    assert "time" in notice.lower()
+
+
+def test_cloud_failure_notice_classifies_nonzero_exit() -> None:
+    bridge = _cloud_bridge()
+    proc = MagicMock(returncode=1, stdout="", stderr="provider rate-limited")
+    with patch("subprocess.run", return_value=proc):
+        bridge.send("anything")
+    notice = bridge.cloud_failure_notice()
+    assert notice is not None
+    assert "error" in notice.lower() or "exit" in notice.lower()
+
+
+def test_successful_cloud_call_clears_prior_failure_notice() -> None:
+    """After a recovery, the user shouldn't keep seeing the old warning."""
+    bridge = _cloud_bridge()
+    with patch("subprocess.run", side_effect=FileNotFoundError("npx")):
+        bridge.send("turn 1")
+    assert bridge.cloud_failure_notice() is not None  # consume the one-shot
+
+    # Now a real reply comes through.
+    ok_stdout = (
+        '{"result":{"payloads":[{"text":"hi back"}],'
+        '"meta":{"agentMeta":{"toolSummary":{"calls":0,"tools":[]}}}}}'
+    )
+    proc = MagicMock(returncode=0, stdout=ok_stdout, stderr="")
+    with patch("subprocess.run", return_value=proc):
+        reply = bridge.send("turn 2")
+    assert reply == "hi back"
+    # No notice now — the prior failure was cleared by the successful call.
+    assert bridge.cloud_failure_notice() is None
+
+
 def test_bridge_with_empty_catalog_returns_none() -> None:
     """Empty manifest dir → send() short-circuits to None without calling Ollama."""
     import tempfile  # noqa: PLC0415

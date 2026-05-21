@@ -151,6 +151,16 @@ async def chat_send(
         ))
         session.history.append(new_msgs[-1])
 
+        # If the cloud subprocess failed silently this turn, surface a
+        # one-shot notice so the user knows their cloud LLM isn't engaged
+        # and what to do about it. Subsequent failures of the same kind
+        # don't re-spam — only new (or post-success) failures notify.
+        if session.router._bridge is not None:        # noqa: SLF001  intentional, router exposes none
+            notice = session.router._bridge.cloud_failure_notice()  # noqa: SLF001
+            if notice:
+                new_msgs.append(ChatMessage(role="context", text=f"⚠ {notice}"))
+                session.history.append(new_msgs[-1])
+
     return request.app.state.templates.TemplateResponse(
         request, "chat_messages.html",
         {"messages": new_msgs},

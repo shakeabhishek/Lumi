@@ -311,6 +311,11 @@ class OpenClawBridge:
         # provider. Caller is responsible for passing one (the chat route
         # constructs one from settings + the owner's name).
         self._pseudo = pseudonymizer
+        # First-failure state for cloud subprocess so we can surface ONE
+        # user-visible warning rather than silently falling through to the
+        # local LLM forever. See cloud_failure_notice().
+        self._cloud_failure: str | None = None
+        self._cloud_failure_seen = False
         catalog = discover_skills(skills_dir or OPENCLAW_SKILLS_DIR)
         self._tools, self._dispatch = _build_tools(catalog)
         log.info(
@@ -331,6 +336,40 @@ class OpenClawBridge:
     def runtime_mode(self) -> str:
         """'ollama' (local Python tool execution) or 'openclaw_cloud' (real OpenClaw agent loop)."""
         return self._mode
+
+    def cloud_failure_notice(self) -> str | None:
+        """Return a one-shot user-facing notice if the cloud subprocess
+        has failed since the last check, then mark it as seen so the
+        same notice isn't repeated turn after turn. Returns None when
+        nothing's wrong, or when the user has already been told."""
+        if not self._cloud_failure or self._cloud_failure_seen:
+            return None
+        self._cloud_failure_seen = True
+        return self._cloud_failure
+
+    def _record_cloud_failure(self, kind: str, exc: object) -> None:
+        """Stash a short, user-safe failure reason. New failures override
+        older ones (most recent wins) but the seen flag resets so the
+        user sees the latest reason once."""
+        kind_to_msg = {
+            "no_npx": (
+                "Cloud mode is configured but `npx` (Node.js) wasn't found. "
+                "Falling back to local. Install Node.js 20+ to enable cloud LLM."
+            ),
+            "timeout": (
+                "Cloud LLM didn't respond in time — falling back to local for this turn."
+            ),
+            "bad_output": (
+                "Cloud subprocess returned unparseable output — falling back to local."
+            ),
+            "nonzero": (
+                "Cloud subprocess exited with an error — falling back to local. "
+                "Try `lumi cloud-test` from a terminal to see details."
+            ),
+        }
+        self._cloud_failure = kind_to_msg.get(kind, f"Cloud LLM unavailable: {exc!s:.120}")
+        self._cloud_failure_seen = False
+        log.warning("bridge.cloud_user_notice", kind=kind, error=str(exc)[:200])
 
     def send(self, text: str) -> str | None:
         """Return the model's reply, or None to defer to the router's LLM path."""
@@ -432,13 +471,13 @@ class OpenClawBridge:
                 capture_output=True, text=True, timeout=self._timeout + 10,
             )
             if proc.returncode != 0:
-                log.warning("bridge.openclaw_nonzero", code=proc.returncode, stderr=proc.stderr[:200])
+                self._record_cloud_failure("nonzero", proc.stderr[:200])
                 return None
             out = proc.stdout
             start = out.find("{")
             end = out.rfind("}") + 1
             if start < 0 or end <= start:
-                log.warning("bridge.openclaw_no_json")
+                self._record_cloud_failure("bad_output", "no JSON object in stdout")
                 return None
             data = json.loads(out[start:end])
             payloads = data.get("result", {}).get("payloads", []) or []
@@ -450,10 +489,18 @@ class OpenClawBridge:
                 tool_calls=tool_summary.get("calls"),
                 tools=tool_summary.get("tools"),
             )
+            # Clear any previous failure notice — we just got a real reply.
+            self._cloud_failure = None
             # Unmask before handing back to the user.
             if self._pseudo is not None and reply:
                 reply = self._pseudo.unmask(reply)  # type: ignore[attr-defined]
             return reply or None
-        except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError, OSError) as exc:
-            log.warning("bridge.openclaw_failed", error=str(exc))
+        except FileNotFoundError as exc:
+            self._record_cloud_failure("no_npx", exc)
+            return None
+        except subprocess.TimeoutExpired as exc:
+            self._record_cloud_failure("timeout", exc)
+            return None
+        except (json.JSONDecodeError, OSError) as exc:
+            self._record_cloud_failure("bad_output", exc)
             return None
