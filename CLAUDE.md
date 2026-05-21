@@ -8,21 +8,54 @@ Lumi is a portable physical AI desk companion that plugs into any computer via U
 
 ## Project status
 
-Currently in **pre-hardware design phase**. All major architecture decisions are locked in. Hardware is being ordered. Software development begins on a laptop using mocked hardware interfaces and will migrate to the Raspberry Pi 5 + AI HAT+ 2 stack when components arrive.
+**Pre-hardware design phase.** All major architecture decisions are locked
+in. Pi 5 + AI HAT+ 2 + Hailo on order. Software runs on a laptop using
+mocked hardware interfaces; same Frame/Display abstractions swap to real
+drivers on the Pi without runtime changes.
 
-**Phase 1 complete.** Voice loop (19/19 tests passing) and OpenClaw viability gate both cleared. Moving into Phase 2.
+**Phases 1-4 complete.** 279 unit tests passing. Voice loop, web chat,
+ChromaDB memory, audit log, 8 native skills, hotkey "send to Lumi"
+(global Cmd+Alt+L), perf log, data export + factory reset, OS-keychain
+secret storage, audit log, dev-panel skill test, journal auto-summary,
+9-step onboarding with chrome'd face (clock + weather + status band) and
+idle scenes (rain, snow, sleeping cat).
 
-V1 uses an **OpenClaw-as-catalog hybrid**: skill manifests live in
-`~/.openclaw/workspace/skills/<name>/SKILL.md` (the OpenClaw format), but
-the runtime executes them via Python implementations driven by direct
-Ollama tool calling. The reason for this honest split is that OpenClaw's
-HTTP gateway surfaces skills to the LLM as system-prompt text in its own
-text-invocation format, which a 1.5B model can't drive reliably (94% on
-OpenAI-style tool calling vs ~0% on OpenClaw's format). The full OpenClaw
-runtime lands in V2 alongside the cloud LLM (or qwen3:1.7b on Hailo via
-the adapter — see Phase 5). For V1, OpenClaw acts as the catalog
-source-of-truth: drop a new manifest in, register a Python impl in
-`_SKILL_IMPLS`, and the skill works.
+**Runtime architecture — the honest version**
+
+Two paths, chosen automatically based on whether a cloud LLM API key is
+configured in `/settings/cloud`:
+
+1. **V1 hybrid (default, no cloud key)**: SkillRouter → native Python
+   skill OR `OpenClawBridge(runtime_mode="ollama")` → direct Ollama
+   `/api/chat` with our Python tool defs → our `_SKILL_IMPLS` registry
+   handlers (weather, wikipedia, currency, news). Hit 94% on the
+   Phase-1 viability test. OpenClaw service is NOT in the runtime path.
+   Skill manifests in `~/.openclaw/workspace/skills/<name>/SKILL.md`
+   serve as the catalog source-of-truth (so the `lumi skills` CLI
+   shows what's installed) but are documentation only — they don't get
+   surfaced as callable tools to the local LLM.
+
+2. **V2 cloud (when an Anthropic/OpenAI/Gemini key is set)**: SkillRouter
+   → native Python skill OR `OpenClawBridge(runtime_mode="openclaw_cloud")`
+   → shells out to `npx openclaw agent --agent main --message …`. OpenClaw
+   gateway uses the cloud LLM (synced via
+   `skills.openclaw_operator.sync_to_openclaw`) as its agent operator.
+   Our **JS plugins** in `openclaw-service/plugins/<name>/` register as
+   real OpenAI-style `tool_calls` against the gateway. Cloud LLM emits
+   tool_calls reliably, plugin handlers execute, results stream back.
+   Unlocks the entire OpenClaw plugin ecosystem (100+ community plugins
+   ride on the same path).
+
+**Why the JS plugins matter in BOTH paths but are only invoked in V2**:
+local small models (1.5B/1.7B/8B llama/7B qwen — all tested) won't emit
+tool_calls through OpenClaw's ~13K-token agent prompt. They see the
+tools but pick "roleplay the answer" over "emit a structured call." The
+JS plugins are loaded and visible in either mode; only the cloud LLM
+actually drives them.
+
+The Python tool impls in V1 hybrid are deliberately duplicates of the JS
+plugins for the same skill. Two backends, same skill name. V1 hybrid is
+the always-works floor; V2 cloud is the rich ceiling.
 
 ---
 
@@ -709,6 +742,7 @@ Features deferred from V1 to keep V1 shippable:
 | Cloud backup integration | Sync to user's Drive / Dropbox / iCloud |
 | ElevenLabs premium voice option | Higher-quality TTS as paid upgrade |
 | Cloud LLM fallback with intelligent routing | Lumi tries the local LLM first; if confidence/quality is low, escalates the same turn to a configured cloud provider. Admin console (V1) already collects provider (Anthropic / OpenAI / Gemini), API key, and model name; V2 wires the routing. Architecture: a new `RoutedBackend` wraps `OllamaBackend` (or `HailoBackend`) plus the cloud client and decides per turn. Decision signal candidates: local model self-evaluation, length/topicality heuristics, explicit user marker, or a small classifier. Each cloud call logged in audit log as `source=cloud:{provider}`. Only the current turn + recent history + system prompt are sent — never the memory store, audit log, clipboard, or voice embedding. |
+| **PII masking + pseudonymization before cloud calls** | Ships with the cloud LLM unlock — privacy-first means we don't get to handwave this. Pre-send: scan transcript + system prompt + history for PII (names, emails, phones, postal codes, credit cards, IPs, API keys) and replace with stable pseudonyms (`<PERSON_1>`, `<EMAIL_1>`) before any HTTP request leaves the device. Post-receive: swap pseudonyms back so the user sees real values. Per-session mapping table, cleared on session end. Audit log stores the **masked** transcript so even our own logs don't keep raw PII. User toggle in `/settings/cloud` to disable per-skill (some tools, e.g. `gmail_read`, need real values). Implementation: regex-based first pass for stable vectors (emails/phones/cards/postal) + optional `presidio` integration for NER-based name detection. `src/lumi/runtime/privacy.py` exposes `Pseudonymizer.mask(text) → (masked_text, mapping)` and `unmask(text, mapping) → text`. Wired into `OpenClawBridge._send_via_openclaw` and the future `RoutedBackend` cloud path. |
 | Cloud LLM as the OpenClaw operator (V2 unlock for community skills) | Proven the long way: we tested OpenClaw 2026.04.20 + qwen2.5:1.5b/qwen3:1.7b/llama-3.1:8b/qwen2.5:7b. We also verified that **SKILL.md manifests are NOT callable tools** — they're documentation text in the system prompt. To make a skill actually callable we wrote a proper OpenClaw JS plugin (`openclaw-service/plugins/lumi-weather/`: `package.json` + `openclaw.plugin.json` with `configSchema` + `index.js` calling `api.registerTool` from `openclaw/plugin-sdk/plugin-entry`), dropped it into `~/.openclaw/extensions/`, added it to `plugins.allow`, and confirmed via `npx openclaw agent` that the tool **does** appear in the model's tool list. Directly hitting `POST /tools/invoke {tool: "get_weather", args: {...}}` returns real OpenWeatherMap data, so the plugin execution path works. **But qwen2.5:7b still doesn't invoke the tool** — it sees it in the list, then hallucinates a fabricated result instead of emitting a tool_call. The root cause: OpenClaw's system prompt is ~13K tokens of bootstrap/persona/memory guidance; small models choose "roleplay" over "invoke" under that prompt weight. The viability test's 94% reliability was against a SHORT prompt with ONE tool, not OpenClaw's heavy agent loop. Conclusion: full OpenClaw runtime needs cloud LLM (Claude/GPT) or a 30B+ local model. Hailo's 8 GB VRAM can't fit 30B+ at acceptable latency. Architecture: `OpenClawBridge.runtime_mode = "ollama" \| "openclaw_cloud"`. Cloud mode proxies through `npx openclaw agent --agent main --message ...` with the cloud API key wired into OpenClaw's `models.providers.<provider>.apiKey`. V1 hybrid (Python execution via direct Ollama tool_calls) remains the right design for the local-only fallback. The plugin layer we built unlocks the moment cloud LLM is configured. |
 | **Expanded OpenClaw skill set** | Write actions (email send, calendar create, music control), multi-step chained skills, Home Assistant control — needs cloud LLM |
 | **MCP protocol integrations** | Connect directly to MCP servers (Google Drive, Slack, etc.) |
@@ -721,6 +755,12 @@ Features deferred from V1 to keep V1 shippable:
 | Claude Code integration | Developer-focused features |
 | **Send-to-Lumi tier 3 (right-click menu)** | macOS Services bundle (`NSServices` plist), Windows registry helper, Linux DE-specific menu entries. V1 ships tier 1+2 (global hotkey + simulated-copy selection capture) which covers the major UX; right-click is per-platform fiddly for marginal gain. |
 | **Send-to-Lumi tier 4 (browser extension)** | Chrome/Firefox extension with right-click "Ask Lumi about this". Best UX inside the browser since it doesn't depend on Accessibility permissions. Half-a-day each browser; deferred to V2. |
+| **Chat UI — optimistic send** | Today: hitting Enter waits until the model replies before showing your message in the chat. Should render your message *instantly* on submit, then stream the reply into a placeholder. ~2h with HTMX SSE or a small JS layer. |
+| **Chat UI — streaming responses** | Today: full response posts once the LLM is done. With qwen2.5:7b that's 4-10 seconds of dead air. Pipe `ConversationManager.stream_chat()` through `text/event-stream` so tokens render as they arrive. ~3h. |
+| **Skills marketplace search** | Native skill or LLM tool that runs `npx openclaw skills search <query>` and offers to install matches. Lets Lumi say "you don't have a Spotify skill — want me to install the openclaw spotify-player one?" mid-conversation. Requires `openclaw_skills_enabled` permission gate so it can't silently install code. ~half-day. |
+| **Sprite-pack uploader** | `/settings/sprites` page: list existing sprite folders in `data/sprites/`, upload form (ZIP or PNG frames + manifest.json), delete button. Auto-populates the idle scene dropdown. Validates PNG-only, size caps, safe folder names. User-requested ("tamagotchi customization"). ~2-3h. |
+| **Pixel face redesign** | The pink-heart-with-blush-and-smiley reads off. User to source inspiration; we redo when there's a clear direction. |
+| **Bear face glyph coverage** | `ʕ ᴥ ʔ` work everywhere we tested, but some bundled fonts on Pi OS don't have `ᴥ` (IPA Letter Ain). Bundle a known-good TTF (DejaVu Sans Mono is on the Pi by default; might still need an explicit path) or swap the `ᴥ` mouth glyph for something more universal. |
 
 ---
 
