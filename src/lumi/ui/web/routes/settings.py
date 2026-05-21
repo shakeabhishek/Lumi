@@ -282,6 +282,7 @@ async def cloud_post(
     cloud_llm_api_key: Annotated[str, Form()] = "",
     cloud_llm_model: Annotated[str, Form()] = "",
     clear_key: Annotated[str, Form()] = "",
+    clear_confirm: Annotated[str, Form()] = "",
 ) -> str:
     from ....runtime import secrets  # noqa: PLC0415
     from ....skills.openclaw_operator import sync_to_openclaw  # noqa: PLC0415
@@ -294,7 +295,10 @@ async def cloud_post(
     s.cloud_llm_provider = provider
     s.cloud_llm_model = cloud_llm_model.strip()
 
-    if clear_key:
+    # Defence-in-depth: the UI shows a two-step confirmation requiring the
+    # literal word "clear", but a hand-crafted form post could still hit
+    # the route with only clear_key=1. Reject it server-side too.
+    if clear_key and clear_confirm.strip().lower() == "clear":
         secrets.delete_secret(_CLOUD_KEY_NAME)
         s.cloud_llm_api_key_set = False
     elif cloud_llm_api_key.strip():

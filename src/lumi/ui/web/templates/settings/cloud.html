@@ -76,14 +76,40 @@
     <div class="btn-row">
       <button type="submit" class="btn primary">Save</button>
       {% if settings.cloud_llm_api_key_set %}
-      <button type="submit" name="clear_key" value="1" class="btn danger"
-              onclick="return confirm('Remove the stored API key from the OS keychain?');">
+      <button type="button" class="btn danger" onclick="__lumiAskClearKey()">
         Clear key
       </button>
       {% endif %}
       <a href="/settings/personality" class="btn">Back</a>
     </div>
   </form>
+
+  {% if settings.cloud_llm_api_key_set %}
+  {# Two-step confirmation for cloud-key removal. A single browser confirm()
+     was too easy to mis-tap; recovering means pasting the key again, which
+     the user may not have ready. Require typing the literal word "clear". #}
+  <form method="POST" action="/settings/cloud" id="clearKeyForm" style="display:none;margin-top:1rem;padding:1rem;border:1px solid var(--iris-danger,#c44);border-radius:.5rem;background:rgba(196,68,68,0.06)">
+    <strong>Remove the stored API key from the OS keychain?</strong>
+    <p style="color:var(--muted);font-size:.9rem;margin:.4rem 0;">
+      You'll need to paste the key again to re-enable cloud mode. Type
+      <code>clear</code> below to confirm.
+    </p>
+    <input type="hidden" name="clear_key" value="1">
+    <input type="text" name="clear_confirm" placeholder="type: clear"
+           pattern="clear" required autocomplete="off"
+           style="width:14rem;font-family:monospace;">
+    <button type="submit" class="btn danger">Confirm — clear key</button>
+    <button type="button" class="btn" onclick="document.getElementById('clearKeyForm').style.display='none'">
+      Cancel
+    </button>
+  </form>
+  <script>
+    function __lumiAskClearKey() {
+      document.getElementById('clearKeyForm').style.display = 'block';
+      document.querySelector('#clearKeyForm input[name=clear_confirm]').focus();
+    }
+  </script>
+  {% endif %}
 </div>
 
 <div class="card">

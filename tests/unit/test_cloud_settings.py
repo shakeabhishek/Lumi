@@ -82,7 +82,8 @@ def test_cloud_post_blank_key_preserves_existing() -> None:
     assert on_disk["cloud_llm_api_key_set"] is True
 
 
-def test_cloud_post_clear_key_removes_from_keychain_and_unsets_flag() -> None:
+def test_cloud_post_clear_key_with_confirmation_removes_from_keychain() -> None:
+    """Audit #18 — clearing now requires `clear_confirm=clear` in the body."""
     c, d, fake = _client()
     with patch.dict(sys.modules, {"keyring": fake}):
         c.post("/settings/cloud", data={
@@ -95,11 +96,53 @@ def test_cloud_post_clear_key_removes_from_keychain_and_unsets_flag() -> None:
             "cloud_llm_api_key": "",
             "cloud_llm_model": "gpt-5",
             "clear_key": "1",
+            "clear_confirm": "clear",
         })
 
     assert ("lumi", "cloud_llm_api_key") not in fake._store
     on_disk = json.loads((d / "user_settings.json").read_text())
     assert on_disk["cloud_llm_api_key_set"] is False
+
+
+def test_cloud_post_clear_key_without_confirmation_keeps_key(tmp_path: Path) -> None:
+    """A hand-rolled form post with clear_key=1 but no clear_confirm must
+    NOT remove the key. The UI does the typed-confirm; the server enforces
+    it as defence-in-depth."""
+    c, d, fake = _client()
+    with patch.dict(sys.modules, {"keyring": fake}):
+        c.post("/settings/cloud", data={
+            "cloud_llm_provider": "openai",
+            "cloud_llm_api_key": "sk-must-survive",
+            "cloud_llm_model": "gpt-5",
+        })
+        c.post("/settings/cloud", data={
+            "cloud_llm_provider": "openai",
+            "cloud_llm_api_key": "",
+            "cloud_llm_model": "gpt-5",
+            "clear_key": "1",
+            # NO clear_confirm sent
+        })
+
+    assert fake._store[("lumi", "cloud_llm_api_key")] == "sk-must-survive"
+    on_disk = json.loads((d / "user_settings.json").read_text())
+    assert on_disk["cloud_llm_api_key_set"] is True
+
+
+def test_cloud_post_clear_key_wrong_confirmation_keeps_key() -> None:
+    """Anything other than the literal "clear" (case-insensitive) is rejected."""
+    c, d, fake = _client()
+    with patch.dict(sys.modules, {"keyring": fake}):
+        c.post("/settings/cloud", data={
+            "cloud_llm_provider": "openai",
+            "cloud_llm_api_key": "sk-keep",
+            "cloud_llm_model": "gpt-5",
+        })
+        c.post("/settings/cloud", data={
+            "clear_key": "1",
+            "clear_confirm": "yes",        # wrong magic word
+        })
+
+    assert fake._store[("lumi", "cloud_llm_api_key")] == "sk-keep"
 
 
 def test_cloud_post_rejects_unknown_provider() -> None:
