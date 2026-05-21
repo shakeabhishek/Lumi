@@ -17,19 +17,22 @@ from lumi.runtime.state_machine import LumiState, StateMachine
 
 def test_context_hint_consumed_after_one_turn() -> None:
     backend = MagicMock()
-    backend.chat.return_value = iter(["reply"])
+    backend.chat.side_effect = lambda *_a, **_kw: iter(["reply"])
     conv = ConversationManager(backend)
     conv.set_context_hint("active window: VS Code")
     conv.chat("hello")
-    # Hint should be consumed — second call should NOT include it
+    # After audit #5: hints live in a user-role message, not the system role.
+    # The hint must be present somewhere in the first turn's payload.
     first_messages = backend.chat.call_args_list[0][0][0]
-    system_msg = first_messages[0]["content"]
-    assert "VS Code" in system_msg
+    blob = "\n".join(m["content"] for m in first_messages)
+    assert "VS Code" in blob
+    # And the system role itself stays clean (no untrusted content).
+    assert "VS Code" not in first_messages[0]["content"]
 
     conv.chat("hello again")
     second_messages = backend.chat.call_args_list[1][0][0]
-    system_msg2 = second_messages[0]["content"]
-    assert "VS Code" not in system_msg2
+    blob2 = "\n".join(m["content"] for m in second_messages)
+    assert "VS Code" not in blob2
 
 
 def test_context_hint_empty_by_default() -> None:

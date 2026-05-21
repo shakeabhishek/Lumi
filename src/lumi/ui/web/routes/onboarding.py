@@ -229,11 +229,16 @@ async def step5(
 @router.post("/6", response_class=RedirectResponse, status_code=303)
 async def step6(
     request: Request,
-    face_theme: Annotated[str, Form()] = "pixel",
+    face_theme: Annotated[str, Form()] = "",      # blank = keep persisted default
 ) -> str:
     data_dir = request.app.state.data_dir
     s = load_settings(data_dir)
-    s.face_theme = face_theme
+    # If the form didn't carry a value (radio not selected), keep whatever
+    # was already on the settings model — the persistence layer's default
+    # ("vector") is the one source of truth. Onboarding must not silently
+    # flip themes for users who re-run the flow after a factory reset.
+    if face_theme:
+        s.face_theme = face_theme
     s.onboarding_step = 7
     save_settings(data_dir, s)
     return "/onboarding/7"
