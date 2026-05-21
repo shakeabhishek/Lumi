@@ -129,6 +129,58 @@ def test_write_then_consume_round_trip(tmp_path: Path) -> None:
     assert not (tmp_path / ".pending_context.json").exists()
 
 
+def test_consume_treats_stale_pending_as_absent(tmp_path: Path) -> None:
+    """Audit #22 — a pending context older than the staleness cap is treated
+    as missing, so an ancient hotkey press doesn't surprise a later turn."""
+    import json  # noqa: PLC0415
+    from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+
+    from lumi.host_helper.send_to_lumi import _PENDING_FILENAME, consume_pending  # noqa: PLC0415
+
+    stale_ts = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    (tmp_path / _PENDING_FILENAME).write_text(json.dumps({
+        "text": "ancient", "source": "selection", "ts": stale_ts,
+    }))
+
+    result = consume_pending(tmp_path)
+    assert result is None
+    # File must still be consumed (deleted) so the next fresh press is clean.
+    assert not (tmp_path / _PENDING_FILENAME).exists()
+
+
+def test_consume_keeps_fresh_pending(tmp_path: Path) -> None:
+    """The negative case for staleness: a recent press is still delivered."""
+    import json  # noqa: PLC0415
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    from lumi.host_helper.send_to_lumi import _PENDING_FILENAME, consume_pending  # noqa: PLC0415
+
+    fresh_ts = datetime.now(timezone.utc).isoformat()
+    (tmp_path / _PENDING_FILENAME).write_text(json.dumps({
+        "text": "fresh content", "source": "selection", "ts": fresh_ts,
+    }))
+
+    result = consume_pending(tmp_path)
+    assert result is not None
+    assert result["text"] == "fresh content"
+
+
+def test_consume_with_malformed_ts_does_not_drop_payload(tmp_path: Path) -> None:
+    """If the ts field is garbage (corrupt file or older payload format),
+    don't punish the user for our bug — treat as fresh, deliver."""
+    import json  # noqa: PLC0415
+
+    from lumi.host_helper.send_to_lumi import _PENDING_FILENAME, consume_pending  # noqa: PLC0415
+
+    (tmp_path / _PENDING_FILENAME).write_text(json.dumps({
+        "text": "deliver me", "source": "selection", "ts": "garbage",
+    }))
+
+    result = consume_pending(tmp_path)
+    assert result is not None
+    assert result["text"] == "deliver me"
+
+
 def test_consume_returns_none_when_no_pending(tmp_path: Path) -> None:
     assert consume_pending(tmp_path) is None
 

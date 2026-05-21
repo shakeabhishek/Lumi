@@ -40,6 +40,8 @@ _PENDING_FILENAME = ".pending_context.json"
 _RELEASE_WAIT_S = 0.15       # let the user release their hotkey modifiers first
 _COPY_WAIT_S = 0.25          # then wait for the OS clipboard to settle after simulated Cmd+C
 _MAX_TEXT_CHARS = 4000       # truncate runaway selections
+_PENDING_MAX_AGE_S = 60.0    # hotkey context expires fast — don't surprise the user
+                             # by attaching a 30-minute-old clipboard to a new turn
 
 
 @dataclass
@@ -201,8 +203,15 @@ def write_pending(data_dir: Path, result: CaptureResult) -> Path:
     return path
 
 
-def consume_pending(data_dir: Path) -> dict | None:
-    """Voice loop call: read + delete the pending context file, if any."""
+def consume_pending(data_dir: Path, max_age_s: float = _PENDING_MAX_AGE_S) -> dict | None:
+    """Voice loop call: read + delete the pending context file, if any.
+
+    Returns None if the file is missing OR older than `max_age_s` (default
+    60 s). Hotkey-injected context goes stale fast — if the user pressed
+    Cmd+Alt+L thirty minutes ago and then asks Lumi something unrelated
+    now, we shouldn't surprise them by attaching that ancient clipboard
+    contents. We still consume (delete) the file either way so the next
+    fresh press has a clean slate."""
     path = data_dir / _PENDING_FILENAME
     if not path.exists():
         return None
@@ -211,6 +220,20 @@ def consume_pending(data_dir: Path) -> dict | None:
     except (OSError, json.JSONDecodeError):
         payload = None
     path.unlink(missing_ok=True)
+
+    if payload is None:
+        return None
+    # Expiry check.
+    ts_raw = payload.get("ts", "")
+    try:
+        ts = datetime.fromisoformat(ts_raw)
+        age = (datetime.now(timezone.utc) - ts).total_seconds()
+    except (TypeError, ValueError):
+        # Malformed ts — treat as fresh (don't punish the user for our bug).
+        age = 0.0
+    if age > max_age_s:
+        log.info("send_to_lumi.pending_stale", age_s=round(age, 1), max_age_s=max_age_s)
+        return None
     return payload
 
 
