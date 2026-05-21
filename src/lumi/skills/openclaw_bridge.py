@@ -294,7 +294,7 @@ class OpenClawBridge:
         url: str = "http://127.0.0.1:11434",
         token: str = "",                # noqa: ARG002  unused; kept for router signature compat
         model: str = "qwen2.5:7b",
-        timeout: float = 30.0,
+        timeout: float = 15.0,
         skills_dir: Path | None = None,
         runtime_mode: str = "ollama",
         pseudonymizer: object | None = None,   # runtime.privacy.Pseudonymizer
@@ -316,6 +316,12 @@ class OpenClawBridge:
         # local LLM forever. See cloud_failure_notice().
         self._cloud_failure: str | None = None
         self._cloud_failure_seen = False
+        # Ollama health: once we observe a connection refused / timeout
+        # on the chat endpoint, disable the bridge for the rest of this
+        # process so we don't burn another self._timeout seconds per turn.
+        # A subsequent fresh process or a successful /api/tags ping
+        # re-enables it. Audit #20.
+        self._ollama_disabled = False
         catalog = discover_skills(skills_dir or OPENCLAW_SKILLS_DIR)
         self._tools, self._dispatch = _build_tools(catalog)
         log.info(
@@ -336,6 +342,24 @@ class OpenClawBridge:
     def runtime_mode(self) -> str:
         """'ollama' (local Python tool execution) or 'openclaw_cloud' (real OpenClaw agent loop)."""
         return self._mode
+
+    def health_check(self, timeout: float = 2.0) -> bool:
+        """Ping /api/tags to verify Ollama is reachable. If a previous turn
+        sticky-disabled the bridge and Ollama is back, this re-enables it.
+        Returns True iff reachable. Cloud mode short-circuits to True
+        because the bridge doesn't talk to Ollama at all there."""
+        if self._mode != "ollama":
+            return True
+        try:
+            r = httpx.get(f"{self._url}/api/tags", timeout=timeout)
+            r.raise_for_status()
+            if self._ollama_disabled:
+                log.info("bridge.ollama_recovered")
+            self._ollama_disabled = False
+            return True
+        except (httpx.HTTPError, ValueError):
+            self._ollama_disabled = True
+            return False
 
     def cloud_failure_notice(self) -> str | None:
         """Return a one-shot user-facing notice if the cloud subprocess
@@ -378,6 +402,10 @@ class OpenClawBridge:
         if not self._tools:
             log.info("bridge.no_tools")
             return None
+        if self._ollama_disabled:
+            # Sticky failure: don't burn another timeout cycle. The router
+            # falls through to the LLM path (which has its own backend).
+            return None
         try:
             first = httpx.post(
                 f"{self._url}/api/chat",
@@ -391,6 +419,14 @@ class OpenClawBridge:
             )
             first.raise_for_status()
             msg = first.json().get("message", {})
+        except httpx.ConnectError as exc:
+            log.warning("bridge.ollama_unreachable", error=str(exc))
+            self._ollama_disabled = True
+            return None
+        except httpx.TimeoutException as exc:
+            log.warning("bridge.ollama_timeout", error=str(exc))
+            self._ollama_disabled = True
+            return None
         except (httpx.HTTPError, ValueError) as exc:
             log.warning("bridge.first_call_failed", error=str(exc))
             return None

@@ -60,6 +60,53 @@ def test_send_returns_none_on_first_http_error() -> None:
         assert OpenClawBridge().send("anything") is None
 
 
+def test_connect_error_sticky_disables_bridge() -> None:
+    """Audit #20 — once Ollama refuses a connection, don't burn another
+    timeout per turn. send() short-circuits to None until health_check
+    is called and succeeds."""
+    bridge = OpenClawBridge(skills_dir=_fake_skills_dir())
+    with patch("httpx.post", side_effect=httpx.ConnectError("refused")) as p:
+        bridge.send("turn 1")
+    assert bridge._ollama_disabled is True
+
+    # Second turn must NOT hit httpx.post — it's been disabled.
+    with patch("httpx.post", side_effect=AssertionError("should not be called")):
+        assert bridge.send("turn 2") is None
+
+
+def test_timeout_also_sticky_disables() -> None:
+    bridge = OpenClawBridge(skills_dir=_fake_skills_dir())
+    with patch("httpx.post", side_effect=httpx.ReadTimeout("slow")):
+        bridge.send("turn 1")
+    assert bridge._ollama_disabled is True
+
+
+def test_health_check_recovers_after_outage() -> None:
+    """After Ollama comes back, an explicit health_check() re-enables the bridge."""
+    bridge = OpenClawBridge(skills_dir=_fake_skills_dir())
+    bridge._ollama_disabled = True   # simulate a prior outage
+
+    ok = _resp(200, {"models": [{"name": "qwen2.5:7b"}]})
+    with patch("httpx.get", return_value=ok):
+        assert bridge.health_check() is True
+    assert bridge._ollama_disabled is False
+
+
+def test_health_check_keeps_bridge_disabled_when_still_unreachable() -> None:
+    bridge = OpenClawBridge(skills_dir=_fake_skills_dir())
+    with patch("httpx.get", side_effect=httpx.ConnectError("still down")):
+        assert bridge.health_check() is False
+    assert bridge._ollama_disabled is True
+
+
+def test_default_timeout_is_under_thirty_seconds() -> None:
+    """Audit #20 — the old 30s × 2 default meant a stuck Ollama wasted a
+    full minute. Default must be tighter so the user feels the failure
+    quickly enough to escalate or try again."""
+    bridge = OpenClawBridge()
+    assert bridge._timeout <= 20.0
+
+
 def test_send_handles_arguments_as_json_string() -> None:
     """Some Ollama versions return tool args as a JSON string rather than a dict."""
     first = _resp(200, {"message": {"tool_calls": [
