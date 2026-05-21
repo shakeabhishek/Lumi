@@ -244,3 +244,93 @@ def test_pseudonymizer_does_not_leak_across_instances() -> None:
     b = Pseudonymizer(use_presidio=False)
     a.mask("alice@x.com")
     assert b.mapping == {}   # b should have nothing of a's PII
+
+
+# ── Expanded pattern coverage (audit #6) ────────────────────────────────────
+
+
+def test_masks_aws_access_key_id() -> None:
+    pz = Pseudonymizer(use_presidio=False)
+    out = pz.mask("AWS key AKIAIOSFODNN7EXAMPLE was leaked")
+    assert "AKIAIOSFODNN7EXAMPLE" not in out
+    assert "<API_KEY_1>" in out
+
+
+def test_masks_aws_temp_access_key() -> None:
+    pz = Pseudonymizer(use_presidio=False)
+    out = pz.mask("ASIAIOSFODNN7EXAMPLE is the session key")
+    assert "ASIAIOSFODNN7EXAMPLE" not in out
+
+
+def test_masks_jwt_token() -> None:
+    pz = Pseudonymizer(use_presidio=False)
+    jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36"
+    out = pz.mask(f"my token is {jwt} please rotate it")
+    assert jwt not in out
+    assert "<JWT_1>" in out
+
+
+def test_masks_bearer_token_header() -> None:
+    pz = Pseudonymizer(use_presidio=False)
+    out = pz.mask("curl -H 'Authorization: Bearer abc123def456ghi789jkl012mno345pqr'")
+    assert "abc123def456" not in out
+    assert "<BEARER_1>" in out
+
+
+def test_masks_ipv6_address() -> None:
+    pz = Pseudonymizer(use_presidio=False)
+    out = pz.mask("server is at 2001:0db8:85a3:0000:0000:8a2e:0370:7334 on port 8080")
+    assert "2001:0db8" not in out
+
+
+def test_masks_mac_address() -> None:
+    pz = Pseudonymizer(use_presidio=False)
+    out = pz.mask("device MAC is 3C:22:FB:7D:E1:42 — block it")
+    assert "3C:22:FB:7D:E1:42" not in out
+    assert "<MAC_1>" in out
+
+
+def test_masks_iban() -> None:
+    pz = Pseudonymizer(use_presidio=False)
+    out = pz.mask("transfer to DE89 3704 0044 0532 0130 00 immediately")
+    assert "0532 0130 00" not in out
+    assert "<IBAN_1>" in out
+
+
+def test_masks_github_fine_grained_pat() -> None:
+    pz = Pseudonymizer(use_presidio=False)
+    out = pz.mask("token github_pat_11AAAAAAA0abcdefghijklmnopqrstuvwxyzABCD is rotated")
+    assert "github_pat_11AAAAA" not in out
+
+
+def test_masks_us_street_address_obvious_forms() -> None:
+    pz = Pseudonymizer(use_presidio=False)
+    out = pz.mask("ship to 123 Main Street, Springfield")
+    assert "123 Main Street" not in out
+    assert "<ADDRESS_1>" in out
+
+
+def test_does_not_mask_unlabelled_dates() -> None:
+    """Plain dates aren't necessarily PII. We only mask DOB-labelled forms."""
+    pz = Pseudonymizer(use_presidio=False)
+    out = pz.mask("the meeting is on 2026-05-21 at noon")
+    # Date stays as-is — too aggressive to scrub all dates.
+    assert "2026-05-21" in out
+
+
+def test_masks_labelled_dob() -> None:
+    pz = Pseudonymizer(use_presidio=False)
+    out = pz.mask("DOB: 04/12/1990 on file")
+    assert "04/12/1990" not in out
+    assert "<DOB_1>" in out
+
+
+def test_high_entropy_keys_mask_before_lower_entropy_patterns() -> None:
+    """If a JWT happens to contain things that look like phone digits,
+    it should still be masked AS a JWT, not partially eaten by phone."""
+    pz = Pseudonymizer(use_presidio=False)
+    jwt = "eyJhbGc1234567890.eyJzdWIiOiJ123.SflKxwRJ4567890"
+    out = pz.mask(f"token: {jwt}")
+    assert "<JWT_1>" in out
+    # And nothing inside it was double-tagged
+    assert jwt not in out

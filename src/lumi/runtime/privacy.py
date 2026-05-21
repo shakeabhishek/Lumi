@@ -72,9 +72,59 @@ _APIKEY_RE = re.compile(
     r"sk-(?:ant-)?[A-Za-z0-9_-]{20,}"            # OpenAI / Anthropic
     r"|ghp_[A-Za-z0-9]{20,}"                     # GitHub PAT
     r"|gho_[A-Za-z0-9]{20,}"                     # GitHub OAuth
+    r"|ghs_[A-Za-z0-9]{20,}"                     # GitHub server-to-server
+    r"|github_pat_[A-Za-z0-9_]{20,}"             # GitHub fine-grained PAT
     r"|AIza[A-Za-z0-9_-]{30,}"                   # Google
+    r"|ya29\.[A-Za-z0-9_-]{20,}"                 # Google OAuth access token
     r"|xox[abprs]-[A-Za-z0-9-]{20,}"             # Slack
+    r"|AKIA[A-Z0-9]{16}"                         # AWS access key id
+    r"|ASIA[A-Z0-9]{16}"                         # AWS temp access key
     r")\b"
+)
+
+# JWT — three base64url segments separated by dots. The header almost always
+# starts with `eyJ` (base64 of "{"), which we anchor on to avoid false hits.
+_JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")
+
+# Bearer-token prefixed strings (auth headers pasted from curl, etc.).
+_BEARER_RE = re.compile(r"\bBearer\s+[A-Za-z0-9._\-]{20,}", flags=re.IGNORECASE)
+
+# IPv6 — RFC 4291. Loose enough to catch :: shorthand but anchored on hex
+# groups so we don't false-positive on times/durations.
+_IPV6_RE = re.compile(
+    r"(?<![0-9A-Fa-f:])"
+    r"(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}"          # full form
+    r"|(?<![0-9A-Fa-f:])"
+    r"(?:[0-9A-Fa-f]{1,4}:){1,7}:"                       # trailing ::
+    r"|(?<![0-9A-Fa-f:])"
+    r"(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{1,4}"       # one :: in middle
+)
+
+# MAC address — colon or dash separators, six octets.
+_MAC_RE = re.compile(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")
+
+# IBAN — country code + 2 check digits + up to 30 alphanum, no spaces.
+# Spaced variants ("DE89 3704 …") are normalized: we match across allowed spaces.
+_IBAN_RE = re.compile(
+    r"\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){2,7}[ ]?[A-Z0-9]{1,4}\b"
+)
+
+# US-style street address — number + street name + suffix. Conservative; this
+# regex misses lots (no apt numbers, no two-word streets like "Park Ave"), but
+# catches the obvious "123 Main Street" form without Presidio.
+_ADDRESS_RE = re.compile(
+    r"\b\d{1,5}\s+[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){0,3}\s+"
+    r"(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Lane|Ln\.?|"
+    r"Drive|Dr\.?|Court|Ct\.?|Place|Pl\.?|Way|Terrace|Ter\.?|Highway|Hwy\.?)\b"
+)
+
+# Dates of birth — only the obvious labelled forms. We don't mask any date;
+# masking every "1990-04-12" in a transcript would mangle harmless dates.
+_DOB_RE = re.compile(
+    r"\b(?:DOB|D\.O\.B\.|date\s+of\s+birth|born\s+on)\b\s*:?\s*"
+    r"(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2}|"
+    r"[A-Z][a-z]+\s+\d{1,2},?\s+\d{4})",
+    flags=re.IGNORECASE,
 )
 
 
@@ -122,11 +172,21 @@ class Pseudonymizer:
         if not text:
             return text
 
-        # API keys first — these can otherwise be partially eaten by other patterns
+        # Order matters. High-entropy tokens (keys, JWTs) first so they
+        # aren't partially eaten by lower-entropy patterns. Within
+        # numeric patterns: most specific (SSN with dashes) before
+        # least specific (bare digit runs).
+        text = _JWT_RE.sub(lambda m: self._token("JWT", m.group(0)), text)
+        text = _BEARER_RE.sub(lambda m: self._token("BEARER", m.group(0)), text)
         text = _APIKEY_RE.sub(lambda m: self._token("API_KEY", m.group(0)), text)
         text = _EMAIL_RE.sub(lambda m: self._token("EMAIL", m.group(0)), text)
         text = _SSN_RE.sub(lambda m: self._token("SSN", m.group(0)), text)
+        text = _DOB_RE.sub(lambda m: self._token("DOB", m.group(0)), text)
+        text = _IBAN_RE.sub(lambda m: self._token("IBAN", m.group(0)), text)
+        text = _IPV6_RE.sub(lambda m: self._token("IP", m.group(0)), text)
         text = _IPV4_RE.sub(lambda m: self._token("IP", m.group(0)), text)
+        text = _MAC_RE.sub(lambda m: self._token("MAC", m.group(0)), text)
+        text = _ADDRESS_RE.sub(lambda m: self._token("ADDRESS", m.group(0)), text)
         text = _ZIP_RE.sub(lambda m: self._token("ZIP", m.group(0)), text)
 
         # Credit cards: regex finds candidates, Luhn filters them.

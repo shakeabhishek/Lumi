@@ -64,6 +64,18 @@ def build_cloud_bridge(
         ensure_config_perms()
         extra = [user.owner_name] if user.owner_name else []
         pseudo = Pseudonymizer(extra_names=extra)
+        # Surface a warning if Presidio (NER-based name masking) isn't
+        # available — regex patterns cover keys/emails/phones/etc. but
+        # general person names need NER. Once-per-process: the lazy
+        # singleton in privacy.py caches the unavailable state.
+        from .privacy import _get_presidio_analyzer  # noqa: PLC0415
+
+        if _get_presidio_analyzer() is None:
+            log.warning(
+                "session.presidio_missing",
+                advice="install lumi with [privacy] extra for NER name masking; "
+                       "regex patterns still cover keys, emails, phones, etc.",
+            )
 
     bridge = OpenClawBridge(
         runtime_mode=runtime_mode,
