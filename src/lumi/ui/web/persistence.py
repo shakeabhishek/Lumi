@@ -39,10 +39,12 @@ MODES: list[dict[str, str]] = [
 ]
 
 FACE_THEMES: list[dict[str, str]] = [
-    {"id": "pixel",    "label": "Pixel",    "desc": "Chunky 8-bit pixel art with heart eyes"},
-    {"id": "vector",   "label": "Vector",   "desc": "Smooth geometric shapes with expressive brows"},
-    {"id": "terminal", "label": "Terminal", "desc": "Classic green phosphor CRT style"},
+    {"id": "vector",   "label": "Vector",   "desc": "Live Twemoji emoji that change with Lumi's mood"},
+    {"id": "terminal", "label": "Bear",     "desc": "Cute kawaii bear ʕ♥ᴥ♥ʔ on a phosphor terminal"},
+    {"id": "pixel",    "label": "Pixel",    "desc": "Big pink pixel heart, blinks softly"},
 ]
+# id="terminal" is kept for backwards-compat with existing settings, but the
+# renderer is no longer the creepy ASCII box-eye art — it's a cute kawaii bear.
 
 
 class UserSettings(BaseModel):
@@ -59,6 +61,9 @@ class UserSettings(BaseModel):
 
     # Face
     face_theme: str = "vector"
+    # Ambient scene shown when Lumi is IDLE instead of the face.
+    # Options: "none" | "rain" | "snow". Default none = face floats alone.
+    idle_scene: str = "none"
     face_color: str = ""  # empty = use per-theme default
 
     # Conversation mode

@@ -7,20 +7,21 @@ from pathlib import Path
 from ...hardware.base import Display
 from ...runtime.state_machine import LumiState
 from .chrome import ScreenCompositor
+from .idle_scenes import make_scene
 from .pixel import PixelFaceRenderer
 from .terminal import TerminalFaceRenderer
 from .vector import VectorFaceRenderer
 
 _RENDERERS = {
-    "pixel": PixelFaceRenderer,
-    "vector": VectorFaceRenderer,
-    "terminal": TerminalFaceRenderer,
+    "vector":   VectorFaceRenderer,
+    "terminal": TerminalFaceRenderer,    # kawaii bear, not the old ASCII art
+    "pixel":    PixelFaceRenderer,
 }
 
 _DEFAULT_COLORS = {
-    "pixel": "#FF6B9D",     # cute pink
-    "vector": "#F5A623",    # warm amber (only for fallback line drawing)
-    "terminal": "#33FF33",  # phosphor green
+    "vector":   "#F5A623",    # warm amber (only for fallback line drawing)
+    "terminal": "#33FF33",    # phosphor green for the bear body
+    "pixel":    "#FF6B9D",    # cute pink
 }
 
 
@@ -36,8 +37,9 @@ class FaceEngine:
         theme: str = "vector",
         color: str | None = None,
         models_dir: Path | None = None,
-        chrome: bool = True,                # True = Option A overlay (clock + weather + status)
-        weather_location: str = "San Francisco",
+        chrome: bool = True,
+        weather_location: str = "",
+        idle_scene: str = "none",
     ) -> None:
         w, h = display.size
         self._display = display
@@ -49,7 +51,11 @@ class FaceEngine:
         else:
             self._face = renderer_cls(w, h, fg_color=fg)
         self._compositor: ScreenCompositor | None = (
-            ScreenCompositor(self._face, w, h, location=weather_location) if chrome else None
+            ScreenCompositor(
+                self._face, w, h,
+                location=weather_location,
+                idle_scene=make_scene(idle_scene),
+            ) if chrome else None
         )
         self._renderer = self._compositor if self._compositor else self._face
         self._state = LumiState.IDLE
@@ -73,6 +79,10 @@ class FaceEngine:
     def set_weather_location(self, location: str) -> None:
         if self._compositor is not None:
             self._compositor.set_location(location)
+
+    def set_idle_scene(self, scene_name: str) -> None:
+        if self._compositor is not None:
+            self._compositor.set_idle_scene(make_scene(scene_name))
 
     def show(self) -> None:
         """Render current frame and push to display. Must be called from main thread."""

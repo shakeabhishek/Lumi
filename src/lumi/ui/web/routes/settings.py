@@ -92,13 +92,15 @@ async def face_get(request: Request) -> HTMLResponse:
 @router.post("/face", response_class=RedirectResponse, status_code=303)
 async def face_post(
     request: Request,
-    face_theme: Annotated[str, Form()] = "pixel",
+    face_theme: Annotated[str, Form()] = "vector",
     face_color: Annotated[str, Form()] = "",
+    idle_scene: Annotated[str, Form()] = "none",
 ) -> str:
     data_dir = request.app.state.data_dir
     s = load_settings(data_dir)
     s.face_theme = face_theme
     s.face_color = face_color
+    s.idle_scene = idle_scene if idle_scene in {"none", "rain", "snow"} else "none"
     save_settings(data_dir, s)
     return "/settings/face"
 

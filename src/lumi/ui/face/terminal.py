@@ -14,10 +14,64 @@ States:
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 from ...hardware.base import Frame
+from ...log import get_logger
 from ...runtime.state_machine import LumiState
+
+_log = get_logger(__name__)
+
+
+# ── Font loader: find a system font that actually has the bear glyphs ──────
+
+
+def _load_kawaii_font(size: int) -> object:
+    """Return a pygame Font that can render `ʕ ᴥ ʔ ♥` (the bear face glyphs).
+
+    `pygame.font.SysFont("monospace", …)` resolves to whatever the OS picks
+    as 'monospace' — frequently a font WITHOUT these Unicode codepoints, so
+    the bear renders as tofu boxes. We pick a font by absolute path that we
+    KNOW has them. Fall back to pygame default on the last legs.
+    """
+    import pygame  # noqa: PLC0415
+
+    # Test glyphs the bear face needs. If a font reports zero-width for any
+    # of these, it doesn't have them and we should keep looking.
+    test = "ʕᴥʔ♥"
+
+    # Ordered candidate list. macOS first (we develop here), then Debian /
+    # Ubuntu (the Pi 5 OS), then Windows for completeness.
+    candidates: list[str] = [
+        # macOS — these all ship with the OS by default
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/Geneva.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        # Debian / Ubuntu / Raspberry Pi OS
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        # Windows
+        "C:\\Windows\\Fonts\\arial.ttf",
+    ]
+    for path in candidates:
+        if not os.path.exists(path):
+            continue
+        try:
+            f = pygame.font.Font(path, size)
+            if all(f.size(c)[0] > 0 for c in test):
+                _log.info("terminal_face.font_loaded", path=path)
+                return f
+        except Exception:
+            continue
+
+    # Last resort: pygame's bundled default. Likely renders some chars as
+    # tofu but at least the program runs.
+    _log.warning("terminal_face.no_kawaii_font_found")
+    return pygame.font.Font(None, size)
 
 _BG: tuple[int, int, int] = (0, 0, 0)
 _PINK: tuple[int, int, int] = (255, 122, 201)        # heart pink, on top of phosphor green body
@@ -60,20 +114,7 @@ class TerminalFaceRenderer:
 
     def _get_face_font(self) -> object:
         if self._face_font is None:
-            import pygame  # noqa: PLC0415
-
-            # Try fonts known to ship the Canadian-Syllabics codepoint (ʕ ʔ).
-            # SF Mono on macOS / DejaVu Sans Mono on Linux both have it.
-            for name in ("SF Mono", "DejaVu Sans Mono", "Menlo", "Consolas", "monospace"):
-                try:
-                    f = pygame.font.SysFont(name, _FACE_FONT_SIZE)
-                    if f.size("ʕ")[0] > 0:
-                        self._face_font = f
-                        break
-                except Exception:
-                    continue
-            if self._face_font is None:
-                self._face_font = pygame.font.Font(None, _FACE_FONT_SIZE)
+            self._face_font = _load_kawaii_font(_FACE_FONT_SIZE)
         return self._face_font
 
     def _get_label_font(self) -> object:

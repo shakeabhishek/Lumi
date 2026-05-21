@@ -281,7 +281,8 @@ def run(
         theme=cfg.face_theme,
         color=cfg.face_color,
         models_dir=cfg.models_dir,
-        weather_location=_user.weather_location or "San Francisco",
+        weather_location=_user.weather_location,   # empty = no weather chip
+        idle_scene=_user.idle_scene,
     )
     sm.on_state_change(face.set_state)
 

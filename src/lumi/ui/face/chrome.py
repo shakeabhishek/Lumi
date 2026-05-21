@@ -1,16 +1,24 @@
-"""Screen chrome — clock + weather strip + status band wrapping any face.
+"""Screen chrome — pretty status bar around the face.
 
-The face renderer still owns the middle of the display. This composer:
-  - Draws a thin top strip (always): HH:MM left, weather glyph + °C right.
-  - Draws a thin bottom band when a status string is set (else hides).
-  - Delegates the middle area to the face renderer.
+Layout (the Pi display is 480×320):
 
-Same Frame interface, so the compositor is a transparent wrapper. Works
-identically in the laptop pygame window and on the Pi's SPI display.
+  ┌─────────────────────────────────────────────────┐
+  │  21:47           ☀  18°C                        │   < ~44px top bar
+  │  Wed, May 21         partly cloudy              │     time + day/date
+  ├─────────────────────────────────────────────────┤     weather icon + condition
+  │                                                 │
+  │                                                 │
+  │            (FACE or IDLE SCENE)                 │   < middle area
+  │                                                 │
+  │                                                 │
+  ├─────────────────────────────────────────────────┤
+  │  ✦ Listening…                                   │   < ~22px bottom band
+  └─────────────────────────────────────────────────┘     (hidden when idle)
 
-Weather is fetched lazily on first need and cached for `_WEATHER_TTL_S`
-seconds. If no OpenWeatherMap key is in the keychain, the weather slot
-is omitted (clock still shown).
+Idle ambient: when state == IDLE *and* an `idle_scene` is set, the chrome
+delegates the middle area to that scene instead of the face renderer. Lets
+us swap in "raindrops", "sleeping cat", "mario walking", etc. Restraint:
+default is None (just the face floating), user picks the mood.
 """
 
 from __future__ import annotations
@@ -18,7 +26,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 import numpy as np
@@ -30,130 +38,177 @@ from ...runtime.state_machine import LumiState
 
 log = get_logger(__name__)
 
-_TOP_H = 16          # px of top strip
-_BOTTOM_H = 18       # px of bottom band (only when status set)
+_TOP_H = 44
+_BOTTOM_H = 22
 _BG = (26, 26, 26)
-_FG = (220, 220, 220)
-_FG_DIM = (140, 140, 140)
+_BG_BAR = (38, 38, 44)               # very subtle separation from the face area
+_FG = (235, 235, 235)
+_FG_DIM = (155, 155, 165)
 _ACCENT = (255, 122, 201)
 
-_WEATHER_TTL_S = 30 * 60       # refresh every 30 min
+_WEATHER_TTL_S = 30 * 60
 _WEATHER_TIMEOUT_S = 8.0
+
+# OpenWeatherMap "main" categories → bigger, nicer glyph than the previous
+# single-char fallback. Two-char where helpful so we can scale comfortably.
+_WX_ICON = {
+    "Clear":        "☀",
+    "Clouds":       "☁",
+    "Rain":         "☂",
+    "Drizzle":      "☂",
+    "Thunderstorm": "⛈",
+    "Snow":         "❄",
+    "Mist":         "≈",
+    "Fog":          "≈",
+    "Haze":         "≈",
+    "Smoke":        "≈",
+}
+
+
+class IdleScene(Protocol):
+    """An ambient scene drawn during IDLE state instead of the face."""
+
+    def render(self, surface: object, tick: int, w: int, h: int) -> None: ...
 
 
 class ScreenCompositor:
-    """Wraps a face renderer with a status overlay (Option A layout)."""
+    """Wraps a face renderer with the pretty chrome + optional IdleScene."""
 
     def __init__(
         self,
         face_renderer: object,
         width: int,
         height: int,
-        location: str = "San Francisco",
+        location: str = "",
+        idle_scene: IdleScene | None = None,
     ) -> None:
         self._face = face_renderer
         self._w = width
         self._h = height
         self._location = location
+        self._idle_scene = idle_scene
         self._status: str = ""
         self._weather: dict[str, Any] | None = None
         self._weather_fetched_at: float = 0.0
+        # lazy-init pygame Font objects
+        self._font_lg: object | None = None        # 22px — clock + temp
+        self._font_sm: object | None = None        # 12px — date + condition
+        self._font_status: object | None = None    # 13px — bottom band
+        self._font_wx: object | None = None        # 28px — weather glyph
 
     # ── public surface ─────────────────────────────────────────────────────
 
     def set_status(self, text: str) -> None:
-        """Show `text` in the bottom band, or hide the band entirely if empty."""
         self._status = (text or "").strip()
 
     def set_location(self, location: str) -> None:
-        """Change the city used for the weather chip; next render refetches."""
-        self._location = (location or "").strip() or self._location
+        self._location = (location or "").strip()
         self._weather_fetched_at = 0.0
 
+    def set_idle_scene(self, scene: IdleScene | None) -> None:
+        self._idle_scene = scene
+
     def render(self, state: LumiState, tick: int) -> Frame:
-        """Compose chrome + face into one Frame at the full screen size."""
         import pygame  # noqa: PLC0415
 
-        # Lazy refresh the weather (won't block the render — uses a short timeout
-        # and falls back to "no weather" on failure).
         self._maybe_refresh_weather()
-
-        # Ask the face for a frame at the FACE area's size (excluding chrome).
-        face_h = self._h - _TOP_H - (_BOTTOM_H if self._status else 0)
-        try:
-            self._face.set_target_size(self._w, face_h)  # type: ignore[attr-defined]
-        except AttributeError:
-            pass
-        face_frame = self._face.render(state, tick)
 
         surface = pygame.Surface((self._w, self._h))
         surface.fill(_BG)
 
-        # blit the face under the chrome
-        face_arr = face_frame.pixels  # H x W x 3
-        face_surface = pygame.surfarray.make_surface(np.transpose(face_arr, (1, 0, 2)))
-        # Scale to fit the face area if the face renderer's actual output
-        # doesn't match (some renderers ignore set_target_size).
-        if face_surface.get_width() != self._w or face_surface.get_height() != face_h:
-            face_surface = pygame.transform.smoothscale(face_surface, (self._w, face_h))
-        surface.blit(face_surface, (0, _TOP_H))
+        body_h = self._h - _TOP_H - (_BOTTOM_H if self._status else 0)
+        body_y = _TOP_H
 
-        # top strip
-        self._draw_top_strip(surface)
-        # bottom band — only when status set
+        # Middle area: idle scene during IDLE if configured, else the face.
+        if state == LumiState.IDLE and self._idle_scene is not None:
+            sub = pygame.Surface((self._w, body_h))
+            sub.fill(_BG)
+            self._idle_scene.render(sub, tick, self._w, body_h)
+            surface.blit(sub, (0, body_y))
+        else:
+            face_frame = self._face.render(state, tick)
+            face_arr = face_frame.pixels
+            face_surface = pygame.surfarray.make_surface(np.transpose(face_arr, (1, 0, 2)))
+            if face_surface.get_width() != self._w or face_surface.get_height() != body_h:
+                face_surface = pygame.transform.smoothscale(face_surface, (self._w, body_h))
+            surface.blit(face_surface, (0, body_y))
+
+        self._draw_top_bar(surface)
         if self._status:
             self._draw_bottom_band(surface)
 
         pixels = np.transpose(pygame.surfarray.array3d(surface), (1, 0, 2))
         return Frame(pixels=pixels)
 
-    # ── drawing helpers ────────────────────────────────────────────────────
+    # ── drawing ────────────────────────────────────────────────────────────
 
-    def _draw_top_strip(self, surface: object) -> None:
+    def _font(self, attr: str, size: int, bold: bool = False) -> object:
         import pygame  # noqa: PLC0415
 
-        font = pygame.font.SysFont("Menlo,monospace", 12, bold=True)
-        # clock — left
-        clock_text = datetime.now().strftime("%H:%M")
-        clock_img = font.render(clock_text, True, _FG)
-        surface.blit(clock_img, (8, (_TOP_H - clock_img.get_height()) // 2))
-        # weather — right
+        cached = getattr(self, attr)
+        if cached is None:
+            try:
+                cached = pygame.font.SysFont("Menlo,SF Pro Display,Helvetica,sans-serif",
+                                              size, bold=bold)
+            except Exception:
+                cached = pygame.font.Font(None, size)
+            setattr(self, attr, cached)
+        return cached
+
+    def _draw_top_bar(self, surface: object) -> None:
+        import pygame  # noqa: PLC0415
+
+        pygame.draw.rect(surface, _BG_BAR, (0, 0, self._w, _TOP_H))
+        pygame.draw.line(surface, (60, 60, 70), (0, _TOP_H - 1), (self._w, _TOP_H - 1))
+
+        font_lg = self._font("_font_lg", 22, bold=True)
+        font_sm = self._font("_font_sm", 12, bold=False)
+        now = datetime.now()
+
+        # ── left: time + day/date ──
+        time_img = font_lg.render(now.strftime("%H:%M"), True, _FG)  # type: ignore[attr-defined]
+        date_img = font_sm.render(now.strftime("%a, %b %-d"), True, _FG_DIM)  # type: ignore[attr-defined]
+        surface.blit(time_img, (12, 6))
+        surface.blit(date_img, (12, 6 + time_img.get_height() - 2))
+
+        # ── right: weather icon + temp, condition below ──
         if self._weather:
-            t = self._weather.get("temperature_c")
+            font_wx = self._font("_font_wx", 28, bold=False)
+            main = self._weather.get("main", "")
+            temp = self._weather.get("temperature_c")
             cond = self._weather.get("conditions", "")
-            glyph = self._weather_glyph(cond)
-            wx = f"{glyph} {round(t)}°C" if t is not None else f"{glyph} —"
-            wx_img = font.render(wx, True, _FG)
-            surface.blit(wx_img, (self._w - wx_img.get_width() - 8,
-                                  (_TOP_H - wx_img.get_height()) // 2))
-        # subtle separator
-        pygame.draw.line(surface, (60, 60, 60), (0, _TOP_H - 1), (self._w, _TOP_H - 1))
+            glyph = _WX_ICON.get(main, "·")
+
+            glyph_img = font_wx.render(glyph, True, _ACCENT)  # type: ignore[attr-defined]
+            temp_text = f"{round(temp)}°C" if temp is not None else "—"
+            temp_img = font_lg.render(temp_text, True, _FG)  # type: ignore[attr-defined]
+            cond_img = font_sm.render(cond[:24], True, _FG_DIM)  # type: ignore[attr-defined]
+
+            x_right = self._w - 12
+            # bottom-align temp with date line; glyph aligned with time
+            temp_x = x_right - temp_img.get_width()
+            glyph_x = temp_x - glyph_img.get_width() - 6
+            surface.blit(glyph_img, (glyph_x, 4))
+            surface.blit(temp_img, (temp_x, 6))
+            surface.blit(cond_img, (x_right - cond_img.get_width(),
+                                     6 + temp_img.get_height() - 2))
 
     def _draw_bottom_band(self, surface: object) -> None:
         import pygame  # noqa: PLC0415
 
         y0 = self._h - _BOTTOM_H
-        pygame.draw.line(surface, (60, 60, 60), (0, y0), (self._w, y0))
-        font = pygame.font.SysFont("Menlo,monospace", 12, bold=True)
-        # Pink accent dot, then status text
-        pygame.draw.circle(surface, _ACCENT, (10, y0 + _BOTTOM_H // 2), 3)
-        text_img = font.render(self._status, True, _FG)
-        surface.blit(text_img, (20, y0 + (_BOTTOM_H - text_img.get_height()) // 2))
+        pygame.draw.rect(surface, _BG_BAR, (0, y0, self._w, _BOTTOM_H))
+        pygame.draw.line(surface, (60, 60, 70), (0, y0), (self._w, y0))
+        font = self._font("_font_status", 13, bold=True)
+        pygame.draw.circle(surface, _ACCENT, (12, y0 + _BOTTOM_H // 2), 3)
+        text_img = font.render(self._status, True, _FG)  # type: ignore[attr-defined]
+        surface.blit(text_img, (22, y0 + (_BOTTOM_H - text_img.get_height()) // 2))
 
-    @staticmethod
-    def _weather_glyph(condition: str) -> str:
-        c = (condition or "").lower()
-        if "thunder" in c: return "⛈"
-        if "snow" in c: return "❄"
-        if "rain" in c or "drizzle" in c: return "☂"
-        if "cloud" in c: return "☁"
-        if "clear" in c or "sun" in c: return "☀"
-        if "mist" in c or "fog" in c: return "≈"
-        return "·"
-
-    # ── weather fetch (cached, best-effort) ────────────────────────────────
+    # ── weather fetch ──────────────────────────────────────────────────────
 
     def _maybe_refresh_weather(self) -> None:
+        if not self._location:
+            return
         now = time.monotonic()
         if self._weather is not None and (now - self._weather_fetched_at) < _WEATHER_TTL_S:
             return
@@ -168,12 +223,13 @@ class ScreenCompositor:
             )
             r.raise_for_status()
             d = r.json()
+            wx0 = (d.get("weather") or [{}])[0]
             self._weather = {
                 "temperature_c": d["main"]["temp"],
-                "conditions": (d.get("weather") or [{}])[0].get("description", ""),
+                "conditions": wx0.get("description", ""),
+                "main": wx0.get("main", ""),
             }
             self._weather_fetched_at = now
-            log.info("chrome.weather_refreshed", location=self._location)
+            log.info("chrome.weather_refreshed", location=self._location, main=wx0.get("main"))
         except (httpx.HTTPError, KeyError, json.JSONDecodeError) as exc:
             log.debug("chrome.weather_failed", error=str(exc))
-            # Keep prior cached value (if any); don't bash to None.

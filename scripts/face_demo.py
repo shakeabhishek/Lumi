@@ -19,7 +19,7 @@ from lumi.runtime.state_machine import LumiState, StateMachine
 from lumi.ui.face.engine import FaceEngine
 
 STATES = [LumiState.IDLE, LumiState.LISTEN, LumiState.THINK, LumiState.SPEAK]
-THEMES = ["pixel", "vector", "terminal"]
+THEMES = ["vector", "terminal", "pixel"]  # terminal is the cute bear, not ASCII boxes
 
 
 def _build_face(theme: str, color: str | None, w: int = 480, h: int = 320) -> tuple[object, FaceEngine, StateMachine]:
@@ -30,7 +30,7 @@ def _build_face(theme: str, color: str | None, w: int = 480, h: int = 320) -> tu
     return display, face, sm
 
 
-def main(theme: str = "pixel", color: str | None = None) -> None:
+def main(theme: str = "vector", color: str | None = None) -> None:
     if theme not in THEMES:
         print(f"Unknown theme '{theme}'. Choose from: {', '.join(THEMES)}")
         sys.exit(1)
@@ -76,7 +76,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--theme", default="pixel", choices=THEMES)
+    parser.add_argument("--theme", default="vector", choices=THEMES)
     parser.add_argument("--color", default=None, help="Foreground hex color, e.g. #FF6B6B")
     args = parser.parse_args()
     main(args.theme, args.color)
