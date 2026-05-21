@@ -117,6 +117,19 @@ fi
 # ── 2. openclaw ──────────────────────────────────────────────────────────────
 if [[ $START_OPENCLAW -eq 1 ]]; then
   step "2/3  openclaw (skill gateway)"
+  # Export plugin API keys from the OS keychain into the gateway's environment.
+  # The launchd-managed gateway inherits whatever's set here when we restart it.
+  if command -v uv >/dev/null; then
+    for key_name in openweathermap_api_key; do
+      env_name=$(echo "$key_name" | tr '[:lower:]' '[:upper:]')
+      value=$(uv run --extra dev --extra web --extra memory --extra secrets python \
+        -c "from lumi.runtime import secrets; print(secrets.get_secret('$key_name'))" 2>/dev/null | tail -1)
+      if [[ -n "$value" ]]; then
+        export "$env_name=$value"
+        ok "exported $env_name from keychain (${#value} chars)"
+      fi
+    done
+  fi
   if [[ ! -d "$HOME/.openclaw" ]]; then
     warn "openclaw not set up. run:  bash openclaw-service/setup.sh"
     warn "skipping openclaw; continuing without skills"

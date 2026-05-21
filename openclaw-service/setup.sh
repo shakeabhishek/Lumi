@@ -78,7 +78,51 @@ for skill_dir in "$SCRIPT_DIR/skills"/*/; do
   echo "  ✓ $skill_name → $dest"
 done
 
-# ── 6. Verify install ─────────────────────────────────────────────────────────
+# ── 6. Install Lumi JS plugins ────────────────────────────────────────────────
+# These are real OpenClaw extensions (vs the markdown SKILL.md catalog entries
+# above): a package.json + openclaw.plugin.json + index.js that calls
+# api.registerTool(). The model sees these as callable functions, not as
+# documentation in the system prompt.
+PLUGINS_DEST="$HOME/.openclaw/extensions"
+mkdir -p "$PLUGINS_DEST"
+echo ""
+echo "Installing JS plugins..."
+for plugin_dir in "$SCRIPT_DIR/plugins"/*/; do
+  plugin_name=$(basename "$plugin_dir")
+  dest="$PLUGINS_DEST/$plugin_name"
+  if [[ -d "$dest" ]]; then
+    rm -rf "$dest"
+  fi
+  cp -R "$plugin_dir" "$dest"
+  # The plugin needs openclaw resolvable — symlink to the project's node_modules.
+  mkdir -p "$dest/node_modules"
+  ln -sfn "$LUMI_ROOT/node_modules/openclaw" "$dest/node_modules/openclaw"
+  echo "  ✓ $plugin_name → $dest"
+done
+
+# Auto-add new plugin ids to the gateway config's plugins.allow whitelist so
+# they get loaded on next gateway restart.
+echo ""
+echo "Wiring plugins.allow in $CONFIG_DEST..."
+node --input-type=module -e "
+import fs from 'node:fs';
+import path from 'node:path';
+const cfgPath = process.env.HOME + '/.openclaw/openclaw.json';
+const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+cfg.plugins ??= {};
+const allow = new Set(cfg.plugins.allow ?? []);
+// Always-needed bundled plugins so they don't get filtered out.
+for (const id of ['acpx','browser','device-pair','phone-control','talk-voice','memory-core']) allow.add(id);
+for (const dir of fs.readdirSync('$PLUGINS_DEST')) {
+  const meta = path.join('$PLUGINS_DEST', dir, 'openclaw.plugin.json');
+  if (fs.existsSync(meta)) allow.add(JSON.parse(fs.readFileSync(meta, 'utf8')).id);
+}
+cfg.plugins.allow = [...allow].sort();
+fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+console.log('  ✓ plugins.allow now:', cfg.plugins.allow.join(', '));
+"
+
+# ── 7. Verify install ─────────────────────────────────────────────────────────
 echo ""
 echo "Verifying..."
 npx openclaw --version

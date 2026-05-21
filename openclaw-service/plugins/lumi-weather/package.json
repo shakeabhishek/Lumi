@@ -1,0 +1,10 @@
+{
+  "name": "@lumi/weather",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenClaw plugin: current weather via OpenWeatherMap (Lumi)",
+  "openclaw": {
+    "extensions": ["./index.js"]
+  }
+}

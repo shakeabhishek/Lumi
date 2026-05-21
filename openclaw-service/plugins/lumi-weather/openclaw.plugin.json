@@ -1,0 +1,10 @@
+{
+  "id": "lumi-weather",
+  "name": "Lumi Weather",
+  "description": "Current weather conditions via OpenWeatherMap",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
