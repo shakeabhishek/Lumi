@@ -44,12 +44,31 @@ class AuditLog:
             log.warning("audit.write_failed", error=str(exc))
 
     def get_recent(self, n: int = 20) -> list[dict]:
-        """Return the n most recent entries, newest last."""
+        """Return the n most recent entries, newest last.
+
+        One corrupt JSON line (interrupted write, manual edit, fsck recovery)
+        must not poison the entire viewer — we skip individual bad lines and
+        return whatever we could parse. Read errors at the file level still
+        return [].
+        """
         if not self._path.exists():
             return []
         try:
             lines = self._path.read_text(encoding="utf-8").splitlines()
-            return [json.loads(line) for line in lines[-n:] if line.strip()]
-        except (OSError, json.JSONDecodeError) as exc:
+        except OSError as exc:
             log.warning("audit.read_failed", error=str(exc))
             return []
+
+        out: list[dict] = []
+        skipped = 0
+        for line in lines[-n * 2:]:        # over-read in case some are bad
+            if not line.strip():
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                skipped += 1
+                continue
+        if skipped:
+            log.warning("audit.skipped_corrupt_lines", n=skipped)
+        return out[-n:]

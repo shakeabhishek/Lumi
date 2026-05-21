@@ -69,6 +69,54 @@ class TestGetRecent:
         assert entry["input"] == "switch to code mode"
         assert entry["result"] == "Switched to code mode."
 
+    def test_one_corrupt_line_does_not_poison_the_whole_read(self, tmp_path: Path) -> None:
+        """A truncated write or manually-edited line must not blank the viewer.
+        Skip the bad line, return the rest."""
+        al = AuditLog(tmp_path)
+        al.log("native", "timer", "input 1", "result 1")
+        al.log("native", "timer", "input 2", "result 2")
+        # Wedge a corrupt line into the middle.
+        path = tmp_path / "audit_log.jsonl"
+        existing = path.read_text().splitlines()
+        path.write_text(existing[0] + "\n{not valid json\n" + existing[1] + "\n")
+
+        entries = al.get_recent()
+        assert len(entries) == 2
+        assert entries[0]["input"] == "input 1"
+        assert entries[1]["input"] == "input 2"
+
+    def test_trailing_corrupt_line_alone_still_yields_prior_entries(
+        self, tmp_path: Path,
+    ) -> None:
+        """A crash mid-append leaves a partial last line. Old behaviour blanked
+        the viewer; new behaviour returns the entries that committed cleanly."""
+        al = AuditLog(tmp_path)
+        for i in range(5):
+            al.log("native", "timer", f"in {i}", f"out {i}")
+        path = tmp_path / "audit_log.jsonl"
+        # Append a truncated JSON object (simulating crash mid-write)
+        with path.open("a") as f:
+            f.write('{"ts":"2026-05-21T...","sourc')
+
+        entries = al.get_recent()
+        assert len(entries) == 5
+        assert entries[-1]["input"] == "in 4"
+
+    def test_n_cap_still_applies_when_skipping_corrupt_lines(self, tmp_path: Path) -> None:
+        """The over-read shouldn't let a get_recent(n=3) return 5."""
+        al = AuditLog(tmp_path)
+        for i in range(10):
+            al.log("native", "timer", f"in {i}", f"out {i}")
+        # Sprinkle some bad lines in.
+        path = tmp_path / "audit_log.jsonl"
+        lines = path.read_text().splitlines()
+        lines.insert(2, "{garbage")
+        lines.insert(7, "also garbage")
+        path.write_text("\n".join(lines) + "\n")
+
+        entries = al.get_recent(n=3)
+        assert len(entries) == 3
+
 
 class TestRouterIntegration:
     """Verify the router logs invocations via the audit log."""
