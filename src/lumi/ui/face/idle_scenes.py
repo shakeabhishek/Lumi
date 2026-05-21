@@ -67,57 +67,65 @@ class RainScene:
         self._drops: list[dict] = []      # lazy-init on first render (need w/h)
         self._w = 0
         self._h = 0
+        # Cached surfaces — recomputed only on resize, NOT per frame.
+        # Re-rendering the per-line gradient and allocating a fresh SRCALPHA
+        # surface every two frames was the dominant cost on the Pi (~9.6k
+        # line calls per second at 30fps).
+        self._gradient: object | None = None
+        self._wash: object | None = None
+        self._rng = random.Random(0xCAFE)
 
-    def _ensure_drops(self, w: int, h: int) -> None:
+    def _ensure_caches(self, w: int, h: int) -> None:
+        import pygame  # noqa: PLC0415
+
         if self._drops and self._w == w and self._h == h:
             return
         self._w = w
         self._h = h
-        rng = random.Random(0xCAFE)
+        self._rng = random.Random(0xCAFE)
         self._drops = [
             {
-                "x": rng.uniform(0, w),
-                "y": rng.uniform(0, h),
-                "speed": rng.uniform(2.2, 5.5),
-                "length": rng.randint(6, 14),
-                "alpha": rng.randint(140, 220),
+                "x": self._rng.uniform(0, w),
+                "y": self._rng.uniform(0, h),
+                "speed": self._rng.uniform(2.2, 5.5),
+                "length": self._rng.randint(6, 14),
+                "alpha": self._rng.randint(140, 220),
             }
             for _ in range(self._N_DROPS)
         ]
-
-    def render(self, surface: object, tick: int, w: int, h: int) -> None:
-        import pygame  # noqa: PLC0415
-
-        self._ensure_drops(w, h)
-
-        # vertical gradient backdrop
+        # Render the gradient once into a backing surface.
+        self._gradient = pygame.Surface((w, h))
         for y in range(h):
             t = y / max(h - 1, 1)
             r = int(self._PALETTE_TOP[0] * (1 - t) + self._PALETTE_BOT[0] * t)
             g = int(self._PALETTE_TOP[1] * (1 - t) + self._PALETTE_BOT[1] * t)
             b = int(self._PALETTE_TOP[2] * (1 - t) + self._PALETTE_BOT[2] * t)
-            pygame.draw.line(surface, (r, g, b), (0, y), (w, y))
+            pygame.draw.line(self._gradient, (r, g, b), (0, y), (w, y))
+        # And the alpha wash — one allocation, reused every frame it's drawn.
+        self._wash = pygame.Surface((w, h), pygame.SRCALPHA)
+        self._wash.fill((255, 255, 255, 6))
+
+    def render(self, surface: object, tick: int, w: int, h: int) -> None:
+        import pygame  # noqa: PLC0415
+
+        self._ensure_caches(w, h)
+
+        # Blit the cached gradient — one operation, not 320 line draws.
+        surface.blit(self._gradient, (0, 0))
 
         # raindrops
         for d in self._drops:
             d["y"] += d["speed"]
             if d["y"] > h + d["length"]:
                 d["y"] = -d["length"]
-                d["x"] = random.uniform(0, w)
+                d["x"] = self._rng.uniform(0, w)
             x = int(d["x"])
             y = int(d["y"])
-            color = (
-                min(255, self._DROP_COLOR[0]),
-                min(255, self._DROP_COLOR[1]),
-                min(255, self._DROP_COLOR[2]),
-            )
-            pygame.draw.line(surface, color, (x, y), (x, y + d["length"]))
+            pygame.draw.line(surface, self._DROP_COLOR, (x, y), (x, y + d["length"]))
 
-        # subtle wash to suggest depth
+        # subtle wash to suggest depth — cached surface, no allocation.
         if tick % 2 == 0:
-            wash = pygame.Surface((w, h), pygame.SRCALPHA)
-            wash.fill((255, 255, 255, 6))
-            surface.blit(wash, (0, 0))
+            surface.blit(self._wash, (0, 0))
 
 
 # ── Snow (small variant, free) ──────────────────────────────────────────────
@@ -134,21 +142,22 @@ class SnowScene:
         self._flakes: list[dict] = []
         self._w = 0
         self._h = 0
+        self._rng = random.Random(0xBEEF)
 
     def _ensure_flakes(self, w: int, h: int) -> None:
         if self._flakes and self._w == w and self._h == h:
             return
         self._w = w
         self._h = h
-        rng = random.Random(0xBEEF)
+        self._rng = random.Random(0xBEEF)
         self._flakes = [
             {
-                "x": rng.uniform(0, w),
-                "y": rng.uniform(0, h),
-                "speed": rng.uniform(0.6, 1.8),
-                "drift": rng.uniform(-0.4, 0.4),
-                "size": rng.randint(1, 3),
-                "phase": rng.uniform(0, 6.28),
+                "x": self._rng.uniform(0, w),
+                "y": self._rng.uniform(0, h),
+                "speed": self._rng.uniform(0.6, 1.8),
+                "drift": self._rng.uniform(-0.4, 0.4),
+                "size": self._rng.randint(1, 3),
+                "phase": self._rng.uniform(0, 6.28),
             }
             for _ in range(self._N_FLAKES)
         ]
@@ -164,7 +173,7 @@ class SnowScene:
             f["x"] += f["drift"] + math.sin((tick + f["phase"] * 20) / 40) * 0.5
             if f["y"] > h + 2:
                 f["y"] = -2
-                f["x"] = random.uniform(0, w)
+                f["x"] = self._rng.uniform(0, w)
             if f["x"] < -2: f["x"] = w + 2
             if f["x"] > w + 2: f["x"] = -2
             shimmer = 200 + int(40 * math.sin((tick + f["phase"] * 30) / 18))
