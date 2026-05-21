@@ -1,12 +1,15 @@
-"""Terminal face renderer — CRT phosphor aesthetic with ASCII art face.
+"""Terminal face renderer — CRT phosphor aesthetic with cute kawaii bear face.
 
-Color: classic green phosphor (#33FF33) on black. Scanlines + monospace font.
+Replaces the original box-eye ASCII art with the kawaii bear (`ʕ ᴥ ʔ`)
+the user picked during onboarding preview. Body characters render in
+phosphor green (terminal aesthetic); heart eyes render in pink so the
+cute-bear vibe carries.
 
 States:
-  IDLE   — box eyes, flat mouth, slow blink
-  LISTEN — wide eyes with crosshair pupil, scrolling input bar
-  THINK  — squint eyes, animated ellipsis
-  SPEAK  — open eyes, wave characters cycling across mouth line
+  IDLE   — ʕ♥ᴥ♥ʔ  (heart-eyed, content)        slow blink to ʕ-ᴥ-ʔ
+  LISTEN — ʕ◉ᴥ◉ʔ  (alert, ears up)             "Listening" with a pulsing bar
+  THINK  — ʕ•ᴥ•ʔ  (small eyes, focused)        cycling thought dots
+  SPEAK  — ʕ⌐■ᴥ■ʔ (mouth open)                cycling sine wave
 """
 
 from __future__ import annotations
@@ -17,71 +20,71 @@ from ...hardware.base import Frame
 from ...runtime.state_machine import LumiState
 
 _BG: tuple[int, int, int] = (0, 0, 0)
+_PINK: tuple[int, int, int] = (255, 122, 201)        # heart pink, on top of phosphor green body
 
-_FONT_SIZE = 26
-_LINE_H = 30
+_FACE_FONT_SIZE = 80     # the bear face — big, like the dashboard preview
+_LABEL_FONT_SIZE = 18
 
-# ASCII art rows — 32-char wide, 9 rows. Tuple index = animation frame.
-_IDLE: tuple[list[str], ...] = (
-    [
-        "                                ",
-        "                                ",
-        "  +-------+    +-------+        ",
-        "  |  ( O )|    |  ( O )|        ",
-        "  +-------+    +-------+        ",
-        "                                ",
-        "       +------------+           ",
-        "       +------------+           ",
-        "                                ",
-    ],
-    # blink frame
-    [
-        "                                ",
-        "                                ",
-        "  +-------+    +-------+        ",
-        "  |  (---)|    |  (---)|        ",
-        "  +-------+    +-------+        ",
-        "                                ",
-        "       +------------+           ",
-        "       +------------+           ",
-        "                                ",
-    ],
-)
+# State → (face_string, label_or_animation_callback)
+_FACES = {
+    LumiState.IDLE:   "ʕ♥ᴥ♥ʔ",
+    LumiState.LISTEN: "ʕ◉ᴥ◉ʔ",
+    LumiState.THINK:  "ʕ•ᴥ•ʔ",
+    LumiState.SPEAK:  "ʕ⌐■ᴥ■ʔ",
+}
+# Blink frame for IDLE: every ~90 ticks, eyes close for ~4 ticks
+_IDLE_BLINK = "ʕ-ᴥ-ʔ"
 
-# LISTEN — crosshair pupil, scrolling bar animates via tick
-_LISTEN_EYE = ["( + )", "( # )", "( @ )", "( # )"]
-_LISTEN_BAR = ["[==========]", "[===========]", "[============]", "[===========]"]
-
-# THINK — squint eyes, cycling ellipsis dots
-_THINK_DOTS = ["         .  ", "        .   ", "     .   .  ", "  .  .   .  "]
-
-# SPEAK — wave characters cycling per tick
-_WAVE_CHARS = "~-~^~-~^"
+# Bottom animation bars/dots by state (label is below the face)
+_LISTEN_BAR = ("[          ]", "[==        ]", "[====      ]", "[======    ]",
+               "[========  ]", "[==========]", "[========  ]", "[======    ]",
+               "[====      ]", "[==        ]")
+_THINK_DOTS = (".   ", "..  ", "... ", "....", " ...", "  ..", "   .", "    ")
 
 
 class TerminalFaceRenderer:
+    """Cute kawaii bear face on CRT phosphor scanlines."""
+
     def __init__(
         self,
         width: int,
         height: int,
-        fg_color: tuple[int, int, int] = (51, 255, 51),
+        fg_color: tuple[int, int, int] = (51, 255, 51),       # phosphor green
     ) -> None:
         self._w = width
         self._h = height
         self._fg = fg_color
-        # Scanline tint: 7% of fg brightness
         self._scan = tuple(max(0, int(c * 0.07)) for c in fg_color)
-        self._font: object | None = None
+        self._face_font: object | None = None
+        self._label_font: object | None = None
 
-    def _get_font(self) -> object:
-        if self._font is None:
+    def _get_face_font(self) -> object:
+        if self._face_font is None:
+            import pygame  # noqa: PLC0415
+
+            # Try fonts known to ship the Canadian-Syllabics codepoint (ʕ ʔ).
+            # SF Mono on macOS / DejaVu Sans Mono on Linux both have it.
+            for name in ("SF Mono", "DejaVu Sans Mono", "Menlo", "Consolas", "monospace"):
+                try:
+                    f = pygame.font.SysFont(name, _FACE_FONT_SIZE)
+                    if f.size("ʕ")[0] > 0:
+                        self._face_font = f
+                        break
+                except Exception:
+                    continue
+            if self._face_font is None:
+                self._face_font = pygame.font.Font(None, _FACE_FONT_SIZE)
+        return self._face_font
+
+    def _get_label_font(self) -> object:
+        if self._label_font is None:
             import pygame  # noqa: PLC0415
 
             try:
-                self._font = pygame.font.SysFont("monospace", _FONT_SIZE)
+                self._label_font = pygame.font.SysFont("monospace", _LABEL_FONT_SIZE, bold=True)
             except Exception:
-                self._font = pygame.font.Font(None, _FONT_SIZE)
-        return self._font
+                self._label_font = pygame.font.Font(None, _LABEL_FONT_SIZE)
+        return self._label_font
 
     def render(self, state: LumiState, tick: int) -> Frame:
         import pygame  # noqa: PLC0415
@@ -89,17 +92,22 @@ class TerminalFaceRenderer:
         surface = pygame.Surface((self._w, self._h))
         surface.fill(_BG)
         self._draw_scanlines(surface)
-        match state:
-            case LumiState.IDLE:
-                self._draw_idle(surface, tick)
-            case LumiState.LISTEN:
-                self._draw_listen(surface, tick)
-            case LumiState.THINK:
-                self._draw_think(surface, tick)
-            case LumiState.SPEAK:
-                self._draw_speak(surface, tick)
+
+        face_text = _FACES.get(state, _FACES[LumiState.IDLE])
+        # Blink for IDLE
+        if state == LumiState.IDLE and (tick % 90) < 4:
+            face_text = _IDLE_BLINK
+        self._blit_face_with_pink_hearts(surface, face_text)
+
+        # State-specific bottom-row animation
+        label = self._label_for(state, tick)
+        if label:
+            self._blit_label(surface, label)
+
         pixels = np.transpose(pygame.surfarray.array3d(surface), (1, 0, 2))
         return Frame(pixels=pixels)
+
+    # ── helpers ─────────────────────────────────────────────────────────────
 
     def _draw_scanlines(self, surface: object) -> None:
         import pygame  # noqa: PLC0415
@@ -107,68 +115,36 @@ class TerminalFaceRenderer:
         for y in range(0, self._h, 2):
             pygame.draw.line(surface, self._scan, (0, y), (self._w, y))
 
-    def _blit_lines(self, surface: object, lines: list[str], color: tuple[int, int, int] | None = None) -> None:
-        """Render a list of strings centered vertically and horizontally."""
-        import pygame  # noqa: PLC0415
+    def _blit_face_with_pink_hearts(self, surface: object, text: str) -> None:
+        """Render the bear face char-by-char so the hearts can be pink while
+        the body characters render in the foreground (phosphor) color."""
+        font = self._get_face_font()
+        # First measure the whole string so we can center.
+        glyph_surfaces = []
+        for ch in text:
+            color = _PINK if ch == "♥" else self._fg
+            glyph_surfaces.append(font.render(ch, True, color))  # type: ignore[attr-defined]
+        total_w = sum(g.get_width() for g in glyph_surfaces)
+        max_h = max((g.get_height() for g in glyph_surfaces), default=0)
+        x = (self._w - total_w) // 2
+        y = (self._h - max_h) // 2 - 10  # nudge up a touch so label fits below
+        for g in glyph_surfaces:
+            surface.blit(g, (x, y))  # type: ignore[attr-defined]
+            x += g.get_width()
 
-        fg = color if color is not None else self._fg
-        font = self._get_font()
-        total_h = len(lines) * _LINE_H
-        y0 = (self._h - total_h) // 2
-        for i, line in enumerate(lines):
-            text_surf = font.render(line, False, fg)  # type: ignore[attr-defined]
-            x = (self._w - text_surf.get_width()) // 2
-            y = y0 + i * _LINE_H
-            surface.blit(text_surf, (x, y))  # type: ignore[attr-defined]
+    def _blit_label(self, surface: object, text: str) -> None:
+        font = self._get_label_font()
+        img = font.render(text, True, self._fg)  # type: ignore[attr-defined]
+        x = (self._w - img.get_width()) // 2
+        y = (self._h * 3) // 4
+        surface.blit(img, (x, y))  # type: ignore[attr-defined]
 
-    def _draw_idle(self, surface: object, tick: int) -> None:
-        frame = 1 if (tick % 90) < 4 else 0
-        self._blit_lines(surface, _IDLE[frame])
-
-    def _draw_listen(self, surface: object, tick: int) -> None:
-        eye = _LISTEN_EYE[(tick // 8) % len(_LISTEN_EYE)]
-        bar = _LISTEN_BAR[(tick // 6) % len(_LISTEN_BAR)]
-        lines = [
-            "                                ",
-            "                                ",
-            f"  +-------+    +-------+        ",
-            f"  | {eye}  |    | {eye}  |    ",
-            f"  +-------+    +-------+        ",
-            "                                ",
-            f"       {bar}           ",
-            "                                ",
-            "                                ",
-        ]
-        self._blit_lines(surface, lines)
-
-    def _draw_think(self, surface: object, tick: int) -> None:
-        dots = _THINK_DOTS[(tick // 12) % len(_THINK_DOTS)]
-        lines = [
-            "                                ",
-            "                                ",
-            "  +-------+    +-------+        ",
-            "  |  (---)|    |  (---)|        ",
-            "  +-------+    +-------+        ",
-            "                                ",
-            f"      {dots}                   ",
-            "                                ",
-            "                                ",
-        ]
-        self._blit_lines(surface, lines)
-
-    def _draw_speak(self, surface: object, tick: int) -> None:
-        # Shift wave characters by tick to scroll them
-        offset = tick % len(_WAVE_CHARS)
-        wave = (_WAVE_CHARS * 3)[offset: offset + 10]
-        lines = [
-            "                                ",
-            "                                ",
-            "  +-------+    +-------+        ",
-            "  |  ( O )|    |  ( O )|        ",
-            "  +-------+    +-------+        ",
-            "                                ",
-            f"       [ {wave} ]              ",
-            "                                ",
-            "                                ",
-        ]
-        self._blit_lines(surface, lines)
+    def _label_for(self, state: LumiState, tick: int) -> str:
+        if state == LumiState.LISTEN:
+            return _LISTEN_BAR[(tick // 4) % len(_LISTEN_BAR)]
+        if state == LumiState.THINK:
+            return _THINK_DOTS[(tick // 6) % len(_THINK_DOTS)]
+        if state == LumiState.SPEAK:
+            offset = tick % 8
+            return ("~-~^~-~^~-~^~-~^"[offset: offset + 12])
+        return ""
