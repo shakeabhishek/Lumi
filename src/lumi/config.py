@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # LLM
     llm_backend: LLMBackendName = LLMBackendName.OLLAMA
     ollama_host: str = "http://127.0.0.1:11434"
-    ollama_model: str = "qwen2.5:1.5b"
+    ollama_model: str = "qwen2.5:7b"
 
     # Audio
     audio_input_device: str | None = None

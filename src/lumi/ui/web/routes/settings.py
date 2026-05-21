@@ -280,6 +280,7 @@ async def cloud_post(
     clear_key: Annotated[str, Form()] = "",
 ) -> str:
     from ....runtime import secrets  # noqa: PLC0415
+    from ....skills.openclaw_operator import sync_to_openclaw  # noqa: PLC0415
 
     data_dir = request.app.state.data_dir
     s = load_settings(data_dir)
@@ -289,10 +290,6 @@ async def cloud_post(
     s.cloud_llm_provider = provider
     s.cloud_llm_model = cloud_llm_model.strip()
 
-    # API key handling:
-    #   - if "clear" was pressed → delete the keychain entry, flag = false
-    #   - if a non-empty value posted → store via keychain, flag = true
-    #   - if blank value posted → leave existing keychain entry alone
     if clear_key:
         secrets.delete_secret(_CLOUD_KEY_NAME)
         s.cloud_llm_api_key_set = False
@@ -303,4 +300,23 @@ async def cloud_post(
         except secrets.BackendUnavailable:
             s.cloud_llm_api_key_set = False
     save_settings(data_dir, s)
+
+    # Sync to OpenClaw (writes provider+key into ~/.openclaw/openclaw.json and
+    # restarts the gateway). Best-effort: if OpenClaw isn't installed, just
+    # log and continue.
+    if s.cloud_llm_api_key_set and provider:
+        try:
+            sync_to_openclaw(provider, s.cloud_llm_model)
+        except Exception:
+            pass
+    elif not s.cloud_llm_api_key_set:
+        try:
+            sync_to_openclaw("")  # revert OpenClaw to local
+        except Exception:
+            pass
+
+    # Drop the cached chat session so it picks up the new runtime_mode.
+    if hasattr(request.app.state, "chat_session"):
+        del request.app.state.chat_session
+
     return "/settings/cloud"

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Chat — Lumi{% endblock %}
+{% block content %}
+<h1>Chat with {{ settings.lumi_name }}</h1>
+<p>
+  Same skills, same memory, same router as the voice loop — just typed.
+  <span style="font-family:'Geist Mono',monospace;font-size:.78rem;color:var(--muted);margin-left:.5rem">
+    backend: {{ backend }} · model: {{ model }}
+  </span>
+</p>
+
+<div class="card" style="padding:0;overflow:hidden">
+  <div id="chat-log"
+       style="max-height:520px;overflow-y:auto;padding:1.25rem 1.5rem;background:var(--bg-card);border-radius:var(--radius-lg) var(--radius-lg) 0 0;"
+       hx-on::after-swap="this.scrollTop = this.scrollHeight">
+    {% if messages %}
+      {% include "chat_messages.html" %}
+    {% else %}
+      <div class="empty-state" style="padding:2rem">
+        Say something. Try <code>start a pomodoro</code>,
+        <code>what's the weather in tokyo</code>, or
+        <code>remember that I take oat milk</code>.
+      </div>
+    {% endif %}
+  </div>
+
+  <form hx-post="/chat/send"
+        hx-target="#chat-log"
+        hx-swap="beforeend"
+        hx-on::after-request="this.reset(); document.getElementById('chat-input').focus();"
+        style="display:flex;gap:.5rem;padding:.85rem 1.25rem;border-top:1px solid var(--border-soft);background:var(--bg)">
+    <input id="chat-input" name="message" type="text" autocomplete="off" required
+           placeholder="Say something to {{ settings.lumi_name }}…"
+           style="flex:1" autofocus>
+    <button type="submit" class="btn primary">Send</button>
+    <button type="button" class="btn" hx-post="/chat/clear" hx-target="#chat-log" hx-swap="innerHTML"
+            onclick="return confirm('Clear chat history (this turn + conversation memory)?')">
+      Clear
+    </button>
+  </form>
+</div>
+
+<details style="margin-top:1.25rem">
+  <summary style="cursor:pointer;color:var(--muted);font-size:.88rem">
+    Tip: clipboard / selection context
+  </summary>
+  <p style="font-size:.88rem;color:var(--muted);margin-top:.5rem">
+    With clipboard permission on in <a href="/settings/data">Settings → Privacy</a>,
+    Lumi automatically injects the latest hotkey or
+    <code>POST /api/context</code> payload into your next message. You'll see a
+    "📎 Selection added" line just above your message when this happens.
+  </p>
+</details>
+
+<style>
+  .chat-row { padding: .65rem 0; }
+  .chat-row + .chat-row { border-top: 1px solid var(--border-soft); }
+  .chat-bubble--user  { color: var(--text); }
+  .chat-bubble--lumi  { background: linear-gradient(135deg, #FFF0F6 0%, #FFFFFF 70%);
+                        padding: .65rem .9rem; border-radius: 14px;
+                        box-shadow: inset 0 0 0 1px rgba(255,77,143,0.18); }
+  .chat-bubble--context { background: rgba(167, 139, 250, 0.10);
+                          padding: .45rem .75rem; border-radius: 10px;
+                          font-size: .85rem; color: var(--text-soft);
+                          border-left: 3px solid var(--purple); }
+  .chat-meta { font-family:'Geist Mono',monospace; font-size:.72rem; color:var(--muted);
+               display:flex; gap:.85rem; align-items:baseline; margin-bottom:.2rem; }
+  .chat-meta .who { font-weight:600; color:var(--text); }
+</style>
+{% endblock %}

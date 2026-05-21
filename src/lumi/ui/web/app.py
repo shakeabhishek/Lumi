@@ -21,6 +21,7 @@ STATIC_DIR = _HERE / "static"
 
 
 def create_app(data_dir: Path) -> FastAPI:
+    from .routes.chat import router as chat_router
     from .routes.context_api import router as context_router
     from .routes.dashboard import router as dashboard_router
     from .routes.dev import router as dev_router
@@ -41,6 +42,7 @@ def create_app(data_dir: Path) -> FastAPI:
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     app.include_router(dashboard_router)
+    app.include_router(chat_router, prefix="/chat")
     app.include_router(onboarding_router, prefix="/onboarding")
     app.include_router(settings_router, prefix="/settings")
     app.include_router(skills_router, prefix="/skills")

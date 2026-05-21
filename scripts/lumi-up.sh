@@ -106,11 +106,11 @@ else
     exit 1
   fi
 fi
-if ollama list 2>/dev/null | awk 'NR>1 {print $1}' | grep -q "^qwen2.5:1.5b"; then
-  ok "model qwen2.5:1.5b present"
+if ollama list 2>/dev/null | awk 'NR>1 {print $1}' | grep -q "^qwen2.5:7b"; then
+  ok "model qwen2.5:7b present"
 else
-  warn "model qwen2.5:1.5b missing — pulling (~1GB)"
-  ollama pull qwen2.5:1.5b
+  warn "model qwen2.5:7b missing — pulling (~4.7GB)"
+  ollama pull qwen2.5:7b
   ok "pulled"
 fi
 

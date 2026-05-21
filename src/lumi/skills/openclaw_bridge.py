@@ -278,15 +278,25 @@ def _build_tools(catalog: list[tuple[str, dict[str, Any]]]) -> tuple[list[dict],
 
 
 class OpenClawBridge:
-    """Tool-calling client. Catalog from OpenClaw manifests, runtime via Ollama."""
+    """Tool-calling client. Two runtime modes:
+
+    - "ollama" (default): direct Ollama tool_calls with our Python tool impls.
+      Reliable on small local models (94% in viability test). What V1 ships.
+    - "openclaw_cloud": shell out to `npx openclaw agent` so OpenClaw's full
+      agent loop drives a cloud LLM (Claude/GPT/Gemini) over the SAME plugin
+      catalog. Unlocks community skills once a cloud key is configured in
+      /settings/cloud (which also writes the provider into OpenClaw's config
+      via skills.openclaw_operator.sync_to_openclaw).
+    """
 
     def __init__(
         self,
         url: str = "http://127.0.0.1:11434",
         token: str = "",                # noqa: ARG002  unused; kept for router signature compat
-        model: str = "qwen2.5:1.5b",
+        model: str = "qwen2.5:7b",
         timeout: float = 30.0,
         skills_dir: Path | None = None,
+        runtime_mode: str = "ollama",
     ) -> None:
         # `url` historically pointed at the OpenClaw gateway. If the caller
         # passes the old openclaw URL (port 18789), silently swap for Ollama.
@@ -295,10 +305,12 @@ class OpenClawBridge:
         self._url = url.rstrip("/")
         self._model = model
         self._timeout = timeout
+        self._mode = runtime_mode if runtime_mode in {"ollama", "openclaw_cloud"} else "ollama"
         catalog = discover_skills(skills_dir or OPENCLAW_SKILLS_DIR)
         self._tools, self._dispatch = _build_tools(catalog)
         log.info(
             "bridge.ready",
+            mode=self._mode,
             catalog_total=len(catalog),
             tools_loaded=len(self._tools),
             v2_only=[n for n, _ in catalog if n not in _SKILL_IMPLS],
@@ -311,6 +323,8 @@ class OpenClawBridge:
 
     def send(self, text: str) -> str | None:
         """Return the model's reply, or None to defer to the router's LLM path."""
+        if self._mode == "openclaw_cloud":
+            return self._send_via_openclaw(text)
         if not self._tools:
             log.info("bridge.no_tools")
             return None
@@ -373,4 +387,43 @@ class OpenClawBridge:
             return reply or None
         except (httpx.HTTPError, ValueError) as exc:
             log.warning("bridge.followup_failed", error=str(exc), tool=name)
+            return None
+
+    def _send_via_openclaw(self, text: str) -> str | None:
+        """Cloud mode: drive OpenClaw's full agent loop via its session CLI.
+
+        Returns the assistant's reply (concatenating payload texts) or None
+        on any error (router falls through to LLM).
+        """
+        import subprocess  # noqa: PLC0415
+
+        try:
+            proc = subprocess.run(
+                ["npx", "openclaw", "agent", "--agent", "main",
+                 "--message", text, "--json", "--timeout", str(int(self._timeout))],
+                capture_output=True, text=True, timeout=self._timeout + 10,
+            )
+            if proc.returncode != 0:
+                log.warning("bridge.openclaw_nonzero", code=proc.returncode, stderr=proc.stderr[:200])
+                return None
+            # CLI prints noise before the JSON; isolate the JSON block.
+            out = proc.stdout
+            start = out.find("{")
+            end = out.rfind("}") + 1
+            if start < 0 or end <= start:
+                log.warning("bridge.openclaw_no_json")
+                return None
+            data = json.loads(out[start:end])
+            payloads = data.get("result", {}).get("payloads", []) or []
+            reply = "\n\n".join(p.get("text", "") for p in payloads if p.get("text")).strip()
+            tool_summary = data.get("result", {}).get("meta", {}).get("agentMeta", {}).get("toolSummary") or {}
+            log.info(
+                "bridge.openclaw_ok",
+                chars=len(reply),
+                tool_calls=tool_summary.get("calls"),
+                tools=tool_summary.get("tools"),
+            )
+            return reply or None
+        except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError, OSError) as exc:
+            log.warning("bridge.openclaw_failed", error=str(exc))
             return None
