@@ -64,12 +64,21 @@ def _get_or_build_session(request: Request) -> ChatSession:
     llm = make_llm_backend(cfg)
     memory = MemoryStore(data_dir) if user.memory_enabled and MemoryStore.is_available() else None
     conv = ConversationManager(llm, mode=cfg.mode, memory=memory)
-    # If the user configured a cloud LLM key, drive OpenClaw's full agent loop
-    # so community plugins work. Otherwise stay on direct-Ollama tool_calls.
     runtime_mode = "openclaw_cloud" if (
         user.openclaw_enabled and user.cloud_llm_api_key_set and user.cloud_llm_provider
     ) else "ollama"
-    bridge = OpenClawBridge(runtime_mode=runtime_mode) if user.openclaw_enabled else None
+    # PII pseudonymizer for cloud mode. Seeded with the owner's name from
+    # onboarding so it gets replaced before any cloud call. Re-instantiated
+    # per session so the mapping doesn't leak across users.
+    pseudo = None
+    if runtime_mode == "openclaw_cloud":
+        from ....runtime.privacy import Pseudonymizer  # noqa: PLC0415
+        extra = [user.owner_name] if user.owner_name else []
+        pseudo = Pseudonymizer(extra_names=extra)
+    bridge = (
+        OpenClawBridge(runtime_mode=runtime_mode, pseudonymizer=pseudo)
+        if user.openclaw_enabled else None
+    )
     audit = AuditLog(data_dir)
     sk_router = SkillRouter(
         conversation=conv,
@@ -78,6 +87,7 @@ def _get_or_build_session(request: Request) -> ChatSession:
         audit_log=audit,
         clipboard_enabled=user.clipboard_enabled,
         data_dir=data_dir,
+        pseudonymizer=pseudo,   # also mask audit-log entries in cloud mode
     )
     session = ChatSession(history=[], router=sk_router, conversation=conv)
     state.chat_session = session

@@ -44,6 +44,7 @@ class SkillRouter:
         audit_log: AuditLog | None = None,
         clipboard_enabled: bool = False,
         data_dir: Path | None = None,
+        pseudonymizer: object | None = None,    # runtime.privacy.Pseudonymizer
     ) -> None:
         self._native: list[NativeSkill] = [
             ReminderSkill(tts=tts),   # before TimerSkill — more specific "remind me to X" pattern
@@ -59,6 +60,19 @@ class SkillRouter:
         self._bridge = bridge
         self._conversation = conversation
         self._audit = audit_log
+        # If a pseudonymizer is supplied (cloud mode), audit log entries
+        # store the MASKED transcript so even our on-disk logs don't keep
+        # raw PII. In pure-local V1 hybrid (no pseudonymizer), audit log
+        # keeps raw transcripts — they never leave the device anyway.
+        self._pseudo = pseudonymizer
+
+    def _audit_text(self, text: str) -> str:
+        if self._pseudo is None or not text:
+            return text
+        try:
+            return self._pseudo.mask(text)  # type: ignore[attr-defined]
+        except Exception:
+            return text
 
     def handle(self, transcript: str) -> str:
         # 1. Native skills
@@ -69,7 +83,7 @@ class SkillRouter:
                     name = _skill_name(skill)
                     log.info("router.native", skill=name)
                     if self._audit:
-                        self._audit.log("native", name, transcript, result.text)
+                        self._audit.log("native", name, self._audit_text(transcript), self._audit_text(result.text))
                     return result.text
 
         # 2. OpenClaw
@@ -79,7 +93,7 @@ class SkillRouter:
                 log.info("router.openclaw")
                 if self._audit:
                     src = "openclaw" if self._bridge.runtime_mode == "openclaw_cloud" else "tool"
-                    self._audit.log(src, src, transcript, response)
+                    self._audit.log(src, src, self._audit_text(transcript), self._audit_text(response))
                 return response
             log.info("router.openclaw_miss")
 
@@ -87,7 +101,7 @@ class SkillRouter:
         log.info("router.llm")
         reply = self._conversation.chat(transcript)
         if self._audit:
-            self._audit.log("llm", "llm", transcript, reply)
+            self._audit.log("llm", "llm", self._audit_text(transcript), self._audit_text(reply))
         return reply
 
     def handle_streaming(self, transcript: str) -> Iterator[str]:
@@ -100,7 +114,7 @@ class SkillRouter:
                     name = _skill_name(skill)
                     log.info("router.native", skill=name)
                     if self._audit:
-                        self._audit.log("native", name, transcript, result.text)
+                        self._audit.log("native", name, self._audit_text(transcript), self._audit_text(result.text))
                     yield result.text
                     return
 
@@ -111,7 +125,7 @@ class SkillRouter:
                 log.info("router.openclaw")
                 if self._audit:
                     src = "openclaw" if self._bridge.runtime_mode == "openclaw_cloud" else "tool"
-                    self._audit.log(src, src, transcript, response)
+                    self._audit.log(src, src, self._audit_text(transcript), self._audit_text(response))
                 yield response
                 return
             log.info("router.openclaw_miss")
@@ -123,4 +137,4 @@ class SkillRouter:
             parts.append(chunk)
             yield chunk
         if self._audit:
-            self._audit.log("llm", "llm", transcript, "".join(parts))
+            self._audit.log("llm", "llm", self._audit_text(transcript), self._audit_text("".join(parts)))

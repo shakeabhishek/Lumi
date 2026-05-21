@@ -424,6 +424,73 @@ def hotkey(
 
 
 @app.command()
+def cloud_test(
+    message: str = typer.Option(
+        "what's the weather in tokyo",
+        "--message", "-m",
+        help="Test transcript to send to the cloud OpenClaw agent.",
+    ),
+) -> None:
+    """End-to-end test of V2 cloud mode: PII mask → OpenClaw agent → unmask.
+
+    Walks through:
+      1. Verifies a cloud LLM key is in the OS keychain.
+      2. Runs the message through Pseudonymizer; prints what got masked.
+      3. Calls OpenClawBridge in openclaw_cloud mode.
+      4. Reports the (unmasked) reply + which tools fired.
+
+    Use this BEFORE shipping V2 to confirm your provider key works and
+    the privacy layer is doing what it claims.
+    """
+    from .runtime import secrets as _secrets  # noqa: PLC0415
+    from .runtime.privacy import Pseudonymizer  # noqa: PLC0415
+    from .skills.openclaw_bridge import OpenClawBridge  # noqa: PLC0415
+    from .ui.web.persistence import load_settings  # noqa: PLC0415
+
+    configure_logging("INFO")
+    cfg = get_settings()
+    user = load_settings(cfg.data_dir)
+
+    typer.echo("── Cloud mode preflight ──")
+    if not user.cloud_llm_provider:
+        typer.echo("  ✗ No cloud provider configured. Set one at /settings/cloud.", err=True)
+        raise typer.Exit(1)
+    if not user.cloud_llm_api_key_set or not _secrets.get_secret("cloud_llm_api_key"):
+        typer.echo("  ✗ No cloud API key in the OS keychain.", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"  ✓ provider: {user.cloud_llm_provider}")
+    typer.echo(f"  ✓ model:    {user.cloud_llm_model or '(provider default)'}")
+    typer.echo(f"  ✓ key:      {_secrets.mask(_secrets.get_secret('cloud_llm_api_key'))}")
+    typer.echo(f"  ✓ owner:    {user.owner_name or '(not set; names won t be masked beyond regex patterns)'}")
+
+    typer.echo("\n── PII masking ──")
+    pseudo = Pseudonymizer(extra_names=[user.owner_name] if user.owner_name else [])
+    masked = pseudo.mask(message)
+    if masked == message:
+        typer.echo("  (nothing to mask in this message)")
+    else:
+        typer.echo(f"  input:  {message}")
+        typer.echo(f"  masked: {masked}")
+        typer.echo(f"  map:    {pseudo.mapping}")
+
+    typer.echo("\n── Cloud call ──")
+    bridge = OpenClawBridge(runtime_mode="openclaw_cloud", pseudonymizer=pseudo, timeout=120.0)
+    typer.echo(f"  loaded tools: {bridge.loaded_tools() or '(none — register JS plugins first)'}")
+    typer.echo(f"  sending masked message…")
+    import time as _time  # noqa: PLC0415
+    t0 = _time.perf_counter()
+    reply = bridge.send(message)
+    elapsed = _time.perf_counter() - t0
+    typer.echo(f"  done in {elapsed:.1f}s")
+
+    typer.echo("\n── Reply ──")
+    if reply is None:
+        typer.echo("  (no reply — the bridge returned None; router would fall through to local LLM)")
+        raise typer.Exit(2)
+    typer.echo(f"  {reply}")
+
+
+@app.command()
 def skills() -> None:
     """List skills discovered from OpenClaw manifests + their V1 runtime status."""
     from .skills.openclaw_bridge import OPENCLAW_SKILLS_DIR, _SKILL_IMPLS, discover_skills  # noqa: PLC0415

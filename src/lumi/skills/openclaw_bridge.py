@@ -297,6 +297,7 @@ class OpenClawBridge:
         timeout: float = 30.0,
         skills_dir: Path | None = None,
         runtime_mode: str = "ollama",
+        pseudonymizer: object | None = None,   # runtime.privacy.Pseudonymizer
     ) -> None:
         # `url` historically pointed at the OpenClaw gateway. If the caller
         # passes the old openclaw URL (port 18789), silently swap for Ollama.
@@ -306,6 +307,10 @@ class OpenClawBridge:
         self._model = model
         self._timeout = timeout
         self._mode = runtime_mode if runtime_mode in {"ollama", "openclaw_cloud"} else "ollama"
+        # Cloud mode REQUIRES a pseudonymizer so we don't leak PII to the
+        # provider. Caller is responsible for passing one (the chat route
+        # constructs one from settings + the owner's name).
+        self._pseudo = pseudonymizer
         catalog = discover_skills(skills_dir or OPENCLAW_SKILLS_DIR)
         self._tools, self._dispatch = _build_tools(catalog)
         log.info(
@@ -314,6 +319,7 @@ class OpenClawBridge:
             catalog_total=len(catalog),
             tools_loaded=len(self._tools),
             v2_only=[n for n, _ in catalog if n not in _SKILL_IMPLS],
+            pseudonymizer=type(pseudonymizer).__name__ if pseudonymizer else None,
         )
 
     # public surface
@@ -397,21 +403,37 @@ class OpenClawBridge:
     def _send_via_openclaw(self, text: str) -> str | None:
         """Cloud mode: drive OpenClaw's full agent loop via its session CLI.
 
-        Returns the assistant's reply (concatenating payload texts) or None
-        on any error (router falls through to LLM).
+        Pseudonymizes the transcript before sending if a Pseudonymizer was
+        supplied (it should always be — privacy is non-negotiable in cloud
+        mode). Unmasks the reply before returning so the user sees real
+        names/emails/etc.
         """
         import subprocess  # noqa: PLC0415
+
+        # PII masking: replace names, emails, phones, cards, etc. with
+        # stable pseudonyms before anything leaves the device.
+        if self._pseudo is not None:
+            masked_text = self._pseudo.mask(text)  # type: ignore[attr-defined]
+            if masked_text != text:
+                log.info(
+                    "bridge.pseudonymized",
+                    raw_chars=len(text),
+                    masked_chars=len(masked_text),
+                    replacements=len(self._pseudo.mapping),  # type: ignore[attr-defined]
+                )
+        else:
+            log.warning("bridge.cloud_send_without_pseudonymizer")  # should never happen
+            masked_text = text
 
         try:
             proc = subprocess.run(
                 ["npx", "openclaw", "agent", "--agent", "main",
-                 "--message", text, "--json", "--timeout", str(int(self._timeout))],
+                 "--message", masked_text, "--json", "--timeout", str(int(self._timeout))],
                 capture_output=True, text=True, timeout=self._timeout + 10,
             )
             if proc.returncode != 0:
                 log.warning("bridge.openclaw_nonzero", code=proc.returncode, stderr=proc.stderr[:200])
                 return None
-            # CLI prints noise before the JSON; isolate the JSON block.
             out = proc.stdout
             start = out.find("{")
             end = out.rfind("}") + 1
@@ -428,6 +450,9 @@ class OpenClawBridge:
                 tool_calls=tool_summary.get("calls"),
                 tools=tool_summary.get("tools"),
             )
+            # Unmask before handing back to the user.
+            if self._pseudo is not None and reply:
+                reply = self._pseudo.unmask(reply)  # type: ignore[attr-defined]
             return reply or None
         except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError, OSError) as exc:
             log.warning("bridge.openclaw_failed", error=str(exc))
