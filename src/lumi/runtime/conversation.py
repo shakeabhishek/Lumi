@@ -51,6 +51,7 @@ class ConversationManager:
         mode: Mode = Mode.GENERAL,
         max_turns: int = 20,
         memory: MemoryStore | None = None,
+        pseudonymizer: object | None = None,    # runtime.privacy.Pseudonymizer
     ) -> None:
         self._backend = backend
         self._mode = mode
@@ -58,6 +59,13 @@ class ConversationManager:
         self._memory = memory
         self._history: list[Message] = []
         self._context_hint: str = ""  # injected for one turn (e.g. active window)
+        # When a pseudonymizer is supplied (cloud mode is active), mask
+        # memory snippets BEFORE they reach the model context. Today the
+        # ConversationManager only talks to the LOCAL backend, but this
+        # tightens the invariant: any untrusted text that enters context
+        # goes through the pseudonymizer — so a future RoutedBackend or
+        # OpenClaw session-continuity path can't leak PII via memory.
+        self._pseudo = pseudonymizer
 
     @property
     def mode(self) -> Mode:
@@ -105,6 +113,15 @@ class ConversationManager:
         if self._memory and self._history:
             ctx = self._memory.get_relevant_context(self._history[-1]["content"])
             if ctx:
+                # In cloud mode, mask before injecting. ChromaDB stores raw
+                # text on disk (an at-rest concern documented elsewhere),
+                # but anything leaving disk to enter model context must
+                # respect the same masking contract as the live transcript.
+                if self._pseudo is not None:
+                    try:
+                        ctx = self._pseudo.mask(ctx)  # type: ignore[attr-defined]
+                    except Exception:
+                        pass        # never let masking failure block memory
                 prelude_parts.append(_wrap_untrusted(
                     "RELEVANT PAST CONVERSATION SNIPPETS", ctx, _MAX_MEMORY_CHARS,
                 ))

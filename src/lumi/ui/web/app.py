@@ -15,6 +15,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from ...runtime.storage import secure_data_dir
 from .csrf import CSRFMiddleware, csrf_token_for
 
 _HERE = Path(__file__).parent
@@ -38,6 +39,8 @@ def create_app(data_dir: Path) -> FastAPI:
 
     app.add_middleware(CSRFMiddleware)
 
+    # At-rest hardening: ensure the data dir + its sensitive files are 0700/0600.
+    secure_data_dir(data_dir)
     app.state.data_dir = data_dir
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     # Expose csrf_token() to every template so forms/HTMX calls can include

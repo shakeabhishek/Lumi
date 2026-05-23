@@ -63,7 +63,6 @@ def _get_or_build_session(request: Request) -> ChatSession:
 
     llm = make_llm_backend(cfg)
     memory = MemoryStore(data_dir) if user.memory_enabled and MemoryStore.is_available() else None
-    conv = ConversationManager(llm, mode=cfg.mode, memory=memory)
     # Shared session helper — same wiring as the voice loop in main.py, so
     # cloud-mode + PII masking can't drift between the two surfaces.
     from ....runtime.session import build_cloud_bridge  # noqa: PLC0415
@@ -71,6 +70,7 @@ def _get_or_build_session(request: Request) -> ChatSession:
     bridge, pseudo, _mode = build_cloud_bridge(
         user, openclaw_enabled=user.openclaw_enabled,
     )
+    conv = ConversationManager(llm, mode=cfg.mode, memory=memory, pseudonymizer=pseudo)
     audit = AuditLog(data_dir)
     sk_router = SkillRouter(
         conversation=conv,

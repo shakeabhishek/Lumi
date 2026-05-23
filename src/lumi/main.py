@@ -30,6 +30,7 @@ from .log import configure_logging, get_logger
 from .runtime.conversation import ConversationManager
 from .runtime.errors import safe_error_message
 from .runtime.memory import MemoryStore
+from .runtime.storage import secure_data_dir
 from .runtime.perf import PerfLog, PipelineTimer
 from .runtime.state_machine import LumiState, StateMachine
 from .skills import AuditLog, SkillRouter
@@ -233,6 +234,10 @@ def run(
     if mode:
         cfg = cfg.model_copy(update={"mode": Mode(mode)})
 
+    # At-rest hardening: chmod data_dir 0700 + sensitive files 0600 before
+    # anything else writes into it (idempotent, runs every launch).
+    secure_data_dir(cfg.data_dir)
+
     mic = SoundDeviceInput(
         sample_rate=cfg.audio_sample_rate,
         device=cfg.audio_input_device,
@@ -254,10 +259,6 @@ def run(
     if cfg.memory_enabled and MemoryStore.is_available():
         memory = MemoryStore(cfg.data_dir)
 
-    conversation = ConversationManager(llm, mode=cfg.mode, memory=memory)
-    tts = make_tts(cfg.piper_voice, cfg.models_dir / "piper")
-    wake = _make_wake_source(cfg)
-
     audit_log = AuditLog(cfg.data_dir)
 
     from .runtime.session import build_cloud_bridge  # noqa: PLC0415
@@ -267,6 +268,13 @@ def run(
     bridge, pseudo, _mode = build_cloud_bridge(
         _user, openclaw_enabled=cfg.openclaw_enabled,
     )
+
+    # ConversationManager gets the pseudonymizer so memory snippets are
+    # masked before they enter the model's context window. Same invariant
+    # as the chat path; same source of truth via build_cloud_bridge().
+    conversation = ConversationManager(llm, mode=cfg.mode, memory=memory, pseudonymizer=pseudo)
+    tts = make_tts(cfg.piper_voice, cfg.models_dir / "piper")
+    wake = _make_wake_source(cfg)
     router = SkillRouter(
         conversation=conversation,
         tts=tts,

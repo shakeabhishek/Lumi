@@ -23,6 +23,70 @@ def test_chat_returns_full_reply(manager: ConversationManager) -> None:
     assert manager.chat("Hello") == "I am Lumi."
 
 
+def test_memory_snippet_is_masked_when_pseudonymizer_active(backend: MockLLMBackend) -> None:
+    """Audit residue — in cloud mode the ConversationManager receives the
+    same pseudonymizer that masks live transcripts. Memory retrievals
+    must go through it too, so a future RoutedBackend or OpenClaw session
+    path can't leak PII via memory."""
+    from unittest.mock import MagicMock  # noqa: PLC0415
+
+    from lumi.runtime.privacy import Pseudonymizer  # noqa: PLC0415
+
+    fake_memory = MagicMock()
+    fake_memory.get_relevant_context.return_value = (
+        "User: my email is alice@example.com\nLumi: noted"
+    )
+
+    pseudo = Pseudonymizer(use_presidio=False)
+    mgr = ConversationManager(
+        backend, mode=Mode.GENERAL, memory=fake_memory, pseudonymizer=pseudo,
+    )
+    mgr.chat("anything")
+
+    sent = backend.received_messages[0]
+    blob = "\n".join(m["content"] for m in sent)
+    assert "alice@example.com" not in blob
+    assert "<EMAIL_1>" in blob
+
+
+def test_memory_snippet_passthrough_when_no_pseudonymizer(backend: MockLLMBackend) -> None:
+    """Local-only mode (no pseudonymizer) keeps raw memory snippets so the
+    local LLM has the full semantic context — masking would degrade recall."""
+    from unittest.mock import MagicMock  # noqa: PLC0415
+
+    fake_memory = MagicMock()
+    fake_memory.get_relevant_context.return_value = "User: lunch with alice@example.com"
+
+    mgr = ConversationManager(backend, mode=Mode.GENERAL, memory=fake_memory)
+    mgr.chat("remind me")
+
+    sent = backend.received_messages[0]
+    blob = "\n".join(m["content"] for m in sent)
+    assert "alice@example.com" in blob
+
+
+def test_mask_failure_does_not_block_memory_retrieval(backend: MockLLMBackend) -> None:
+    """If the pseudonymizer raises (shouldn't happen, but defensive), memory
+    is still injected — better to lose masking than to silently lose
+    memory context entirely."""
+    from unittest.mock import MagicMock  # noqa: PLC0415
+
+    fake_memory = MagicMock()
+    fake_memory.get_relevant_context.return_value = "remembered: thing"
+
+    broken_pseudo = MagicMock()
+    broken_pseudo.mask.side_effect = RuntimeError("nope")
+
+    mgr = ConversationManager(
+        backend, mode=Mode.GENERAL, memory=fake_memory, pseudonymizer=broken_pseudo,
+    )
+    mgr.chat("hi")
+
+    sent = backend.received_messages[0]
+    blob = "\n".join(m["content"] for m in sent)
+    assert "remembered: thing" in blob
+
+
 def test_context_hint_never_lands_in_system_role(backend: MockLLMBackend) -> None:
     """A malicious clipboard selection containing fake </system> tags or
     "ignore previous instructions" must not be able to rewrite the system
