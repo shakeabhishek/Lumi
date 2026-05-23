@@ -50,12 +50,15 @@ class Settings(BaseSettings):
     llm_backend: LLMBackendName = LLMBackendName.OLLAMA
     ollama_host: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen2.5:7b"
-    # Hailo path: HailoBackend talks to tishyk's hailo-ollama-openclaw-adapter
-    # (FastAPI translator running on the Pi), NOT Hailo's native :8000.
-    # The adapter speaks the Ollama wire protocol with the Hailo-specific
-    # quirks (strict JSON, no newlines in content, no system-role on
-    # continuation) already normalised. Pin: adapter@2026.04.20.
-    hailo_host: str = "http://127.0.0.1:11435"
+    # Hailo path: HailoBackend talks to Hailo-Ollama's native endpoint
+    # on the Pi directly. The Hailo-specific protocol quirks (deep
+    # control-char strip, ASCII-encoded JSON, no-mid-stream-system,
+    # empty-message filter, user-first-turn) are handled in-process by
+    # `lumi.llm.hailo_backend._normalize_messages` / `_encode_for_hailo`,
+    # so we don't need a separate FastAPI shim process on the Pi.
+    # The rule set was distilled from
+    # https://github.com/tishyk/hailo-ollama-openclaw-adapter (MIT, 2026.04.20).
+    hailo_host: str = "http://127.0.0.1:8000"
     hailo_model: str = "qwen3:1.7b"
 
     # Audio

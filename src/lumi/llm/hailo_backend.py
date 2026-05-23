@@ -1,33 +1,45 @@
 """HailoBackend — local LLM inference on the AI HAT+ 2 (Pi 5 hardware path).
 
-Talks to Hailo-Ollama on port 8000 directly. Most of the wire protocol is
-Ollama-compatible, but Hailo's `/api/chat` has a few stricter rules than
-upstream Ollama. We sanitize at the call site so callers don't need to
-care:
+Talks to Hailo-Ollama on port 8000 directly. Most of the wire protocol
+is Ollama-compatible, but Hailo's `/api/chat` has several stricter
+rules than upstream Ollama. We sanitise at the call site so callers
+don't need to care:
 
-  - Strip control characters from user content (Hailo 5.3.0+ rejects them
-    rather than tolerating them).
-  - Strip literal newlines inside user content (also a hard error).
-  - Drop `system`-role messages on conversation continuations (Hailo lets
-    them appear only as the FIRST message). We keep the leading system
-    prompt, drop any subsequent ones.
-  - Bound max user content size and history turns so a runaway prompt
-    doesn't blow Hailo's request budget.
+  1. **Control chars stripped from every string in the JSON tree.**
+     Hailo 5.3.0+ rejects C0/C1 control chars anywhere — not just in
+     `messages[].content`. We deep-sanitise the entire request payload
+     before serialising.
+  2. **Newlines flattened to spaces** inside content. Hailo's prompt
+     renderer re-encodes content through an internal template that
+     doesn't escape newlines, so any literal newline (even when the
+     outer JSON correctly escapes it) causes a parse error.
+  3. **Strict ASCII JSON.** We encode with `ensure_ascii=True` so
+     non-ASCII chars (emoji, accented letters) are `\\uXXXX` escaped.
+     Hailo's parser is happier with ASCII-only bytes on the wire.
+  4. **Drop empty/placeholder messages.** Any turn with whitespace-only
+     content is filtered before sending — Hailo trips on those.
+  5. **No `system`-role on continuations.** Hailo accepts a system
+     message only as the FIRST element. We keep the leading system
+     prompt and drop any subsequent ones.
+  6. **Conversations must START on a user turn** (after the optional
+     leading system message). If the first non-system message is
+     somehow `assistant`, we trim it.
+  7. **Bounded sizes.** Max user content + history turns so a runaway
+     prompt doesn't blow Hailo's request budget.
 
-Why we ported the quirks into HailoBackend rather than depending on the
-external adapter: Lumi V1 runtime is a direct LLM client (no OpenClaw
-gateway involved), so we don't need a separate FastAPI translator on
-port 11435. A second process is overhead V1 doesn't need.
-
-Credit: protocol observations distilled from
-https://github.com/tishyk/hailo-ollama-openclaw-adapter (MIT, 2026.04.20).
-That adapter is still the right deployment for V2 when OpenClaw drives
-orchestration — at that point it sits between OpenClaw and Hailo and we
-keep this backend pointed at Hailo directly.
+Why these are in-process and not in a separate FastAPI adapter
+(tishyk/hailo-ollama-openclaw-adapter): Lumi V1 is a direct LLM client
+and is the only thing on the Pi that talks to Hailo. OpenClaw in V2
+cloud mode points at a cloud provider, not Hailo, so there's no need
+for an Ollama-shaped HTTP shim. One fewer process, one fewer pinned
+external repo to track. The rule set above was distilled from
+tishyk's adapter (MIT, 2026.04.20) — if Hailo 5.4+ introduces a new
+quirk, port it here.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -46,41 +58,83 @@ _MAX_USER_CONTENT_CHARS = 4000
 _MAX_HISTORY_TURNS = 6
 _REQUEST_TIMEOUT_S = 180.0
 
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
 
 def _sanitize_content(text: str) -> str:
-    """Drop control chars + literal newlines that Hailo 5.3.0 rejects."""
+    """Drop control chars + literal newlines that Hailo 5.3.0 rejects.
+
+    Returns a single-line, control-char-free string. Truncates to
+    `_MAX_USER_CONTENT_CHARS` with a "…[truncated]" suffix.
+    """
     if not text:
         return text
-    # Strip all C0 + C1 control chars EXCEPT keep spaces. Newlines/CR/tabs go.
-    cleaned = re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", text)
-    # Collapse runs of whitespace into single spaces so we don't pile up "   ".
+    cleaned = _CONTROL_CHARS_RE.sub(" ", text)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     if len(cleaned) > _MAX_USER_CONTENT_CHARS:
         cleaned = cleaned[:_MAX_USER_CONTENT_CHARS] + " …[truncated]"
     return cleaned
 
 
+def _deep_sanitize(obj: Any) -> Any:
+    """Recursive content-char strip across the full JSON tree.
+
+    Hailo 5.3.0+ rejects control characters in ANY string field, not just
+    in `messages[].content`. A literal NUL in the model name or a stray
+    \\x1b in a metadata field is enough to 400 the request. Walk the
+    payload before serialising so we don't have to enumerate fields.
+    """
+    if isinstance(obj, str):
+        return _CONTROL_CHARS_RE.sub("", obj)
+    if isinstance(obj, dict):
+        return {k: _deep_sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_deep_sanitize(item) for item in obj]
+    return obj
+
+
+def _encode_for_hailo(payload: dict) -> bytes:
+    """JSON-encode with `ensure_ascii=True` after deep-sanitising.
+
+    Two reasons for the ASCII-only encoding: (a) Hailo's parser is
+    happier with ASCII bytes, and (b) the resulting wire form is
+    deterministic regardless of the user's locale — so debugging a
+    failed request from a tcpdump capture is easier.
+    """
+    return json.dumps(_deep_sanitize(payload), ensure_ascii=True).encode("utf-8")
+
+
 def _normalize_messages(messages: list[Message]) -> list[Message]:
-    """Apply Hailo's stricter rules: keep only the FIRST system message,
-    sanitize content, and trim history to a sane window."""
-    out: list[Message] = []
+    """Apply Hailo's stricter rules in order:
+
+    1. Sanitize every message's content (control chars + newlines + cap).
+    2. Drop messages whose sanitized content is empty.
+    3. Keep only the FIRST system message (Hailo rejects mid-stream system).
+    4. After the system message, the conversation must START with a user
+       turn — if the first non-system message is `assistant`, trim it.
+    5. Cap history to the last `_MAX_HISTORY_TURNS` user+assistant turns.
+    """
+    sanitized: list[Message] = []
     seen_system = False
     for msg in messages:
         role = msg.get("role", "")
-        content = msg.get("content", "")
+        raw = msg.get("content", "")
+        content = _sanitize_content(raw)
+        if not content:
+            continue                            # drop empty/placeholder
         if role == "system":
             if seen_system:
-                # Drop subsequent system messages — Hailo treats them as an error
-                # on conversation continuations.
-                continue
+                continue                        # only the first survives
             seen_system = True
-            out.append({"role": "system", "content": _sanitize_content(content)})
-            continue
-        out.append({"role": role, "content": _sanitize_content(content)})
+        sanitized.append({"role": role, "content": content})
 
-    # Trim to last _MAX_HISTORY_TURNS turns AFTER the system message.
-    system_msgs = [m for m in out if m["role"] == "system"]
-    tail = [m for m in out if m["role"] != "system"][-(_MAX_HISTORY_TURNS * 2):]
+    system_msgs = [m for m in sanitized if m["role"] == "system"][:1]
+    non_system = [m for m in sanitized if m["role"] != "system"]
+    # Drop a leading assistant turn — Hailo wants the conversation to
+    # open on the user side once the system prompt is in place.
+    while non_system and non_system[0]["role"] != "user":
+        non_system = non_system[1:]
+    tail = non_system[-(_MAX_HISTORY_TURNS * 2):]
     return [*system_msgs, *tail]
 
 
@@ -88,25 +142,16 @@ class HailoBackend(LLMBackend):
     """Streams token chunks from a Hailo-compiled LLM on the AI HAT+ 2.
 
     Constructor mirrors OllamaBackend's shape so dispatch in
-    `make_llm_backend` reads cleanly.
-
-    The default host points at the **hailo-ollama-openclaw-adapter**
-    (https://github.com/tishyk/hailo-ollama-openclaw-adapter, pinned to
-    2026.04.20) on :11435 — NOT Hailo's native :8000. The adapter is a
-    FastAPI translator that speaks the Ollama wire protocol externally
-    and handles Hailo's quirks (strict JSON, no newlines in content,
-    no system-role on continuation) internally.
-
-    The local `_normalize_messages` / `_sanitize_content` helpers are
-    belt-and-braces: if a future Hailo release introduces a quirk the
-    adapter doesn't catch, our client-side normalisation still applies.
+    `make_llm_backend` reads cleanly. Defaults point at Hailo-Ollama's
+    native endpoint on the Pi (:8000). Override via the LUMI_HAILO_HOST
+    env var if you've put Hailo behind a different host or port.
     """
 
     def __init__(
         self,
         model_path: Path | str | None = None,            # kept for compat (model name only on Pi)
         model_name: str = "qwen3:1.7b",
-        host: str = "http://127.0.0.1:11435",
+        host: str = "http://127.0.0.1:8000",
     ) -> None:
         self._model_name = model_name
         self._host = host.rstrip("/")
@@ -120,15 +165,18 @@ class HailoBackend(LLMBackend):
 
     def chat(self, messages: list[Message]) -> Iterator[str]:
         normalized = _normalize_messages(messages)
+        payload = {
+            "model": self._model_name,
+            "messages": normalized,
+            "stream": True,
+        }
+        body = _encode_for_hailo(payload)
         try:
             with httpx.stream(
                 "POST",
                 f"{self._host}/api/chat",
-                json={
-                    "model": self._model_name,
-                    "messages": normalized,
-                    "stream": True,
-                },
+                content=body,
+                headers={"Content-Type": "application/json"},
                 timeout=_REQUEST_TIMEOUT_S,
             ) as r:
                 r.raise_for_status()
@@ -151,8 +199,6 @@ class HailoBackend(LLMBackend):
         Each line is a JSON object with `message.content` (incremental token)
         and `done` (final flag). We yield the incremental content.
         """
-        import json  # noqa: PLC0415
-
         try:
             obj: dict[str, Any] = json.loads(raw_line)
         except json.JSONDecodeError:

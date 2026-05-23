@@ -473,11 +473,10 @@ Build the host-side helper that runs on the user's computer.
 
 Migrate from laptop mocks to real Pi 5 + AI HAT+ 2.
 
-**Reference deployment**: the proven Pi 5 + Hailo + OpenClaw stack lives at
+**Reference deployment**: the proven Pi 5 + Hailo + OpenClaw stack at
 [tishyk/hailo-ollama-openclaw-adapter](https://github.com/tishyk/hailo-ollama-openclaw-adapter)
-— pinned to **OpenClaw 2026.04.20**, uses a FastAPI translator on port 11435
-between OpenClaw and Hailo-Ollama, runs `qwen3:1.7b` on Hailo-10H. Their setup
-confirms three things we need to know:
+(MIT, pinned to **OpenClaw 2026.04.20**, runs `qwen3:1.7b` on Hailo-10H).
+Their setup confirms three things we need to know:
 
 1. **OpenClaw versions matter.** Pin to `2026.04.20`; later releases broke
    concurrency handling and the auth-profile schema. We hit this exact bug
@@ -485,34 +484,42 @@ confirms three things we need to know:
    via system-prompt text rather than tool_calls, which our 1.5B model can't
    drive. Pinning to 2026.04.20 OR using OpenClaw's dashboard/session API
    (not the bare HTTP shim) is the right path.
-2. **Hailo isn't fully Ollama-compatible.** It has its own slightly-different
-   /api/chat semantics. The adapter normalizes (strict JSON, no newlines in
-   content, no system-role on continuation). Lumi must use this adapter on
-   the Pi — `HailoBackend` should HTTP-call the adapter on 11435, not Hailo
-   on 8000 directly.
+2. **Hailo isn't fully Ollama-compatible.** Hailo 5.3.0+ tightened its
+   JSON parser (rejects control chars anywhere in the request),
+   forbids literal newlines in content, rejects mid-stream system
+   messages, and requires conversations to open on a user turn.
+   tishyk's adapter is a 526-line FastAPI translator that handles all
+   of this between OpenClaw and Hailo on port 11435.
 3. **Skill orchestration happens in OpenClaw's session/dashboard layer**, not
    `/v1/chat/completions`. To make community OpenClaw skills work, Lumi needs
    to drive OpenClaw via its session API (or run a headless dashboard agent
    that Lumi proxies to). The thin HTTP shim we tried in V1 was the wrong
    integration surface.
 
+**Adapter decision (audited 2026-05-23):** we **do not** install or run
+tishyk's adapter as a process. Lumi V1 is the only thing on the Pi that
+talks to Hailo (OpenClaw in V2 cloud mode points at a cloud provider,
+not Hailo). All seven of Hailo's wire-protocol rules — deep
+control-char strip, ASCII-encoded JSON, drop empty messages,
+system-first-only, conversation-starts-on-user, history cap, content
+cap — are handled in-process by `_normalize_messages` /
+`_encode_for_hailo` in `src/lumi/llm/hailo_backend.py`. tishyk's repo is
+the **source of the quirk list**, not a runtime dependency. If Hailo
+5.4+ ships a new quirk, port the fix into `hailo_backend.py` directly.
+
 **Tasks**
 - Flash base Pi OS Lite 64-bit, set up Pi dev environment
 - Install Node.js 20+ on Pi (for OpenClaw)
 - **Install OpenClaw 2026.04.20** specifically (not latest):
   `pnpm add -g openclaw@2026.04.20`
-- **Install hailo-ollama-adapter** in a Python venv:
-  `pip3 install git+https://github.com/tishyk/hailo-ollama-openclaw-adapter.git@2026.04.20`
 - Configure ALSA with ReSpeaker 2-Mics HAT
 - Install Hailo runtime, load LLM models in `.hef` format
-- **HailoBackend points at the adapter** (`http://127.0.0.1:11435`), not Hailo
-  directly. This is already wired in V1: `cfg.hailo_host` defaults to
-  `:11435` and `cfg.hailo_model` to `qwen3:1.7b`. To switch the runtime to
-  the Hailo path set `LUMI_LLM_BACKEND=hailo` in the env (Pi-side only).
-  The adapter speaks the Ollama wire protocol so the existing
-  `_normalize_messages` / `_sanitize_content` helpers in `hailo_backend.py`
-  stay as defence-in-depth — they handle Hailo quirks even if a future
-  adapter release lags behind upstream.
+- **HailoBackend talks to Hailo directly** on `:8000`. Already wired:
+  `cfg.hailo_host` defaults to `http://127.0.0.1:8000`,
+  `cfg.hailo_model` to `qwen3:1.7b`. To switch the runtime to the
+  Hailo path set `LUMI_LLM_BACKEND=hailo` in the env (Pi-side only).
+  Protocol normalisation runs locally — see
+  `_normalize_messages` / `_encode_for_hailo`.
 - **Migrate skill orchestration** from our V1 hybrid (Python tools registry
   + Ollama tool_calls) to OpenClaw's session API — community skills become
   available without per-skill Python ports.
@@ -975,6 +982,7 @@ Key decisions made during design, with reasoning. Future sessions: do not re-lit
 | **Custom LLM provider for OpenClaw** | Lets OpenClaw use our Hailo NPU (production) or Ollama (dev). Same interface, swappable backend. |
 | **Qwen2.5 1.5B** (not Qwen2 1.5B) | `qwen2:1.5b` does not support Ollama's tools API. `qwen2.5:1.5b` does (94% tool-call accuracy in Phase 1 gate test). |
 | **Tool-calling tested via Ollama directly** | OpenClaw gateway does not forward external tool definitions — it routes through its own skills system. Model-level tool calling is tested via Ollama's native API (`/api/chat`). |
+| **Hailo protocol bridge runs in-process, not as a separate adapter** (2026-05-23) | Considered `pip install tishyk/hailo-ollama-openclaw-adapter@2026.04.20` as a runtime dep but rejected on three counts: (a) Lumi V1 is the only thing on the Pi talking to Hailo (OpenClaw in V2 cloud mode points at a cloud provider, not Hailo), so the adapter would be a redundant network hop; (b) tracking a third-party pin in our critical path adds maintenance risk if upstream goes quiet; (c) the four extra rules we needed beyond what we already had (deep-sanitize, ASCII-encoded JSON, empty-message filter, user-first-turn) total ~30 lines of Python. tishyk's repo remains the **source of the quirk list** for future Hailo SDK releases — port new quirks into `hailo_backend.py` directly. |
 | **wikipedia_lookup needs explicit phrasing** | Model answers general knowledge questions directly (correct). Skill activates on "look up X on Wikipedia" style prompts, not bare factual questions. |
 | **Skill router (native first, OpenClaw fallback)** | Native skills are fast and reliable for simple commands. OpenClaw extends reach but with more overhead. |
 | **ReSpeaker 2-Mics HAT** | Single board replaces three components. Better integration. |
