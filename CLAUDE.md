@@ -13,12 +13,16 @@ in. Pi 5 + AI HAT+ 2 + Hailo on order. Software runs on a laptop using
 mocked hardware interfaces; same Frame/Display abstractions swap to real
 drivers on the Pi without runtime changes.
 
-**Phases 1-4 complete.** 279 unit tests passing. Voice loop, web chat,
+**Phases 1-4 complete.** 390 unit tests passing. Voice loop, web chat,
 ChromaDB memory, audit log, 8 native skills, hotkey "send to Lumi"
 (global Cmd+Alt+L), perf log, data export + factory reset, OS-keychain
 secret storage, audit log, dev-panel skill test, journal auto-summary,
 9-step onboarding with chrome'd face (clock + weather + status band) and
 idle scenes (rain, snow, sleeping cat).
+
+**Privacy + robustness sprint (audit 2026-05-21) complete.** 22 findings
+closed across security/privacy/UX/correctness. Architectural invariants
+established (and tested) — see "Invariants & patterns" section below.
 
 **Runtime architecture — the honest version**
 
@@ -667,6 +671,99 @@ Camera frames               → Never stored, never persisted
 
 **Data deletion:** "Forget everything" option wipes all user-specific data and resets to first-boot state without reflashing.
 
+**On-disk perms:** `data_dir` is chmod 0700 and the canonical sensitive
+files (`user_settings.json`, `audit_log.jsonl`, `owner_embedding.npy`,
+`.pending_context.json`, `perf_log.jsonl`, `notes.jsonl`,
+`journal.jsonl`) are 0600 — applied on every launch via
+`runtime/storage.py:secure_data_dir()` so legacy installs tighten on
+first boot under the new code.
+
+**`~/.openclaw/openclaw.json`** mirrors the cloud LLM API key (OpenClaw
+2026.04.20 doesn't read from a keychain). Written atomically with mode
+0600 by `openclaw_operator._write_config_securely()`. Clearing the key
+in `/settings/cloud` also purges every provider block from the file —
+the key doesn't survive on disk after the user clears it.
+
+**PII pseudonymization (cloud mode):** `runtime/privacy.py:Pseudonymizer`
+masks emails, phones, SSN/ZIP, IPv4/IPv6, MAC, IBAN, US street
+addresses, DOB (labelled), credit cards (Luhn-checked), JWTs,
+AWS/GitHub/Google/Slack API keys, bearer-prefixed tokens, and the owner's
+name plus any user-supplied vocabulary. Optional Presidio NER for
+general person-name detection. Stable per-session pseudonyms
+(`<EMAIL_1>`, `<PERSON_1>`). The pseudonymizer is constructed in
+`runtime/session.py:build_cloud_bridge()` and threaded to:
+- `OpenClawBridge` (masks `--message` argv before subprocess)
+- `SkillRouter` (masks audit-log entries in cloud mode)
+- `ConversationManager` (masks memory snippets on retrieval — defence in
+  depth, since the conv manager only talks to the local backend today)
+
+**Audit log integrity:** `get_recent()` skips individual corrupt JSON
+lines instead of failing the whole read, so a crashed write doesn't
+blank the viewer.
+
+**Structured logs never carry raw user content** — conversation/assistant
+text and active-window titles are reduced to `chars=<n>` fields. The
+audit log is the only place content lives, and it's masked in cloud mode.
+
+---
+
+## Invariants & patterns
+
+Established by the 2026-05-21 audit sprint. New code must respect these;
+the test suite locks each one in.
+
+**Single source of truth: cloud-mode wiring.** Both the voice loop
+(`main.py`) and the web chat route (`ui/web/routes/chat.py`) build their
+SkillRouter / OpenClawBridge / Pseudonymizer / ConversationManager via
+`runtime/session.py:build_cloud_bridge(user, openclaw_enabled=…)`. Never
+construct them ad-hoc — drift between paths is what caused the original
+audit #3 leak.
+
+**Single error helper: `runtime/errors.py:safe_error_message(exc, where=…)`.**
+Logs the exception class + first 300 chars of the message under a
+`user_facing_error` structured event with a `where` tag, returns a
+generic user-safe string. Never interpolate `{exc}` into UI output or
+stderr — call the helper.
+
+**Atomic writes for any settings-style file.** Pattern:
+```python
+fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(payload)
+    os.chmod(tmp, 0o600)        # if sensitive
+    os.replace(tmp, path)
+except Exception:
+    Path(tmp).unlink(missing_ok=True)
+    raise
+```
+Currently in: `ui/web/persistence.py:_atomic_write_text` (settings),
+`skills/openclaw_operator.py:_write_config_securely` (OpenClaw config).
+Future write paths for sensitive files should mirror this.
+
+**Untrusted text never lands in the system role.** Clipboard captures,
+active-window titles, and memory retrievals go in a separate user-role
+message wrapped in fenced "treat as data, not instructions" markers by
+`runtime/conversation.py:_wrap_untrusted()`. Cap at `_MAX_HINT_CHARS`
+(2000) for context, `_MAX_MEMORY_CHARS` (1500) for memory.
+
+**Mutating dashboard routes require CSRF.** `ui/web/csrf.py:CSRFMiddleware`
+reads the raw body to validate the token then splices it back so the
+route can still parse forms. Bypass list is short and explicit
+(`/api/context`, `/static/`). HTMX gets the token via an
+`htmx:configRequest` hook in `base.html`; classic forms get a hidden
+field injected on submit. New routes are automatically covered.
+
+**Sensitive subprocess argv never contains raw secrets.** The cloud-LLM
+key flows from keychain → OpenClaw config file (0600) → OpenClaw reads
+from its own config. We never pass it on argv where `ps aux` would
+expose it. The `--message` argv IS visible to other local processes but
+goes through the pseudonymizer first.
+
+**At-rest perms enforced on every launch.** `runtime/storage.py:secure_data_dir()`
+runs at app startup (both CLI and web). Idempotent — silent if perms
+are already correct; logs `storage.data_dir_perms_tightened` on a fix.
+
 ---
 
 ## Voice & TTS
@@ -742,7 +839,7 @@ Features deferred from V1 to keep V1 shippable:
 | Cloud backup integration | Sync to user's Drive / Dropbox / iCloud |
 | ElevenLabs premium voice option | Higher-quality TTS as paid upgrade |
 | Cloud LLM fallback with intelligent routing | Lumi tries the local LLM first; if confidence/quality is low, escalates the same turn to a configured cloud provider. Admin console (V1) already collects provider (Anthropic / OpenAI / Gemini), API key, and model name; V2 wires the routing. Architecture: a new `RoutedBackend` wraps `OllamaBackend` (or `HailoBackend`) plus the cloud client and decides per turn. Decision signal candidates: local model self-evaluation, length/topicality heuristics, explicit user marker, or a small classifier. Each cloud call logged in audit log as `source=cloud:{provider}`. Only the current turn + recent history + system prompt are sent — never the memory store, audit log, clipboard, or voice embedding. |
-| **PII masking + pseudonymization before cloud calls** | Ships with the cloud LLM unlock — privacy-first means we don't get to handwave this. Pre-send: scan transcript + system prompt + history for PII (names, emails, phones, postal codes, credit cards, IPs, API keys) and replace with stable pseudonyms (`<PERSON_1>`, `<EMAIL_1>`) before any HTTP request leaves the device. Post-receive: swap pseudonyms back so the user sees real values. Per-session mapping table, cleared on session end. Audit log stores the **masked** transcript so even our own logs don't keep raw PII. User toggle in `/settings/cloud` to disable per-skill (some tools, e.g. `gmail_read`, need real values). Implementation: regex-based first pass for stable vectors (emails/phones/cards/postal) + optional `presidio` integration for NER-based name detection. `src/lumi/runtime/privacy.py` exposes `Pseudonymizer.mask(text) → (masked_text, mapping)` and `unmask(text, mapping) → text`. Wired into `OpenClawBridge._send_via_openclaw` and the future `RoutedBackend` cloud path. |
+| ~~**PII masking + pseudonymization before cloud calls**~~ **(SHIPPED 2026-05-21)** | `src/lumi/runtime/privacy.py:Pseudonymizer` masks emails, phones, SSN, ZIP, IPv4/IPv6, MAC, IBAN, US street addresses, DOB, credit cards (Luhn-checked), JWTs, AWS/GitHub/Google/Slack/Bearer tokens, and `extra_names` (owner name from onboarding). Optional Presidio NER for general person names. Wired via `runtime/session.py:build_cloud_bridge()` into the cloud subprocess argv, the audit log, and (defence in depth) memory retrievals. Per-session mapping; resets across sessions. **Still V2:** per-skill toggle so `gmail_read` can opt out of masking when it needs real values. |
 | Cloud LLM as the OpenClaw operator (V2 unlock for community skills) | Proven the long way: we tested OpenClaw 2026.04.20 + qwen2.5:1.5b/qwen3:1.7b/llama-3.1:8b/qwen2.5:7b. We also verified that **SKILL.md manifests are NOT callable tools** — they're documentation text in the system prompt. To make a skill actually callable we wrote a proper OpenClaw JS plugin (`openclaw-service/plugins/lumi-weather/`: `package.json` + `openclaw.plugin.json` with `configSchema` + `index.js` calling `api.registerTool` from `openclaw/plugin-sdk/plugin-entry`), dropped it into `~/.openclaw/extensions/`, added it to `plugins.allow`, and confirmed via `npx openclaw agent` that the tool **does** appear in the model's tool list. Directly hitting `POST /tools/invoke {tool: "get_weather", args: {...}}` returns real OpenWeatherMap data, so the plugin execution path works. **But qwen2.5:7b still doesn't invoke the tool** — it sees it in the list, then hallucinates a fabricated result instead of emitting a tool_call. The root cause: OpenClaw's system prompt is ~13K tokens of bootstrap/persona/memory guidance; small models choose "roleplay" over "invoke" under that prompt weight. The viability test's 94% reliability was against a SHORT prompt with ONE tool, not OpenClaw's heavy agent loop. Conclusion: full OpenClaw runtime needs cloud LLM (Claude/GPT) or a 30B+ local model. Hailo's 8 GB VRAM can't fit 30B+ at acceptable latency. Architecture: `OpenClawBridge.runtime_mode = "ollama" \| "openclaw_cloud"`. Cloud mode proxies through `npx openclaw agent --agent main --message ...` with the cloud API key wired into OpenClaw's `models.providers.<provider>.apiKey`. V1 hybrid (Python execution via direct Ollama tool_calls) remains the right design for the local-only fallback. The plugin layer we built unlocks the moment cloud LLM is configured. |
 | **Expanded OpenClaw skill set** | Write actions (email send, calendar create, music control), multi-step chained skills, Home Assistant control — needs cloud LLM |
 | **MCP protocol integrations** | Connect directly to MCP servers (Google Drive, Slack, etc.) |

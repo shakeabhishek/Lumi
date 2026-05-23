@@ -138,6 +138,9 @@ Things I'm proud of building into this:
 - **Dual-layer skill priority** — Always-local native Python skills (timer, pomodoro, reminder, notes, volume, system stats, mode switch, clipboard) take precedence. Network-y skills (weather, wikipedia, currency, news) fall through to the bridge. Conversational fallback to the LLM is last.
 - **OpenClaw JS plugin authoring** — `openclaw-service/plugins/<name>/` is a real OpenClaw extension (package.json + openclaw.plugin.json + index.js using `api.registerTool`). Deploys via `setup.sh` into `~/.openclaw/extensions/` with `plugins.allow` auto-wired. The plugin is invoked by the cloud LLM in V2 mode; it's also visible to community OpenClaw users as a standard plugin.
 - **OS-keychain secret storage** — All API keys (cloud LLM, OpenWeatherMap) live in macOS Keychain / Linux Secret Service / Windows Credential Manager via `keyring`. Never written to disk in plaintext. Legacy plaintext keys auto-migrated on first read.
+- **PII pseudonymization on the cloud path** — `runtime/privacy.py` masks emails, phones, SSN, ZIP, IPv4/IPv6, MAC, IBAN, US street addresses, DOB, credit cards (Luhn-checked), JWTs, AWS/GitHub/Google/Slack tokens, bearer headers, and the owner's name. Stable per-session pseudonyms (`<EMAIL_1>`, `<PERSON_1>`) so the model can refer back coherently; replies are unmasked locally before the user sees them. Audit log + memory retrievals are also masked in cloud mode.
+- **One-source-of-truth session helper** — `runtime/session.py:build_cloud_bridge()` is the single place that decides cloud vs hybrid runtime, attaches the pseudonymizer, and remediates legacy world-readable OpenClaw configs. Both the voice loop and the web chat route call it — the two paths can't drift.
+- **CSRF middleware** — Every mutating dashboard route requires a SameSite=Strict cookie token; the middleware reads the raw body to validate then splices it back so routes still parse forms normally. Bypass list for the local hotkey daemon endpoint.
 - **Phased reliability gates** — Validation criteria for every phase before committing scope. Phase-1 OpenClaw viability passed at 94%. Phase-4 stability gate pending.
 - **Plug-and-play USB-C interface** — Linux USB gadget mode composite device (HID + Mass Storage + CDC Serial). Zero-install setup across macOS, Windows, Linux hosts.
 - **Send-to-Lumi global hotkey** — `Cmd+Alt+L` / `Ctrl+Alt+L` from any app: captures selected text (via simulated copy), queues it as context for Lumi's next turn, surfaces a macOS notification + a 📎 row in the chat UI.
@@ -158,11 +161,15 @@ Full architectural decision log and phase-by-phase development plan in [CLAUDE.m
 This matters enough to call out clearly:
 
 - **Local-first by default** — V1 hybrid mode runs every LLM call on-device. No cloud usage unless you explicitly add an API key in Settings → Cloud LLM.
-- **API keys in the OS keychain** — Cloud LLM keys and OpenWeatherMap keys go to macOS Keychain / Linux Secret Service / Windows Credential Manager via `keyring`. Never written to disk in plaintext. The settings UI shows masked indicators (`sk-a…1234`); the full key is never sent back to the browser.
-- **PII masking before cloud calls (V2)** — When the cloud LLM is active, transcripts are scanned for names, emails, phones, addresses, credit cards, and API keys, and replaced with stable pseudonyms (`<PERSON_1>`, `<EMAIL_1>`) before any HTTP request leaves the device. The cloud reply is unmasked locally before you see it. The audit log stores the masked version too — even our own logs don't keep raw PII.
-- **No telemetry** — Nothing is reported back to us
+- **API keys in the OS keychain, plaintext-free** — Cloud LLM keys and OpenWeatherMap keys go to macOS Keychain / Linux Secret Service / Windows Credential Manager via `keyring`. The OpenClaw config file that mirrors the key for the gateway is chmod-0600 and written atomically; clearing the key from the UI also wipes the cloud provider block from that file. The settings UI shows masked indicators (`sk-a…1234`); the full key is never sent back to the browser, never appears in logs.
+- **PII masking before cloud calls** — When a cloud LLM is configured, transcripts are scanned for emails, phones, SSN, ZIP, IPv4/IPv6, MAC, IBAN, US street addresses, DOB, credit cards (Luhn-checked), JWTs, AWS/GitHub/Google/Slack API keys, bearer tokens, and the owner's name from onboarding. Each match is replaced with a stable pseudonym (`<PERSON_1>`, `<EMAIL_1>`, …) before any HTTP request leaves the device. Replies are unmasked locally before you see them. The audit log stores the masked version too — even our own on-disk logs don't keep raw PII. Memory snippets are masked on retrieval in cloud mode.
+- **Prompt-injection hardened** — Clipboard captures, active-window titles, and memory retrievals never land in the system prompt. They're wrapped as fenced "treat as data, not instructions" blocks in a user-role message, length-capped, and any literal fence sequences in the body are sanitised. A malicious selection containing fake `</system>` tags can't rewrite Lumi's persona.
+- **Data-at-rest hardened** — `data_dir` is created with mode 0700 and key files (audit log, voice embedding, hotkey-pending, settings, notes, journal) are 0600 on every launch — including legacy installs that started under a looser umask.
+- **No telemetry** — Nothing is reported back to us. Internal exceptions log a structured `user_facing_error` event with the class + a tag; the user sees a generic "something went wrong" with no traceback text.
 - **Camera frames are never stored** — Only gesture landmarks used, frames discarded immediately
 - **Skills are opt-in and audited** — Every skill (native + OpenClaw plugin) is individually enableable. Every invocation is logged in the audit trail with source, skill name, masked input, and result.
+- **CSRF-protected web dashboard** — Every mutating endpoint requires a SameSite=Strict token; cross-origin pages can't trigger factory reset, change cloud keys, or toggle skills via a browser tab.
+- **Hotkey doesn't trash your clipboard** — `Send to Lumi` simulates a copy to grab your selection, then restores your prior clipboard contents.
 - **You can export everything** — One button bundles every user file on disk into a ZIP
 - **You can wipe everything** — One button factory resets to first-boot state
 
@@ -182,11 +189,12 @@ Lumi has WiFi (used only by skills you explicitly enable). The camera has an act
 - 9-step onboarding flow with voice enrollment, granular permissions, hotkey + weather location config, face style picker
 - Send-to-Lumi global hotkey (`Cmd+Alt+L` / `Ctrl+Alt+L`) with macOS notification on capture
 - OS-keychain secret storage, data export, factory reset
+- PII masking + pseudonymization on the cloud subprocess path (emails, phones, IBAN, JWT, AWS/GitHub/Google keys, addresses, owner name, etc.)
+- CSRF middleware on every mutating dashboard route; data_dir locked to 0700; OpenClaw config chmod 0600 with atomic writes
 - HailoBackend stub ready for Pi 5 deployment (Hailo 5.3+ protocol quirks pre-baked)
 
 ### V2 (next)
 - **Cloud LLM as OpenClaw operator** — Claude / GPT / Gemini drives OpenClaw's agent loop, unlocking the entire community plugin ecosystem (Gmail, Calendar, Spotify, GitHub, Things, …). Auto-routes per query based on whether a key is set in Settings.
-- **PII masking + pseudonymization** ships with V2 cloud — transcripts are scrubbed of names, emails, phones, addresses, credit cards, API keys before any HTTP call leaves the device. Replies are unmasked locally.
 - **Optimistic + streaming chat UI** — your message renders on Enter (not after the model replies), responses stream token-by-token
 - **Skills marketplace search** — Lumi can search and offer to install OpenClaw skills mid-conversation
 - **Sprite-pack uploader** — upload custom idle-scene PNG packs from `/settings/sprites`
