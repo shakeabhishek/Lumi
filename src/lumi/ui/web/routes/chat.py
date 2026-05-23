@@ -7,17 +7,27 @@ lives in `app.state.chat`.
 Pending hotkey/clipboard context: consumed at the top of each turn, mirrored
 to the chat history as a small "📎 Selection added" entry the user sees just
 above their message. Same path as the voice loop.
+
+UI flow:
+  * Browser POSTs to /chat/stream and reads back a Server-Sent Events stream.
+    Each `data: {"chunk": "..."}` event is a fresh token (or full text from a
+    native skill). A final `event: done` carries handler/skill/elapsed_ms.
+  * /chat/send is the non-streaming fallback (returns the whole turn at once).
+    Kept for non-JS clients, integration tests, and as the simpler reference
+    implementation.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, AsyncIterator
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 
 from ....audio.tts import _PrintTTS
 from ....config import get_settings
@@ -165,6 +175,139 @@ async def chat_send(
     return request.app.state.templates.TemplateResponse(
         request, "chat_messages.html",
         {"messages": new_msgs},
+    )
+
+
+_STREAM_SENTINEL = object()
+
+
+@router.post("/stream")
+async def chat_stream(
+    request: Request,
+    message: Annotated[str, Form()],
+) -> StreamingResponse:
+    """SSE streaming variant of /chat/send.
+
+    Wire protocol:
+      data: {"chunk": "..."}\\n\\n            — reply text fragment
+      event: context\\n
+      data: {"text": "📎 ..."}\\n\\n           — context bubble (optional, leads)
+      event: done\\n
+      data: {"handler":"llm","skill":"","elapsed_ms":1234}\\n\\n
+                                              — terminal metadata, sent last
+
+    The user message itself is NOT echoed back — the client renders it
+    optimistically on submit, before the request is fired.
+    """
+    data_dir = request.app.state.data_dir
+    user = load_settings(data_dir)
+    session = _get_or_build_session(request)
+    assert session.router is not None and session.conversation is not None
+
+    msg = message.strip()
+    if not msg:
+        async def empty() -> AsyncIterator[bytes]:
+            yield b'event: done\ndata: {"handler":"","skill":"","elapsed_ms":0}\n\n'
+        return StreamingResponse(empty(), media_type="text/event-stream")
+
+    # Append the user message to session history exactly once, server-side,
+    # before we start streaming. The client already rendered it optimistically.
+    session.history.append(ChatMessage(role="user", text=msg))
+
+    # Consume pending hotkey/clipboard context (same contract as /chat/send).
+    pending = None
+    context_payload = None
+    if user.clipboard_enabled:
+        pending = consume_pending(data_dir)
+        if pending:
+            from ....host_helper.send_to_lumi import format_hint  # noqa: PLC0415
+
+            session.conversation.set_context_hint(format_hint(pending))
+            text = pending.get("text", "")
+            source = pending.get("source", "clipboard")
+            preview = text[:160].replace("\n", " ")
+            ellipsis = "…" if len(text) > 160 else ""
+            ctx_text = f"📎 {source} added ({len(text)} chars): {preview}{ellipsis}"
+            context_payload = {"text": ctx_text}
+            session.history.append(ChatMessage(role="context", text=ctx_text))
+
+    async def stream() -> AsyncIterator[bytes]:
+        # 1. Context bubble (if any) — leads the stream so the UI can show it
+        #    above the reply as it lands.
+        if context_payload is not None:
+            yield (
+                b"event: context\ndata: "
+                + json.dumps(context_payload).encode()
+                + b"\n\n"
+            )
+
+        # 2. Reply tokens. handle_streaming() yields chunks for the LLM path
+        #    and a single chunk for native skills / OpenClaw bridge — same
+        #    SSE shape either way, the client doesn't have to care.
+        t0 = time.perf_counter()
+        collected: list[str] = []
+        loop = asyncio.get_event_loop()
+
+        try:
+            gen = session.router.handle_streaming(msg)
+        except Exception as exc:
+            err = safe_error_message(exc, where="chat.stream")
+            collected.append(err)
+            yield b"data: " + json.dumps({"chunk": err}).encode() + b"\n\n"
+        else:
+            try:
+                while True:
+                    # Each next(gen) runs in a worker thread so the chunk
+                    # producer (which can block on httpx / Ollama) doesn't
+                    # freeze the event loop.
+                    chunk = await loop.run_in_executor(None, next, gen, _STREAM_SENTINEL)
+                    if chunk is _STREAM_SENTINEL:
+                        break
+                    collected.append(chunk)
+                    yield b"data: " + json.dumps({"chunk": chunk}).encode() + b"\n\n"
+            except Exception as exc:
+                err = safe_error_message(exc, where="chat.stream")
+                collected.append(err)
+                yield b"data: " + json.dumps({"chunk": err}).encode() + b"\n\n"
+
+        elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+
+        # 3. Record the assembled reply in session history with metadata
+        #    pulled from the audit log (router.handle_streaming wrote the
+        #    audit entry for us with the right source label).
+        last = AuditLog(data_dir).get_recent(n=1)
+        handler = last[0]["source"] if last else "llm"
+        skill = last[0]["skill"] if last else ""
+        reply_text = "".join(collected)
+        session.history.append(ChatMessage(
+            role="lumi", text=reply_text,
+            handler=handler, skill=skill, elapsed_ms=elapsed_ms,
+        ))
+
+        # 4. Cloud-failure one-shot notice — same logic as /chat/send.
+        if session.router._bridge is not None:                # noqa: SLF001
+            notice = session.router._bridge.cloud_failure_notice()  # noqa: SLF001
+            if notice:
+                session.history.append(ChatMessage(role="context", text=f"⚠ {notice}"))
+                yield (
+                    b"event: notice\ndata: "
+                    + json.dumps({"text": f"⚠ {notice}"}).encode()
+                    + b"\n\n"
+                )
+
+        # 5. Terminal "done" so the client knows to finalise the bubble.
+        meta = {"handler": handler, "skill": skill, "elapsed_ms": elapsed_ms}
+        yield b"event: done\ndata: " + json.dumps(meta).encode() + b"\n\n"
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            # Disable nginx-style proxy buffering so chunks arrive in
+            # real time when Lumi is reverse-proxied (e.g. on the Pi).
+            "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache",
+        },
     )
 
 
