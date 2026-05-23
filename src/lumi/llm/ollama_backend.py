@@ -89,5 +89,5 @@ def make_llm_backend(cfg: Settings) -> LLMBackend:
     if cfg.llm_backend == LLMBackendName.HAILO:
         from .hailo_backend import HailoBackend  # noqa: PLC0415
 
-        return HailoBackend(model_path=cfg.models_dir / "qwen2.5-1.5b.hef", model_name=cfg.ollama_model)
+        return HailoBackend(host=cfg.hailo_host, model_name=cfg.hailo_model)
     raise ValueError(f"Unknown LLM backend: {cfg.llm_backend}")

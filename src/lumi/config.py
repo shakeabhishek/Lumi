@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     llm_backend: LLMBackendName = LLMBackendName.OLLAMA
     ollama_host: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen2.5:7b"
+    # Hailo path: HailoBackend talks to tishyk's hailo-ollama-openclaw-adapter
+    # (FastAPI translator running on the Pi), NOT Hailo's native :8000.
+    # The adapter speaks the Ollama wire protocol with the Hailo-specific
+    # quirks (strict JSON, no newlines in content, no system-role on
+    # continuation) already normalised. Pin: adapter@2026.04.20.
+    hailo_host: str = "http://127.0.0.1:11435"
+    hailo_model: str = "qwen3:1.7b"
 
     # Audio
     audio_input_device: str | None = None

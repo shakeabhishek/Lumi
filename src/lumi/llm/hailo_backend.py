@@ -88,16 +88,25 @@ class HailoBackend(LLMBackend):
     """Streams token chunks from a Hailo-compiled LLM on the AI HAT+ 2.
 
     Constructor mirrors OllamaBackend's shape so dispatch in
-    `make_llm_backend` reads cleanly. The default URL points at
-    Hailo-Ollama's actual port; callers don't need to know about the
-    quirks sanitized in `_normalize_messages`.
+    `make_llm_backend` reads cleanly.
+
+    The default host points at the **hailo-ollama-openclaw-adapter**
+    (https://github.com/tishyk/hailo-ollama-openclaw-adapter, pinned to
+    2026.04.20) on :11435 — NOT Hailo's native :8000. The adapter is a
+    FastAPI translator that speaks the Ollama wire protocol externally
+    and handles Hailo's quirks (strict JSON, no newlines in content,
+    no system-role on continuation) internally.
+
+    The local `_normalize_messages` / `_sanitize_content` helpers are
+    belt-and-braces: if a future Hailo release introduces a quirk the
+    adapter doesn't catch, our client-side normalisation still applies.
     """
 
     def __init__(
         self,
         model_path: Path | str | None = None,            # kept for compat (model name only on Pi)
         model_name: str = "qwen3:1.7b",
-        host: str = "http://127.0.0.1:8000",
+        host: str = "http://127.0.0.1:11435",
     ) -> None:
         self._model_name = model_name
         self._host = host.rstrip("/")

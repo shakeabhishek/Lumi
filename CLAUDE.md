@@ -506,8 +506,13 @@ confirms three things we need to know:
 - Configure ALSA with ReSpeaker 2-Mics HAT
 - Install Hailo runtime, load LLM models in `.hef` format
 - **HailoBackend points at the adapter** (`http://127.0.0.1:11435`), not Hailo
-  directly. The adapter speaks the Ollama wire protocol so HailoBackend can be
-  almost identical to OllamaBackend (only host changes).
+  directly. This is already wired in V1: `cfg.hailo_host` defaults to
+  `:11435` and `cfg.hailo_model` to `qwen3:1.7b`. To switch the runtime to
+  the Hailo path set `LUMI_LLM_BACKEND=hailo` in the env (Pi-side only).
+  The adapter speaks the Ollama wire protocol so the existing
+  `_normalize_messages` / `_sanitize_content` helpers in `hailo_backend.py`
+  stay as defence-in-depth — they handle Hailo quirks even if a future
+  adapter release lags behind upstream.
 - **Migrate skill orchestration** from our V1 hybrid (Python tools registry
   + Ollama tool_calls) to OpenClaw's session API — community skills become
   available without per-skill Python ports.
