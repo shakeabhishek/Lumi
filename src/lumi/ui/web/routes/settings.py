@@ -236,22 +236,74 @@ async def data_export(request: Request) -> StreamingResponse:
 # ---------------------------------------------------------------------------
 
 
+# Known secret keys we've ever stored in the OS keychain. Factory reset
+# walks this list and deletes each — without it, API keys survive "Forget
+# everything" and silently re-enable cloud mode on the next launch.
+# Add new keychain names here when introduced.
+_KNOWN_SECRET_KEYS: tuple[str, ...] = (
+    "cloud_llm_api_key",
+    "openweathermap_api_key",
+)
+
+
 @router.post("/data/reset", response_class=RedirectResponse, status_code=303)
 async def data_reset(request: Request) -> str:
-    """Wipe all user data and reset to first-boot state.
+    """Wipe ALL user-specific state and reset to first-boot.
 
-    Removes every file in data_dir except the directory itself. The next page
-    load triggers onboarding from step 1.
+    Scope of the wipe — anything that ever held PII or user preferences:
+      1. Every file in data_dir (conversations, audit log, voice embedding,
+         settings, hotkey-pending, notes, journal, perf log, ChromaDB).
+      2. Every known keychain entry (cloud LLM key, OpenWeatherMap key).
+      3. The providers block in ~/.openclaw/openclaw.json (where the cloud
+         API key gets mirrored for the OpenClaw gateway) — purged via
+         `openclaw_operator._revert_to_ollama` which also flips the agent
+         default back to local Ollama.
+      4. The in-memory chat session on app.state (carries the Pseudonymizer
+         mapping for the current process).
+
+    Next page load triggers onboarding from step 1.
     """
+    from ....runtime import secrets as _secrets  # noqa: PLC0415
+
     data_dir: Path = request.app.state.data_dir
-    for child in data_dir.iterdir():
+
+    # 1. data_dir contents
+    if data_dir.exists():
+        for child in data_dir.iterdir():
+            try:
+                if child.is_file() or child.is_symlink():
+                    child.unlink()
+                else:
+                    shutil.rmtree(child, ignore_errors=True)
+            except OSError:
+                continue
+
+    # 2. OS keychain entries — every name we know we've ever set
+    for key in _KNOWN_SECRET_KEYS:
         try:
-            if child.is_file() or child.is_symlink():
-                child.unlink()
-            else:
-                shutil.rmtree(child, ignore_errors=True)
-        except OSError:
+            _secrets.delete_secret(key)
+        except Exception:        # noqa: BLE001
+            # delete_secret is already silent on most errors; this is
+            # defence in depth — never let a key-deletion failure block
+            # the rest of the wipe.
             continue
+
+    # 3. OpenClaw config providers block (mirrored plaintext API key)
+    try:
+        from ....skills.openclaw_operator import _openclaw_config_path, _revert_to_ollama  # noqa: PLC0415
+
+        cfg_path = _openclaw_config_path()
+        if cfg_path.exists():
+            _revert_to_ollama(cfg_path)
+    except Exception:            # noqa: BLE001
+        # OpenClaw might not be installed; don't block reset on it.
+        pass
+
+    # 4. Drop the cached chat session so the next request rebuilds with
+    #    fresh state (and the old Pseudonymizer mapping doesn't survive).
+    if hasattr(request.app.state, "chat_session"):
+        del request.app.state.chat_session
+
     return "/onboarding/1"
 
 
