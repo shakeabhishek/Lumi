@@ -293,6 +293,7 @@ def run(
         theme=cfg.face_theme,
         color=cfg.face_color,
         models_dir=cfg.models_dir,
+        data_dir=cfg.data_dir,                     # for user-uploaded sprite packs
         weather_location=_user.weather_location,   # empty = no weather chip
         idle_scene=_user.idle_scene,
     )

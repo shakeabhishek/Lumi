@@ -10,6 +10,8 @@ from typing import Annotated
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
+from ...face.idle_scenes import PROCEDURAL_SCENES, list_sprite_packs
+from ...face.sprite_upload import delete_user_pack, validate_and_extract_zip
 from ..persistence import FACE_THEMES, MODES, PIPER_VOICES, load_settings, save_settings
 
 router = APIRouter()
@@ -86,7 +88,8 @@ async def voice_post(
 
 @router.get("/face", response_class=HTMLResponse)
 async def face_get(request: Request) -> HTMLResponse:
-    return _render(request, "settings/face.html")
+    sprite_packs = list_sprite_packs(request.app.state.data_dir)
+    return _render(request, "settings/face.html", sprite_packs=sprite_packs)
 
 
 @router.post("/face", response_class=RedirectResponse, status_code=303)
@@ -100,9 +103,75 @@ async def face_post(
     s = load_settings(data_dir)
     s.face_theme = face_theme
     s.face_color = face_color
-    s.idle_scene = idle_scene if idle_scene in {"none", "rain", "snow", "cat"} else "none"
+    # Valid idle scenes: "none" + every procedural + every available sprite
+    # pack (bundled or user-uploaded). Anything else falls back to none so
+    # we never persist a scene name the renderer can't resolve.
+    valid_scenes = {"none", *PROCEDURAL_SCENES.keys()}
+    valid_scenes.update(p["name"] for p in list_sprite_packs(data_dir))
+    s.idle_scene = idle_scene if idle_scene in valid_scenes else "none"
     save_settings(data_dir, s)
     return "/settings/face"
+
+
+# ---------------------------------------------------------------------------
+# Sprite packs — upload / list / delete idle-scene sprite packs
+# ---------------------------------------------------------------------------
+
+
+@router.get("/sprites", response_class=HTMLResponse)
+async def sprites_get(request: Request) -> HTMLResponse:
+    return _render(
+        request, "settings/sprites.html",
+        sprite_packs=list_sprite_packs(request.app.state.data_dir),
+    )
+
+
+@router.post("/sprites/upload", response_class=RedirectResponse, status_code=303)
+async def sprites_upload(request: Request) -> str:
+    """Upload a ZIP of frame_NNN.png + optional manifest.json.
+
+    Routes through `validate_and_extract_zip` so the validation rules are
+    testable in isolation (see test_sprite_upload.py). User packs land at
+    data_dir/sprites/<name>/ and override bundled packs with the same name.
+    """
+    form = await request.form()
+    pack_name = str(form.get("pack_name") or "").strip()
+    upload = form.get("zipfile")
+    if upload is None or not hasattr(upload, "read"):
+        return "/settings/sprites?err=" + _q("no file uploaded")
+    blob = await upload.read()
+    sprites_root = request.app.state.data_dir / "sprites"
+    result = validate_and_extract_zip(blob, pack_name, sprites_root)
+    if not result.ok:
+        return "/settings/sprites?err=" + _q(result.error)
+    return f"/settings/sprites?ok={_q(result.pack_name)}"
+
+
+@router.post("/sprites/delete", response_class=RedirectResponse, status_code=303)
+async def sprites_delete(
+    request: Request,
+    pack_name: Annotated[str, Form()] = "",
+) -> str:
+    """Delete a user-uploaded pack. Bundled packs are not deletable from
+    here (they live in the wheel — they'd come back on the next install)."""
+    sprites_root = request.app.state.data_dir / "sprites"
+    ok, err = delete_user_pack(pack_name, sprites_root)
+    if not ok:
+        return "/settings/sprites?err=" + _q(err)
+
+    # If the user just deleted the pack their idle_scene was pointing to,
+    # fall back to "none" so the renderer doesn't try to load a vanished pack.
+    s = load_settings(request.app.state.data_dir)
+    if s.idle_scene == pack_name:
+        s.idle_scene = "none"
+        save_settings(request.app.state.data_dir, s)
+    return "/settings/sprites?deleted=" + _q(pack_name)
+
+
+def _q(s: str) -> str:
+    """URL-quote for redirect query strings."""
+    from urllib.parse import quote  # noqa: PLC0415
+    return quote(s, safe="")
 
 
 # ---------------------------------------------------------------------------

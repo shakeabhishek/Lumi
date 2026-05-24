@@ -40,9 +40,11 @@ class FaceEngine:
         chrome: bool = True,
         weather_location: str = "",
         idle_scene: str = "none",
+        data_dir: Path | None = None,
     ) -> None:
         w, h = display.size
         self._display = display
+        self._data_dir = data_dir
         renderer_cls = _RENDERERS.get(theme, VectorFaceRenderer)
         resolved = color if color else _DEFAULT_COLORS.get(theme, "#F5A623")
         fg = _parse_hex(resolved)
@@ -54,7 +56,7 @@ class FaceEngine:
             ScreenCompositor(
                 self._face, w, h,
                 location=weather_location,
-                idle_scene=make_scene(idle_scene),
+                idle_scene=make_scene(idle_scene, data_dir=data_dir),
             ) if chrome else None
         )
         self._renderer = self._compositor if self._compositor else self._face
@@ -82,7 +84,7 @@ class FaceEngine:
 
     def set_idle_scene(self, scene_name: str) -> None:
         if self._compositor is not None:
-            self._compositor.set_idle_scene(make_scene(scene_name))
+            self._compositor.set_idle_scene(make_scene(scene_name, data_dir=self._data_dir))
 
     def show(self) -> None:
         """Render current frame and push to display. Must be called from main thread."""

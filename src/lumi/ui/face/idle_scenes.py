@@ -208,8 +208,15 @@ class SpriteLoopScene:
         }
     """
 
-    def __init__(self, sprite_dir_name: str) -> None:
-        self._dir = _SPRITES_DIR / sprite_dir_name
+    def __init__(self, sprite_dir: Path | str) -> None:
+        # Accept either a string name (resolved relative to the bundled
+        # sprites dir for back-compat with hand-written SCENES entries)
+        # or an explicit Path — the factory uses the latter to point at
+        # user-uploaded packs under data_dir/sprites/<name>/.
+        if isinstance(sprite_dir, str):
+            self._dir = _SPRITES_DIR / sprite_dir
+        else:
+            self._dir = sprite_dir
         self._frames: list[object] = []     # pygame.Surface
         self._loaded = False
         # Manifest defaults
@@ -357,19 +364,94 @@ class SleepingCatPlaceholderScene:
 
 
 # ── Registry ────────────────────────────────────────────────────────────────
+#
+# Procedural scenes — fully owned in code, no assets on disk.
 
-
-SCENES: dict[str, Any] = {
-    "none":  type("_NoScene", (), {"render": lambda self, s, t, w, h: None}),
+PROCEDURAL_SCENES: dict[str, Any] = {
     "rain":  RainScene,
     "snow":  SnowScene,
-    "cat":   SleepingCatPlaceholderScene,
+}
+
+# Bundled sprite packs — frames live in src/lumi/ui/face/assets/sprites/<key>/.
+# Any name listed here is ALWAYS available even on a fresh install. User-
+# uploaded packs land in data_dir/sprites/<name>/ and OVERRIDE the bundled
+# entry with the same key, so a user can replace "cat" with their own art
+# without renaming.
+
+BUNDLED_SPRITE_PACKS: tuple[str, ...] = (
+    "cat",          # snapshot of SleepingCatPlaceholderScene — see scripts/render_sleeping_cat_frames.py
+)
+
+# Filesystem mapping: dropdown key → bundled directory name. Keeps the
+# user-facing label decoupled from how we store frames on disk.
+_BUNDLED_DIR_FOR: dict[str, str] = {
+    "cat": "sleeping-cat",
 }
 
 
-def make_scene(name: str) -> IdleScene | None:
-    """Build a scene by name. None / 'none' / unknown → None (just the face)."""
+def list_sprite_packs(data_dir: Path | None = None) -> list[dict[str, str]]:
+    """Enumerate all sprite packs the UI can offer.
+
+    Each entry is `{"name": "<key>", "source": "bundled" | "user", "label": "<display>"}`.
+    User packs override bundled packs with the same name — same key collapses
+    to a single "user" entry so the dropdown doesn't duplicate.
+    """
+    packs: dict[str, dict[str, str]] = {}
+    for key in BUNDLED_SPRITE_PACKS:
+        dirname = _BUNDLED_DIR_FOR.get(key, key)
+        if (_SPRITES_DIR / dirname).is_dir():
+            packs[key] = {"name": key, "source": "bundled", "label": key.replace("-", " ").title()}
+    if data_dir is not None:
+        user_root = data_dir / "sprites"
+        if user_root.is_dir():
+            for sub in sorted(user_root.iterdir()):
+                if sub.is_dir() and any(sub.glob("frame_*.png")):
+                    packs[sub.name] = {"name": sub.name, "source": "user",
+                                       "label": sub.name.replace("-", " ").title()}
+    return list(packs.values())
+
+
+def _resolve_sprite_path(name: str, data_dir: Path | None) -> Path | None:
+    """Return the directory holding `frame_*.png` files for `name`, or None.
+    Checks the user dir first so uploaded packs override bundled."""
+    if data_dir is not None:
+        user_path = data_dir / "sprites" / name
+        if user_path.is_dir() and any(user_path.glob("frame_*.png")):
+            return user_path
+    bundled_dirname = _BUNDLED_DIR_FOR.get(name, name)
+    bundled_path = _SPRITES_DIR / bundled_dirname
+    if bundled_path.is_dir() and any(bundled_path.glob("frame_*.png")):
+        return bundled_path
+    return None
+
+
+def make_scene(name: str, data_dir: Path | None = None) -> IdleScene | None:
+    """Build a scene by name. None / 'none' / unknown → None (just the face).
+
+    Resolution order for sprite-pack names:
+      1. data_dir/sprites/<name>/   (user-uploaded — overrides bundled)
+      2. bundled assets               (always available)
+    Procedural scenes (rain/snow) are pure code and resolve immediately.
+    """
     if not name or name == "none":
         return None
-    cls = SCENES.get(name.lower())
-    return cls() if cls else None
+    key = name.lower()
+
+    procedural = PROCEDURAL_SCENES.get(key)
+    if procedural is not None:
+        return procedural()
+
+    sprite_path = _resolve_sprite_path(key, data_dir)
+    if sprite_path is not None:
+        return SpriteLoopScene(sprite_path)
+
+    return None
+
+
+# Back-compat: previous callers indexed SCENES directly. Keep a shim so
+# external code (face_demo etc.) doesn't break, but new callers should
+# go through make_scene().
+SCENES: dict[str, Any] = {
+    "none":  type("_NoScene", (), {"render": lambda self, s, t, w, h: None}),
+    **PROCEDURAL_SCENES,
+}

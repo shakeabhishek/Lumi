@@ -1,0 +1,10 @@
+{
+  "name": "sleeping-cat",
+  "fps": 6,
+  "scale": 1,
+  "anchor": "center",
+  "background": "#0a0e1e",
+  "source": "rendered from SleepingCatPlaceholderScene",
+  "license": "Lumi-internal (replace freely via /settings/sprites)",
+  "frames": 24
+}

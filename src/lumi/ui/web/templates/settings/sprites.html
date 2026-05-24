@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}Sprite packs — Lumi{% endblock %}
+{% block content %}
+<h1>Sprite packs</h1>
+<p style="max-width:48rem">
+  Idle scenes that play behind the face when {{ settings.lumi_name }} has
+  nothing to do. Bundled packs ship with Lumi; you can upload your own
+  on top — your pack overrides a bundled one with the same name.
+</p>
+
+{# Status banner from upload/delete redirects. The query params come from
+   the routes' redirect URLs (?ok=…, ?err=…, ?deleted=…). #}
+{% set _ok = request.query_params.get("ok") %}
+{% set _err = request.query_params.get("err") %}
+{% set _deleted = request.query_params.get("deleted") %}
+{% if _ok %}
+  <div class="card" style="background:rgba(124,209,154,.10);border-color:rgba(124,209,154,.4);margin-top:1rem">
+    ✓ Uploaded <code>{{ _ok }}</code>. Pick it under <a href="/settings/face">Face → Idle scene</a>.
+  </div>
+{% endif %}
+{% if _deleted %}
+  <div class="card" style="background:rgba(255,184,77,.10);border-color:rgba(255,184,77,.4);margin-top:1rem">
+    Removed <code>{{ _deleted }}</code>.
+  </div>
+{% endif %}
+{% if _err %}
+  <div class="card" style="background:rgba(255,77,143,.10);border-color:rgba(255,77,143,.4);margin-top:1rem">
+    Upload failed: <code>{{ _err }}</code>
+  </div>
+{% endif %}
+
+<div class="card" style="margin-top:1.25rem">
+  <h2>Your packs</h2>
+  {% if sprite_packs %}
+  <table style="width:100%;border-collapse:collapse;margin-top:.5rem">
+    <thead>
+      <tr style="text-align:left;font-size:.82rem;color:var(--muted);border-bottom:1px solid var(--border-soft)">
+        <th style="padding:.45rem .25rem;width:40%">Name</th>
+        <th style="padding:.45rem .25rem">Source</th>
+        <th style="padding:.45rem .25rem;text-align:right"></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for pack in sprite_packs %}
+      <tr style="border-bottom:1px solid var(--border-soft)">
+        <td style="padding:.6rem .25rem">
+          <code>{{ pack.name }}</code>
+          <span style="color:var(--muted)"> · {{ pack.label }}</span>
+        </td>
+        <td style="padding:.6rem .25rem">
+          {% if pack.source == "user" %}
+            <span class="badge user">uploaded</span>
+          {% else %}
+            <span class="badge bundled">bundled</span>
+          {% endif %}
+        </td>
+        <td style="padding:.6rem .25rem;text-align:right">
+          {% if pack.source == "user" %}
+            <form method="POST" action="/settings/sprites/delete" style="display:inline"
+                  onsubmit="return confirm('Delete {{ pack.name }}? This can\'t be undone.')">
+              <input type="hidden" name="pack_name" value="{{ pack.name }}">
+              <button type="submit" class="btn danger" style="font-size:.85rem;padding:.3rem .65rem">Delete</button>
+            </form>
+          {% else %}
+            <span style="color:var(--muted);font-size:.82rem">ships with Lumi</span>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p style="color:var(--muted);margin:0">No sprite packs installed yet — upload one below to get started.</p>
+  {% endif %}
+</div>
+
+<div class="card" style="margin-top:1.25rem">
+  <h2>Upload a sprite pack</h2>
+  <form method="POST" action="/settings/sprites/upload" enctype="multipart/form-data">
+    <div class="form-row">
+      <label for="pack_name">Pack name</label>
+      <input id="pack_name" name="pack_name" type="text" required
+             pattern="[a-z0-9][a-z0-9-]{0,46}[a-z0-9]"
+             placeholder="sleepy-fox"
+             style="width:18rem">
+      <div style="font-size:.82rem;color:var(--muted);margin-top:.35rem">
+        Lowercase letters, digits, and dashes. This is what shows up in the
+        idle-scene dropdown.
+      </div>
+    </div>
+
+    <div class="form-row" style="margin-top:1rem">
+      <label for="zipfile">ZIP archive</label>
+      <input id="zipfile" name="zipfile" type="file" accept=".zip,application/zip" required>
+      <div style="font-size:.82rem;color:var(--muted);margin-top:.35rem">
+        The ZIP should contain <code>frame_001.png</code>, <code>frame_002.png</code>, …
+        at the top level, plus an optional <code>manifest.json</code>:
+<pre style="background:var(--bg-card);padding:.65rem;border-radius:6px;font-size:.82rem;margin-top:.35rem">{
+  "fps": 6,
+  "scale": 1,
+  "anchor": "center",
+  "background": "#0a0e1e"
+}</pre>
+        PNG-only, 256 KB per frame, 8 MB total, 240 frames max.
+      </div>
+    </div>
+
+    <div class="btn-row" style="margin-top:1rem">
+      <button type="submit" class="btn primary">Upload</button>
+      <a href="/settings/face" class="btn">Back to face settings</a>
+    </div>
+  </form>
+</div>
+
+<style>
+  .badge.bundled { background:rgba(167,139,250,.18); color:var(--purple); padding:.15rem .55rem;
+                   border-radius:999px; font-size:.78rem }
+  .badge.user    { background:rgba(124,209,154,.18); color:#5bb37b; padding:.15rem .55rem;
+                   border-radius:999px; font-size:.78rem }
+</style>
+{% endblock %}
