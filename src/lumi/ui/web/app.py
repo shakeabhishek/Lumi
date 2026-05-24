@@ -9,6 +9,9 @@ reachable at http://lumi.local via mDNS (Phase 5).
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -17,6 +20,7 @@ from fastapi.templating import Jinja2Templates
 
 from ...runtime.storage import secure_data_dir
 from .csrf import CSRFMiddleware, csrf_token_for
+from .device_samplers import start_samplers
 
 _HERE = Path(__file__).parent
 TEMPLATES_DIR = _HERE / "templates"
@@ -34,7 +38,21 @@ def create_app(data_dir: Path) -> FastAPI:
     from .routes.settings import router as settings_router
     from .routes.skills import router as skills_router
 
-    app = FastAPI(title="Lumi", docs_url=None, redoc_url=None)
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        # Start background samplers that feed the device display via the
+        # DeviceBus. Cancel them on shutdown so uvicorn can exit cleanly.
+        sampler_tasks = start_samplers(_app)
+        try:
+            yield
+        finally:
+            for task in sampler_tasks:
+                task.cancel()
+            for task in sampler_tasks:
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
+
+    app = FastAPI(title="Lumi", docs_url=None, redoc_url=None, lifespan=lifespan)
 
     import sys  # noqa: PLC0415
 

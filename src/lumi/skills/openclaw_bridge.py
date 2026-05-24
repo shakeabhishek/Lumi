@@ -45,6 +45,54 @@ OPENCLAW_SKILLS_DIR = Path.home() / ".openclaw" / "workspace" / "skills"
 # ── Tool implementations ────────────────────────────────────────────────────
 
 
+def _weather_payload(d: dict[str, Any]) -> dict[str, Any]:
+    """Shape an OpenWeatherMap /weather response into Lumi's snapshot
+    + add a `condition` enum (sunny / cloudy / rainy / snowy /
+    clear-night) the React WidgetBar's WeatherSnapshot type expects."""
+    owm_main = (d["weather"][0].get("main") or "").lower()
+    owm_icon = d["weather"][0].get("icon", "") or ""
+    is_night = owm_icon.endswith("n")
+    if owm_main in {"rain", "drizzle", "thunderstorm"}:
+        condition = "rainy"
+    elif owm_main == "snow":
+        condition = "snowy"
+    elif owm_main == "clear":
+        condition = "clear-night" if is_night else "sunny"
+    else:
+        condition = "cloudy"
+    return {
+        "location": d.get("name"),
+        "temperature_c": d["main"]["temp"],
+        "feels_like_c": d["main"]["feels_like"],
+        "humidity_pct": d["main"]["humidity"],
+        "conditions": d["weather"][0]["description"],
+        "wind_mps": d["wind"]["speed"],
+        "condition": condition,
+    }
+
+
+def fetch_weather(location: str) -> dict[str, Any] | None:
+    """Best-effort snapshot for the device-display sampler. Returns None
+    on ANY failure — the sampler keeps the last good reading rather
+    than clobbering the UI with an error message. The LLM-facing skill
+    `_weather()` below does its own request so it can produce precise
+    'not found' / 'lookup failed' strings."""
+    key = secrets.get_secret("openweathermap_api_key")
+    if not key:
+        return None
+    try:
+        r = httpx.get(
+            "https://api.openweathermap.org/data/2.5/weather",
+            params={"q": location, "appid": key, "units": "metric"},
+            timeout=10.0,
+        )
+        if r.status_code != 200:
+            return None
+        return _weather_payload(r.json())
+    except (httpx.HTTPError, KeyError, ValueError):
+        return None
+
+
 def _weather(location: str) -> str:
     key = secrets.get_secret("openweathermap_api_key")
     if not key:
@@ -58,17 +106,15 @@ def _weather(location: str) -> str:
         if r.status_code == 404:
             return f"Couldn't find a location called {location!r}."
         r.raise_for_status()
-        d = r.json()
-        return json.dumps(
-            {
-                "location": d.get("name"),
-                "temperature_c": d["main"]["temp"],
-                "feels_like_c": d["main"]["feels_like"],
-                "humidity_pct": d["main"]["humidity"],
-                "conditions": d["weather"][0]["description"],
-                "wind_mps": d["wind"]["speed"],
-            }
-        )
+        snapshot = _weather_payload(r.json())
+        return json.dumps({
+            "location": snapshot["location"],
+            "temperature_c": snapshot["temperature_c"],
+            "feels_like_c": snapshot["feels_like_c"],
+            "humidity_pct": snapshot["humidity_pct"],
+            "conditions": snapshot["conditions"],
+            "wind_mps": snapshot["wind_mps"],
+        })
     except httpx.HTTPError as exc:
         return f"Weather lookup failed: {exc}"
 
