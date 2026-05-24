@@ -22,6 +22,10 @@ dist/
 node_modules/
 package-lock.json
 
+# Vite build output for the device display — regenerated from
+# src/lumi/ui/device_display/ via `npm run build`.
+src/lumi/ui/web/static/device-display/
+
 # Models (downloaded at runtime — not checked in)
 models/
 *.onnx

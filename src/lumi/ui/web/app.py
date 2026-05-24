@@ -28,6 +28,7 @@ def create_app(data_dir: Path) -> FastAPI:
     from .routes.context_api import router as context_router
     from .routes.dashboard import router as dashboard_router
     from .routes.dev import router as dev_router
+    from .routes.device_display import router as device_display_router
     from .routes.journal import router as journal_router
     from .routes.onboarding import router as onboarding_router
     from .routes.settings import router as settings_router
@@ -60,5 +61,6 @@ def create_app(data_dir: Path) -> FastAPI:
     app.include_router(journal_router, prefix="/journal")
     app.include_router(dev_router, prefix="/dev")
     app.include_router(context_router, prefix="/api")
+    app.include_router(device_display_router, prefix="/device-display")
 
     return app
