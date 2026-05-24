@@ -1,0 +1,59 @@
+[Unit]
+Description=Lumi device display — Chromium kiosk → React app
+Documentation=file:///opt/lumi/README.md
+After=network-online.target lumi-web.service
+Wants=network-online.target
+Requires=lumi-web.service
+
+# We can't render until lumi-web is actually serving the React bundle.
+# `Requires=` brings it up, the ExecStartPre curl loop waits for /events
+# to be reachable so we don't flash the "device display not built" page.
+
+[Service]
+Type=simple
+User=lumi
+Group=lumi
+
+# cage is a one-window Wayland compositor (~2 MB). It owns the Pi's
+# framebuffer outright — no X server, no desktop env, no window
+# manager. Chromium runs on top of it under Ozone-Wayland.
+#
+# XDG_RUNTIME_DIR is what cage / Wayland use for the socket. systemd
+# normally provisions /run/user/<uid>; we force it here so the unit
+# works even when no user session is logged in (Pi OS Lite default).
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=MOZ_ENABLE_WAYLAND=1
+
+ExecStartPre=/usr/bin/install -d -o lumi -g lumi -m 0700 /run/user/1000
+ExecStartPre=/usr/bin/install -d -o lumi -g lumi -m 0755 /var/lib/lumi/chromium
+ExecStartPre=/bin/sh -c 'until curl -fsS http://127.0.0.1:8080/device-display/ >/dev/null 2>&1; do sleep 1; done'
+
+ExecStart=/usr/bin/cage -s -- /usr/bin/chromium \
+    --kiosk \
+    --noerrdialogs \
+    --no-first-run \
+    --disable-infobars \
+    --disable-translate \
+    --disable-features=TranslateUI \
+    --disable-pinch \
+    --overscroll-history-navigation=0 \
+    --hide-scrollbars \
+    --check-for-update-interval=31536000 \
+    --user-data-dir=/var/lib/lumi/chromium \
+    --window-size=480,320 \
+    --enable-features=UseOzonePlatform \
+    --ozone-platform=wayland \
+    http://127.0.0.1:8080/device-display/
+
+Restart=on-failure
+RestartSec=3
+
+# Belt-and-braces: if the device-display URL goes 5xx repeatedly the
+# kiosk will keep restarting forever. Cap the cycle so we don't burn
+# CPU on a broken backend.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target
