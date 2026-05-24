@@ -34,8 +34,23 @@ def _fake_keyring(values: dict[str, str] | None = None) -> MagicMock:
 
 
 @pytest.fixture(autouse=True)
-def _no_real_gateway_restart():
-    with patch("lumi.skills.openclaw_operator._restart_gateway", return_value=True):
+def _isolate_side_effects():
+    """Two side effects every test in this file must avoid hitting:
+       (a) the real `npx openclaw gateway start` subprocess (slow + real),
+       (b) the real OS keychain (`secrets.delete_secret(...)` from the
+           factory-reset code path would otherwise wipe the developer's
+           cloud_llm_api_key on every test run — caught hard during
+           V2 verification when the user's real Gemini key disappeared
+           mid-session).
+    Default to an in-memory fake keychain via lumi.runtime.secrets._client.
+    Avoid patch.dict(sys.modules, ...) here — it triggers numpy
+    re-import errors in cross-test runs.
+    """
+    default_fake = _fake_keyring()
+    with (
+        patch("lumi.skills.openclaw_operator._restart_gateway", return_value=True),
+        patch("lumi.runtime.secrets._client", return_value=default_fake),
+    ):
         yield
 
 
@@ -91,7 +106,7 @@ def test_reset_deletes_known_keychain_entries(env) -> None:
         ("lumi", "unrelated_key"): "stays — we only purge known names",
     })
 
-    with patch.dict(sys.modules, {"keyring": fake}):
+    with patch("lumi.runtime.secrets._client", return_value=fake):
         r = c.post("/settings/data/reset", data={"csrf_token": _csrf(c)}, follow_redirects=False)
     assert r.status_code == 303
 
@@ -105,10 +120,15 @@ def test_reset_deletes_known_keychain_entries(env) -> None:
 def test_reset_survives_missing_keychain_backend(env) -> None:
     """If the keychain backend is unreachable (CI sandbox, etc.) the rest
     of the reset must still complete."""
+    from lumi.runtime.secrets import BackendUnavailable  # noqa: PLC0415
+
     c, data_dir, _ = env
     (data_dir / "user_settings.json").write_text("{}")
 
-    with patch.dict(sys.modules, {"keyring": None}):
+    def _no_backend(*_a, **_kw):
+        raise BackendUnavailable("no keyring")
+
+    with patch("lumi.runtime.secrets._client", side_effect=_no_backend):
         r = c.post("/settings/data/reset", data={"csrf_token": _csrf(c)}, follow_redirects=False)
     assert r.status_code == 303
     assert list(data_dir.iterdir()) == []        # data_dir still wiped

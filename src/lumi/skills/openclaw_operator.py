@@ -64,25 +64,31 @@ def ensure_config_perms() -> None:
 
 
 # Lumi's provider name → OpenClaw provider config shape.
-# `api` matches the protocol family OpenClaw uses to talk to them.
+# The `api` strings must match OpenClaw's MODEL_APIS enum (in its
+# zod-schema.core.js). The canonical set as of OpenClaw 2026.04.20:
+#   openai-completions, openai-responses, openai-codex-responses,
+#   anthropic-messages, google-generative-ai, github-copilot,
+#   bedrock-converse-stream, ollama, azure-openai-responses.
+# A wrong value (e.g. just "openai" or "google") makes OpenClaw refuse
+# to start the gateway — caught the hard way during V2 verification.
 _PROVIDERS: dict[str, dict] = {
     "anthropic": {
         "baseUrl": "https://api.anthropic.com",
-        "api": "anthropic",
+        "api": "anthropic-messages",
         "default_model": "claude-opus-4-7",
         "contextWindow": 200000,
         "maxTokens": 8192,
     },
     "openai": {
         "baseUrl": "https://api.openai.com",
-        "api": "openai",
+        "api": "openai-completions",
         "default_model": "gpt-5",
         "contextWindow": 128000,
         "maxTokens": 4096,
     },
     "gemini": {
         "baseUrl": "https://generativelanguage.googleapis.com",
-        "api": "google",
+        "api": "google-generative-ai",
         "default_model": "gemini-2.5-pro",
         "contextWindow": 1000000,
         "maxTokens": 8192,
@@ -118,7 +124,18 @@ def sync_to_openclaw(provider: str, model: str = "") -> tuple[bool, str]:
     model = (model or spec["default_model"]).strip()
 
     cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    cfg.setdefault("models", {}).setdefault("providers", {})[provider] = {
+    providers = cfg.setdefault("models", {}).setdefault("providers", {})
+
+    # Purge any other Lumi-managed providers before adding the new one.
+    # OpenClaw validates the entire providers block on startup — leaving
+    # a stale anthropic block with an invalid `api` field around (because
+    # we switched to gemini) crashes the gateway. Foreign providers
+    # (anything not in _PROVIDERS — e.g. user-added or stock entries
+    # like ollama) are preserved.
+    for other in [p for p in list(providers) if p in _PROVIDERS and p != provider]:
+        providers.pop(other, None)
+
+    providers[provider] = {
         "baseUrl": spec["baseUrl"],
         "apiKey": api_key,
         "api": spec["api"],

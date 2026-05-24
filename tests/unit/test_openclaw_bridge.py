@@ -356,6 +356,92 @@ def test_successful_cloud_call_clears_prior_failure_notice() -> None:
     assert bridge.cloud_failure_notice() is None
 
 
+def test_cloud_subprocess_uses_local_flag_for_embedded_agent() -> None:
+    """`npx openclaw agent --local` runs the embedded agent without
+    needing a separately-running gateway. Discovered during V2 verify:
+    omitting --local makes the agent wait on the gateway HTTP socket
+    (which our chat path doesn't start) and silently never returns."""
+    bridge = _cloud_bridge()
+    ok_stdout = '{"payloads":[{"text":"hi"}],"meta":{"agentMeta":{}}}'
+    proc = MagicMock(returncode=0, stdout=ok_stdout, stderr="")
+    with patch("subprocess.run", return_value=proc) as mock_run:
+        bridge.send("anything")
+    cmd = mock_run.call_args.args[0]
+    assert "--local" in cmd, f"expected --local in subprocess argv, got {cmd!r}"
+
+
+def test_cloud_parses_top_level_payloads_envelope() -> None:
+    """OpenClaw 2026.04+ prints `{"payloads": [...], "meta": {...}}` at
+    the top level — the `result` wrapper that older versions used is
+    gone. Parser must accept the new shape."""
+    bridge = _cloud_bridge()
+    ok_stdout = (
+        '[agent/embedded] some log line on stderr leaking through\n'
+        '{"payloads":[{"text":"forty-seven times thirteen is 611","mediaUrl":null}],'
+        '"meta":{"durationMs":1234,"agentMeta":{"toolSummary":{"calls":1,"tools":["weather"]}}}}'
+    )
+    proc = MagicMock(returncode=0, stdout=ok_stdout, stderr="")
+    with patch("subprocess.run", return_value=proc):
+        reply = bridge.send("what's 47 times 13?")
+    assert reply == "forty-seven times thirteen is 611"
+
+
+def test_cloud_parses_legacy_result_wrapped_envelope() -> None:
+    """Older OpenClaw revisions wrapped the result in `{"result": {...}}`.
+    Keep accepting that so a pinned-old install still works."""
+    bridge = _cloud_bridge()
+    ok_stdout = (
+        '{"result":{"payloads":[{"text":"legacy ok"}],'
+        '"meta":{"agentMeta":{"toolSummary":{"calls":0,"tools":[]}}}}}'
+    )
+    proc = MagicMock(returncode=0, stdout=ok_stdout, stderr="")
+    with patch("subprocess.run", return_value=proc):
+        reply = bridge.send("hi")
+    assert reply == "legacy ok"
+
+
+def test_cloud_parser_walks_past_log_noise_with_embedded_braces() -> None:
+    """The agent CLI prints log lines like `error={"code": 429, ...}` that
+    contain literal `{` / `}` runs. The naive find('{') / rfind('}')
+    approach picked up the WRONG slice; the new parser walks backwards
+    until it finds a valid balanced JSON object."""
+    from lumi.skills.openclaw_bridge import _parse_agent_json  # noqa: PLC0415
+
+    text = (
+        '[agent/embedded] error={"error": {"code": 429, "message": "rate limit"}}\n'
+        'still more log noise with } stray closing brace\n'
+        '{"payloads":[{"text":"final result"}],"meta":{}}\n'
+    )
+    parsed = _parse_agent_json(text)
+    assert parsed is not None
+    assert parsed["payloads"][0]["text"] == "final result"
+
+
+def test_cloud_reads_json_result_from_stderr() -> None:
+    """In OpenClaw 2026.04+ `--local --json`, the agent's structured
+    result envelope lands on STDERR alongside the coloured log lines —
+    stdout is usually empty. The bridge must parse BOTH streams so it
+    doesn't silently drop every cloud reply. Caught during V2 verify."""
+    bridge = _cloud_bridge()
+    stderr_payload = (
+        '[agent/embedded] starting run\n'
+        '[agent/embedded] some other log\n'
+        '{"payloads":[{"text":"the answer is 611","mediaUrl":null}],'
+        '"meta":{"agentMeta":{"toolSummary":{"calls":0,"tools":[]}}}}\n'
+    )
+    proc = MagicMock(returncode=0, stdout="", stderr=stderr_payload)
+    with patch("subprocess.run", return_value=proc):
+        reply = bridge.send("what's 47 times 13?")
+    assert reply == "the answer is 611"
+
+
+def test_cloud_parser_returns_none_when_no_balanced_json() -> None:
+    from lumi.skills.openclaw_bridge import _parse_agent_json  # noqa: PLC0415
+    assert _parse_agent_json("") is None
+    assert _parse_agent_json("just text\nno braces here") is None
+    assert _parse_agent_json("{unbalanced") is None
+
+
 def test_bridge_with_empty_catalog_returns_none() -> None:
     """Empty manifest dir → send() short-circuits to None without calling Ollama."""
     import tempfile  # noqa: PLC0415

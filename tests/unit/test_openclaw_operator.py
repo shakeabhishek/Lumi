@@ -86,6 +86,85 @@ def test_sync_write_is_atomic(tmp_path: Path, monkeypatch) -> None:
     assert leftover == [], f"tmpfile not cleaned up: {leftover}"
 
 
+def test_sync_uses_canonical_openclaw_api_strings(tmp_path: Path, monkeypatch) -> None:
+    """OpenClaw 2026.04.20+ validates the `api` field against a fixed enum
+    (anthropic-messages / openai-completions / google-generative-ai / …).
+    Wrong values make the gateway refuse to start — discovered the hard
+    way during V2 verification. Locks the contract in."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    cfg_path = _seed_config(tmp_path)
+
+    fake = _fake_keyring({("lumi", "cloud_llm_api_key"): "sk-anything"})
+    with (
+        patch.dict(sys.modules, {"keyring": fake}),
+        patch("lumi.skills.openclaw_operator._restart_gateway", return_value=True),
+    ):
+        from lumi.skills.openclaw_operator import sync_to_openclaw  # noqa: PLC0415
+
+        for provider, expected_api in [
+            ("anthropic", "anthropic-messages"),
+            ("openai", "openai-completions"),
+            ("gemini", "google-generative-ai"),
+        ]:
+            ok, _ = sync_to_openclaw(provider)
+            assert ok
+            cfg = json.loads(cfg_path.read_text())
+            assert cfg["models"]["providers"][provider]["api"] == expected_api, (
+                f"{provider}: stored api must match OpenClaw's MODEL_APIS enum"
+            )
+
+
+def test_sync_purges_other_lumi_providers_when_switching(tmp_path: Path, monkeypatch) -> None:
+    """Switching from anthropic to gemini must remove the anthropic block.
+    Leaving stale Lumi providers around made the gateway crash on
+    validation — caught during V2 verification."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    cfg_path = _seed_config(tmp_path)
+
+    fake = _fake_keyring({("lumi", "cloud_llm_api_key"): "sk-anything"})
+    with (
+        patch.dict(sys.modules, {"keyring": fake}),
+        patch("lumi.skills.openclaw_operator._restart_gateway", return_value=True),
+    ):
+        from lumi.skills.openclaw_operator import sync_to_openclaw  # noqa: PLC0415
+
+        sync_to_openclaw("anthropic")
+        sync_to_openclaw("gemini")
+
+    providers = json.loads(cfg_path.read_text())["models"]["providers"]
+    assert "anthropic" not in providers, "stale Lumi provider survived switch"
+    assert "gemini" in providers
+
+
+def test_sync_preserves_foreign_providers_on_switch(tmp_path: Path, monkeypatch) -> None:
+    """Switching between Lumi-managed providers must NOT touch foreign
+    provider entries (ollama, user-added, etc.) — we only own the
+    subset listed in _PROVIDERS."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    cfg_path = tmp_path / ".openclaw" / "openclaw.json"
+    cfg_path.parent.mkdir(parents=True)
+    cfg_path.write_text(json.dumps({
+        "models": {"providers": {
+            "ollama": {"apiKey": "ollama-local", "baseUrl": "http://x", "api": "ollama"},
+            "user_custom": {"apiKey": "user-key", "baseUrl": "https://x", "api": "openai-completions"},
+        }},
+        "agents": {"defaults": {"model": {"primary": "ollama/qwen2.5:7b"}}},
+    }))
+
+    fake = _fake_keyring({("lumi", "cloud_llm_api_key"): "sk-anything"})
+    with (
+        patch.dict(sys.modules, {"keyring": fake}),
+        patch("lumi.skills.openclaw_operator._restart_gateway", return_value=True),
+    ):
+        from lumi.skills.openclaw_operator import sync_to_openclaw  # noqa: PLC0415
+        sync_to_openclaw("gemini")
+
+    providers = json.loads(cfg_path.read_text())["models"]["providers"]
+    assert providers["ollama"]["apiKey"] == "ollama-local"      # untouched
+    assert providers["user_custom"]["apiKey"] == "user-key"     # untouched
+    assert "gemini" in providers
+
+
 def test_revert_purges_all_cloud_provider_blocks(tmp_path: Path, monkeypatch) -> None:
     """Clearing the cloud key in /settings/cloud must wipe the providers
     block — not just flip the agent default. Otherwise the API key

@@ -197,6 +197,85 @@ _SKILL_IMPLS: dict[str, dict[str, Any]] = {
 # ── Catalog discovery: read SKILL.md manifests from the OpenClaw workspace ─
 
 
+def _parse_agent_json(text: str) -> dict[str, Any] | None:
+    """Extract the structured JSON result from `npx openclaw agent --json`.
+
+    The agent CLI prints coloured log lines (with embedded JSON-shaped
+    blobs in error messages) followed by the actual result object on its
+    own line(s). We want the OUTERMOST balanced JSON object that
+    contains a `payloads` field — naive find('{') / rfind('}') picks up
+    inner braces from log noise; rfind walking outward picks up the
+    innermost object first.
+
+    Strategy: scan every line-starting `{` (positions preceded by `\\n`
+    or beginning-of-string), try to balance forward, return the
+    payloads-bearing result.
+    """
+    if not text:
+        return None
+
+    # Collect candidate start positions: each `{` at the start of a line.
+    starts: list[int] = []
+    if text.startswith("{"):
+        starts.append(0)
+    pos = 0
+    while True:
+        i = text.find("\n{", pos)
+        if i < 0:
+            break
+        starts.append(i + 1)
+        pos = i + 1
+
+    # Prefer the latest (rightmost) candidate first — the agent prints
+    # the result AFTER the log lines.
+    for start in reversed(starts):
+        end = _balanced_end(text, start)
+        if end < 0:
+            continue
+        try:
+            obj = json.loads(text[start:end])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        # Strong signal that this is the result envelope (current or legacy
+        # shape). If neither, keep looking — we may have parsed a stray
+        # log line that happened to be valid JSON.
+        if "payloads" in obj or "result" in obj or "meta" in obj:
+            return obj
+
+    return None
+
+
+def _balanced_end(text: str, start: int) -> int:
+    """Return the index AFTER the `}` that closes the object opened at
+    `text[start]`, respecting string escapes so embedded `}` inside
+    string values don't confuse the counter. -1 if unbalanced."""
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return -1
+
+
 def _parse_frontmatter(text: str) -> dict[str, Any]:
     """Tiny YAML-ish parser for SKILL.md frontmatter. Handles `key: value`
     and simple list values. Returns {} if no frontmatter."""
@@ -502,23 +581,32 @@ class OpenClawBridge:
 
         try:
             proc = subprocess.run(
-                ["npx", "openclaw", "agent", "--agent", "main",
-                 "--message", masked_text, "--json", "--timeout", str(int(self._timeout))],
+                ["npx", "openclaw", "agent",
+                 "--agent", "main",
+                 "--local",                # embedded run; reads provider key from openclaw.json
+                 "--message", masked_text,
+                 "--json",
+                 "--timeout", str(int(self._timeout))],
                 capture_output=True, text=True, timeout=self._timeout + 10,
             )
             if proc.returncode != 0:
-                self._record_cloud_failure("nonzero", proc.stderr[:200])
+                self._record_cloud_failure("nonzero", proc.stderr[:200] or proc.stdout[:200])
                 return None
-            out = proc.stdout
-            start = out.find("{")
-            end = out.rfind("}") + 1
-            if start < 0 or end <= start:
-                self._record_cloud_failure("bad_output", "no JSON object in stdout")
+            # The agent CLI's `--json` mode in OpenClaw 2026.04 emits the
+            # result envelope on STDERR (alongside coloured log lines),
+            # not stdout — stdout often comes back empty. Parse both
+            # streams together so we don't care which one the CLI picks.
+            combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
+            data = _parse_agent_json(combined)
+            if data is None:
+                self._record_cloud_failure("bad_output", "no JSON object in subprocess output")
                 return None
-            data = json.loads(out[start:end])
-            payloads = data.get("result", {}).get("payloads", []) or []
+            # The result envelope can be either `{"payloads": [...], "meta": {...}}`
+            # (openclaw 2026.04+) or wrapped in `{"result": {...}}` (older).
+            envelope = data.get("result", data)
+            payloads = envelope.get("payloads", []) or []
             reply = "\n\n".join(p.get("text", "") for p in payloads if p.get("text")).strip()
-            tool_summary = data.get("result", {}).get("meta", {}).get("agentMeta", {}).get("toolSummary") or {}
+            tool_summary = envelope.get("meta", {}).get("agentMeta", {}).get("toolSummary") or {}
             log.info(
                 "bridge.openclaw_ok",
                 chars=len(reply),

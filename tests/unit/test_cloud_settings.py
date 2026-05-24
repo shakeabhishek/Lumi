@@ -37,9 +37,21 @@ def _client() -> tuple[TestClient, Path, MagicMock]:
 
 
 @pytest.fixture(autouse=True)
-def _no_real_gateway_restart():
-    """Stub out the `npx openclaw gateway start` subprocess call so cloud-
-    settings tests don't hit a real 20s subprocess timeout each."""
+def _isolate_openclaw_config(tmp_path_factory, monkeypatch):
+    """Two things must NEVER touch the developer's real ~/.openclaw:
+       (a) the gateway-restart subprocess (npx openclaw — slow + real),
+       (b) sync_to_openclaw writing into ~/.openclaw/openclaw.json.
+    The /settings/cloud route triggers both, and once upon a time a
+    test fixture's "sk-survives-csrf-check" placeholder ended up in
+    the developer's real config — caught during V2 verification.
+    Sandbox HOME for the duration of every test in this file."""
+    fake_home = tmp_path_factory.mktemp("fake_home")
+    (fake_home / ".openclaw").mkdir()
+    (fake_home / ".openclaw" / "openclaw.json").write_text(
+        '{"models": {"providers": {"ollama": {"baseUrl": "http://x", "api": "ollama"}}},'
+        ' "agents": {"defaults": {"model": {"primary": "ollama/qwen2.5:7b"}}}}'
+    )
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
     with patch("lumi.skills.openclaw_operator._restart_gateway", return_value=True):
         yield
 

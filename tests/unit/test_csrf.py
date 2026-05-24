@@ -25,7 +25,17 @@ def _fake_keyring() -> MagicMock:
 
 
 @pytest.fixture(autouse=True)
-def _no_real_gateway_restart():
+def _isolate_openclaw_config(tmp_path_factory, monkeypatch):
+    """Sandbox HOME so any cloud-settings POSTs the CSRF tests issue
+    can't write into the developer's real ~/.openclaw/openclaw.json.
+    See test_cloud_settings.py for the rationale (test residue once
+    landed in production config — found during V2 verification)."""
+    fake_home = tmp_path_factory.mktemp("fake_home")
+    (fake_home / ".openclaw").mkdir()
+    (fake_home / ".openclaw" / "openclaw.json").write_text(
+        '{"models": {"providers": {"ollama": {"baseUrl": "http://x", "api": "ollama"}}}}'
+    )
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
     with patch("lumi.skills.openclaw_operator._restart_gateway", return_value=True):
         yield
 
