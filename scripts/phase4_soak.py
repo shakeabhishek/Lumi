@@ -155,6 +155,10 @@ def _drive_turn(
 
 
 def _spawn_server(port: int, data_dir: Path, backend: str) -> subprocess.Popen:
+    """Spawn `lumi web` in its own process group so we can signal the
+    whole tree on shutdown — `uv run` forks a python child which would
+    survive a plain proc.terminate() and leave a zombie on the port.
+    """
     env = {
         **os.environ,
         "LUMI_LLM_BACKEND": backend,
@@ -167,20 +171,32 @@ def _spawn_server(port: int, data_dir: Path, backend: str) -> subprocess.Popen:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        start_new_session=True,        # new pgid → killable as a group
     )
 
 
 def _drain_subprocess(proc: subprocess.Popen, lines_max: int = 200) -> list[str]:
-    """Pull the server's stdout/stderr (combined) without blocking long."""
+    """Pull the server's stdout/stderr (combined) without blocking long.
+    Signals the whole process group so the `uv run` parent AND its
+    `lumi web` python child both go away — without this the python
+    child holds the listening socket and the next launch can't bind."""
     out: list[str] = []
-    if proc.stdout is None:
-        return out
-    proc.terminate()
-    try:
-        text = proc.communicate(timeout=5)[0]
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        text = proc.communicate(timeout=5)[0]
+    if proc.poll() is None:
+        try:
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            text = proc.communicate(timeout=5)[0]
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, NameError):
+                proc.kill()
+            text = proc.communicate(timeout=5)[0]
+    else:
+        text = proc.communicate(timeout=1)[0] if proc.stdout else ""
     if text:
         out = text.splitlines()[-lines_max:]
     return out
@@ -223,10 +239,23 @@ def main() -> int:
     ps_proc = psutil.Process(proc.pid)
 
     client = httpx.Client(base_url=f"http://127.0.0.1:{args.port}", timeout=30.0)
-    client.get("/")        # warm the CSRF cookie
-    csrf = client.cookies.get("csrf_token", "") or ""
+    # Warm-up: port-open accepts before uvicorn's app is fully mounted, so
+    # the first real GET can hang on a partially-started worker. Retry a
+    # few times with short timeouts before giving up.
+    csrf = ""
+    for attempt in range(5):
+        try:
+            r = client.get("/", timeout=10.0, follow_redirects=False)
+            if r.status_code in (200, 303, 307):
+                csrf = client.cookies.get("csrf_token", "") or ""
+                break
+        except (httpx.HTTPError, httpx.ReadTimeout) as exc:
+            print(f"[soak] warm-up GET attempt {attempt+1} failed: {exc}", file=sys.stderr)
+            time.sleep(1.0)
     if not csrf:
-        print("[soak] no CSRF token received from warm-up GET", file=sys.stderr)
+        print("[soak] could not obtain CSRF token after 5 warm-up attempts — aborting", file=sys.stderr)
+        _drain_subprocess(proc)         # kill the whole group, not just `uv`
+        return 2
 
     # ── Driver loop ────────────────────────────────────────────────────────
     samples: list[dict[str, Any]] = []
