@@ -7,7 +7,7 @@ laptop before the image build picks them up.
 
 | Unit | Owns |
 |---|---|
-| `lumi-web.service` *(TBD)* | FastAPI dashboard on :8080 — the runtime the React app talks to over SSE |
+| `lumi-web.service` | FastAPI dashboard on :8080 — the runtime the React app talks to over SSE |
 | `lumi-display.service` | Chromium kiosk → `http://127.0.0.1:8080/device-display/` (Pi 5, Wayland via `cage`) |
 
 ## Pi 5 host requirements for `lumi-display.service`
@@ -29,13 +29,21 @@ And needs the `lumi` user (UID 1000) created in the image, with
 ## Installation (dev / Pi)
 
 ```
+sudo cp os-image/etc/systemd/system/lumi-web.service /etc/systemd/system/
 sudo cp os-image/etc/systemd/system/lumi-display.service /etc/systemd/system/
 sudo systemctl daemon-reload
+sudo systemctl enable --now lumi-web.service
 sudo systemctl enable --now lumi-display.service
 ```
 
-`lumi-web.service` will need to be installed too once we author it
-(`lumi-display` declares `Requires=lumi-web.service`).
+`lumi-display` declares `Requires=lumi-web.service`, so starting the
+kiosk also brings the dashboard up. Stopping `lumi-web` will stop the
+kiosk too (it's pointless without the React bundle being served).
+
+The image build needs `lumi` as a system user with home
+`/var/lib/lumi`, and Lumi installed at `/opt/lumi` with the entrypoint
+on `/usr/local/bin/lumi`. The pi-gen recipe in `stage-lumi/` will
+own creating those.
 
 ## Why a kiosk over a desktop session
 

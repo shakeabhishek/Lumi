@@ -1,0 +1,60 @@
+[Unit]
+Description=Lumi web dashboard (FastAPI + SSE on :8080)
+Documentation=file:///opt/lumi/README.md
+# We want the network up so /api/context, /chat/stream, and the SSE
+# device-display stream all have stable sockets. PartOf the lumi
+# target so `systemctl stop lumi.target` cleans us up too.
+After=network-online.target
+Wants=network-online.target
+PartOf=lumi.target
+
+[Service]
+Type=simple
+User=lumi
+Group=lumi
+WorkingDirectory=/opt/lumi
+
+# Where Lumi keeps user state — chat history, audit log, sprite uploads,
+# owner voice embedding, sensitive perms enforced on every boot.
+Environment=LUMI_DATA_DIR=/var/lib/lumi/data
+# Cloud LLM mode keeps its key in ~/.openclaw/openclaw.json. systemd
+# DynamicUser would change HOME under us, so we use a real user with
+# a stable home dir.
+Environment=HOME=/var/lib/lumi
+
+# uvicorn binds before serving requests, but the React bundle + Chromium
+# bookkeeping need a writable data dir. install -d here is idempotent;
+# it just guarantees the dir + correct perms on a fresh image.
+ExecStartPre=/usr/bin/install -d -o lumi -g lumi -m 0700 /var/lib/lumi/data
+ExecStartPre=/usr/bin/install -d -o lumi -g lumi -m 0700 /var/lib/lumi
+
+# `lumi web` shells out to uvicorn under the hood — see main.py:web().
+# --host 127.0.0.1 because the kiosk is the only consumer; nothing
+# off-device needs to reach this. (The device exposes the dashboard
+# on the LAN through a separate lumi-lan.service we'll write later
+# if/when we need mDNS-discovered remote access.)
+ExecStart=/usr/local/bin/lumi web --host 127.0.0.1 --port 8080
+
+# Health endpoint is /device-display/ — kiosk's ExecStartPre curl loop
+# is the de-facto readiness probe. We keep Restart=on-failure so a
+# crash doesn't take the screen dark forever.
+Restart=on-failure
+RestartSec=3
+
+# Hardening — read-only OS, writable state confined to /var/lib/lumi.
+# These match the privacy invariants in CLAUDE.md (data_dir 0700,
+# sensitive files 0600 enforced by runtime/storage.py).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/lumi
+# OpenClaw's config + skills live under HOME — give the user write
+# access there too so `sync_to_openclaw` can persist key changes.
+ReadWritePaths=/var/lib/lumi/.openclaw
+
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target
