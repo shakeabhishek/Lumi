@@ -1,22 +1,22 @@
 {% for m in messages %}
   {% if m.role == "context" %}
-    <div class="chat-row">
-      <div class="chat-bubble--context">{{ m.text }}</div>
+    <div class="chat-row chat-row--context">
+      <div class="chat-bubble chat-bubble--context">{{ m.text }}</div>
     </div>
   {% elif m.role == "user" %}
-    <div class="chat-row">
+    <div class="chat-row chat-row--user">
       <div class="chat-meta"><span class="who">You</span><span>{{ m.ts }}</span></div>
-      <div class="chat-bubble--user">{{ m.text }}</div>
+      <div class="chat-bubble chat-bubble--user">{{ m.text }}</div>
     </div>
   {% else %}
-    <div class="chat-row">
+    <div class="chat-row chat-row--lumi">
       <div class="chat-meta">
         <span class="who">{{ settings.lumi_name if settings else "Lumi" }}</span>
         {% if m.handler %}<span class="badge {{ m.handler }}">{{ m.handler }}{% if m.skill %}:{{ m.skill }}{% endif %}</span>{% endif %}
         <span>{{ m.elapsed_ms }} ms</span>
         <span>{{ m.ts }}</span>
       </div>
-      <div class="chat-bubble--lumi">{{ m.text }}</div>
+      <div class="chat-bubble chat-bubble--lumi">{{ m.text }}</div>
     </div>
   {% endif %}
 {% endfor %}

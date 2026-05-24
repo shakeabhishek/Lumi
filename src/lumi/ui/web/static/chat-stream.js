@@ -45,10 +45,10 @@
   function renderUserBubble(text) {
     removeEmptyState();
     const row = document.createElement('div');
-    row.className = 'chat-row';
+    row.className = 'chat-row chat-row--user';
     row.innerHTML =
       '<div class="chat-meta"><span class="who">You</span><span>' + now() + '</span></div>' +
-      '<div class="chat-bubble--user"></div>';
+      '<div class="chat-bubble chat-bubble--user"></div>';
     row.querySelector('.chat-bubble--user').textContent = text;
     log.appendChild(row);
     scrollToBottom();
@@ -58,8 +58,8 @@
   function renderContextBubble(text) {
     removeEmptyState();
     const row = document.createElement('div');
-    row.className = 'chat-row';
-    row.innerHTML = '<div class="chat-bubble--context"></div>';
+    row.className = 'chat-row chat-row--context';
+    row.innerHTML = '<div class="chat-bubble chat-bubble--context"></div>';
     row.querySelector('.chat-bubble--context').textContent = text;
     log.appendChild(row);
     scrollToBottom();
@@ -68,7 +68,7 @@
   function renderLumiPlaceholder() {
     removeEmptyState();
     const row = document.createElement('div');
-    row.className = 'chat-row chat-row--streaming';
+    row.className = 'chat-row chat-row--lumi chat-row--streaming';
     row.innerHTML =
       '<div class="chat-meta">' +
       '<span class="who"></span>' +
@@ -76,7 +76,7 @@
       '<span class="ms-slot"></span>' +
       '<span class="ts-slot">' + now() + '</span>' +
       '</div>' +
-      '<div class="chat-bubble--lumi"><span class="reply-text"></span><span class="caret">▍</span></div>';
+      '<div class="chat-bubble chat-bubble--lumi"><span class="reply-text"></span><span class="chat-caret">▍</span></div>';
     row.querySelector('.who').textContent = lumiName;
     log.appendChild(row);
     scrollToBottom();
@@ -85,7 +85,7 @@
 
   function finalizeLumi(row, meta) {
     row.classList.remove('chat-row--streaming');
-    const caret = row.querySelector('.caret');
+    const caret = row.querySelector('.chat-caret');
     if (caret) caret.remove();
     if (meta) {
       const badgeSlot = row.querySelector('.badge-slot');
@@ -179,8 +179,8 @@
           // (User row is the most-recent appended one before placeholder.)
           const userRow = log.children[log.children.length - 2];
           const ctxRow = document.createElement('div');
-          ctxRow.className = 'chat-row';
-          ctxRow.innerHTML = '<div class="chat-bubble--context"></div>';
+          ctxRow.className = 'chat-row chat-row--context';
+          ctxRow.innerHTML = '<div class="chat-bubble chat-bubble--context"></div>';
           ctxRow.querySelector('.chat-bubble--context').textContent = data.text;
           log.insertBefore(ctxRow, userRow);
           scrollToBottom();
@@ -212,7 +212,7 @@
         });
       } catch (_) { /* best-effort */ }
       log.innerHTML =
-        '<div class="empty-state" style="padding:2rem">Cleared. Say something.</div>';
+        '<div class="empty-state">Cleared. Say something.</div>';
       input.focus();
     });
   }
