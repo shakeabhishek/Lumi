@@ -244,10 +244,17 @@ async def chat_stream(
         # 2. Reply tokens. handle_streaming() yields chunks for the LLM path
         #    and a single chunk for native skills / OpenClaw bridge — same
         #    SSE shape either way, the client doesn't have to care.
+        #    Also publish face-state transitions to /device-display/events
+        #    so the device screen tracks chat turns in real time.
+        from .device_display import publish_face_state  # noqa: PLC0415
+
+        await publish_face_state(request, "think")
+
         t0 = time.perf_counter()
         collected: list[str] = []
         loop = asyncio.get_event_loop()
 
+        first_chunk_seen = False
         try:
             gen = session.router.handle_streaming(msg)
         except Exception as exc:
@@ -263,6 +270,9 @@ async def chat_stream(
                     chunk = await loop.run_in_executor(None, next, gen, _STREAM_SENTINEL)
                     if chunk is _STREAM_SENTINEL:
                         break
+                    if not first_chunk_seen:
+                        first_chunk_seen = True
+                        await publish_face_state(request, "speak")
                     collected.append(chunk)
                     yield b"data: " + json.dumps({"chunk": chunk}).encode() + b"\n\n"
             except Exception as exc:
@@ -298,6 +308,9 @@ async def chat_stream(
         # 5. Terminal "done" so the client knows to finalise the bubble.
         meta = {"handler": handler, "skill": skill, "elapsed_ms": elapsed_ms}
         yield b"event: done\ndata: " + json.dumps(meta).encode() + b"\n\n"
+
+        # 6. Face back to IDLE for the device display.
+        await publish_face_state(request, "idle")
 
     return StreamingResponse(
         stream(),

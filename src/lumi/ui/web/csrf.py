@@ -40,6 +40,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 # trusted caller (hotkey daemon) or a same-origin static asset.
 _BYPASS_PREFIXES: tuple[str, ...] = (
     "/api/context",      # send-to-Lumi daemon — runs locally with no browser
+    "/api/state",        # voice loop pushing face-state transitions to the device display
     "/static/",          # static assets, no state
 )
 

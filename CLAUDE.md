@@ -9,20 +9,45 @@ Lumi is a portable physical AI desk companion that plugs into any computer via U
 ## Project status
 
 **Pre-hardware design phase.** All major architecture decisions are locked
-in. Pi 5 + AI HAT+ 2 + Hailo on order. Software runs on a laptop using
-mocked hardware interfaces; same Frame/Display abstractions swap to real
-drivers on the Pi without runtime changes.
+in. Pi 5 + AI HAT+ 2 + Hailo on order. Software runs on a laptop; the
+mocked hardware interfaces remain only for the wake-word / mic / camera
+paths — the **device display is now a React/Vite app rendered by a
+Chromium kiosk on the Pi** (pivot 2026-05-24, see "Device display
+architecture" below), so no pygame display swap is needed when hardware
+arrives.
 
-**Phases 1-4 complete.** 390 unit tests passing. Voice loop, web chat,
-ChromaDB memory, audit log, 8 native skills, hotkey "send to Lumi"
-(global Cmd+Alt+L), perf log, data export + factory reset, OS-keychain
-secret storage, audit log, dev-panel skill test, journal auto-summary,
-9-step onboarding with chrome'd face (clock + weather + status band) and
-idle scenes (rain, snow, sleeping cat).
+**Phases 1-4 complete.** 475+ unit tests passing. Voice loop, web chat
+with optimistic send + token streaming, ChromaDB memory, audit log, 8
+native skills, hotkey "send to Lumi" (global Cmd+Alt+L), perf log, data
+export + factory reset, OS-keychain secret storage, dev-panel skill
+test, journal auto-summary, 9-step onboarding, sprite-pack upload UI
+(`/settings/sprites`), React device display at `/device-display/` with
+live SSE state push.
 
 **Privacy + robustness sprint (audit 2026-05-21) complete.** 22 findings
 closed across security/privacy/UX/correctness. Architectural invariants
 established (and tested) — see "Invariants & patterns" section below.
+
+**V2 sequence #1 (cloud LLM end-to-end) verified 2026-05-23.** Real
+Gemini call through the full PII-pseudonymizer → `npx openclaw agent
+--local` subprocess → unmasked reply path. Four real bugs surfaced and
+fixed: test fixtures had leaked into the developer's `~/.openclaw/
+openclaw.json`; `_PROVIDERS` used wrong `api` strings vs OpenClaw's
+MODEL_APIS enum; `sync_to_openclaw` didn't purge stale Lumi providers
+on switch; bridge was missing `--local` + parsing the wrong stream.
+All locked down with tests.
+
+**Device-display pivot 2026-05-24.** Replaced the pygame face renderers
+(pixel/vector/terminal/chrome compositor) with a React/Vite/Tailwind
+app at `src/lumi/ui/device_display/`, served by FastAPI at
+`/device-display/`. Rationale: the pygame face couldn't match Figma's
+visual fidelity within reasonable effort, and the Pi 5's 16 GB RAM
+comfortably supports a Chromium kiosk pointed at localhost. Backend
+publishes face-state transitions via an in-process broadcaster
+(`ui/web/device_bus.py`); the React `useDeviceState()` hook subscribes
+via SSE at `/device-display/events`. Sprite packs from
+`/settings/sprites` flow through to the React display via the existing
+data_dir/bundled fallback chain.
 
 **Runtime architecture — the honest version**
 
@@ -118,9 +143,34 @@ Lumi runs a **purely onboard LLM** for V1 — no cloud LLM calls during inferenc
 
 **Compute & memory split:**
 - **AI HAT+ 2 (8GB dedicated RAM)**: LLM inference, MediaPipe gesture recognition. Isolated memory pool.
-- **Pi 5 (16GB system RAM)**: OS, Lumi Python app, Whisper, Piper, ChromaDB, FastAPI, **OpenClaw service (Node.js)**, audio pipeline, display rendering. Plenty of headroom (~13GB free with everything running).
+- **Pi 5 (16GB system RAM)**: OS, Lumi Python app, Whisper, Piper, ChromaDB, FastAPI, **OpenClaw service (Node.js)**, audio pipeline, **Chromium kiosk** rendering the device display from `localhost:8080/device-display/`. ~13 GB free at idle; Chromium adds ~500-800 MB which still leaves comfortable headroom.
 
-**Why memory separation works:** AI HAT+ 2 handles the heavy LLM workload in its own 8GB. Pi RAM is never used for LLM inference, so OpenClaw + everything else gets full 16GB to share. Confirmed memory headroom ~13GB free at idle.
+**Why memory separation works:** AI HAT+ 2 handles the heavy LLM workload in its own 8GB. Pi RAM is never used for LLM inference, so OpenClaw + the FastAPI server + the Chromium kiosk all share the 16 GB system pool. Confirmed memory headroom ~12 GB free at idle even with Chromium running.
+
+## Device display architecture
+
+The screen on Lumi's body is a Chromium kiosk pointing at the local
+FastAPI server's `/device-display/` route. The React app at
+`src/lumi/ui/device_display/` is built once via `npm run build` and
+served as static files by FastAPI; state flows backend → frontend over
+SSE:
+
+```
+[StateMachine in voice loop]  ── HTTP POST /api/state ──▶  [DeviceBus singleton]
+[ChatSession in web chat]     ── publish_face_state() ──▶  [in src/lumi/ui/web/]
+[Weather + CPU sampler]       ── publish() ─────────────▶
+                                                           │
+                                                           ▼
+                                    GET /device-display/events  (SSE)
+                                                           │
+                                                           ▼
+                                  React useDeviceState() → re-render
+```
+
+`DeviceBus` (`src/lumi/ui/web/device_bus.py`) is an in-process pub/sub
+with last-snapshot caching, so a new SSE subscriber gets the current
+state immediately. Slow subscribers drop oldest frames rather than
+backing up publishers.
 
 **Data flow (typical voice query, native skill):**
 ```
@@ -381,9 +431,9 @@ Build the core runtime that orchestrates voice, LLM, skills, and OpenClaw.
 - Mode system: General / Code / Focus / Dictation (mode pre-configures system prompt)
 - Conversation manager with ChromaDB integration
 - Speaker verification via Resemblyzer (voice enrollment + recognition)
-- Face engine rendering to laptop window (3 face style options)
-- **Mock hardware abstraction layer**:
-  - `MockGPIO`, `MockI2C`, `MockSPIDisplay`, `MockUSBGadget`, `MockCameraIO`
+- ~~Face engine rendering to laptop window (3 face style options)~~ — superseded by the React device-display pivot (2026-05-24). The face now lives at `src/lumi/ui/device_display/` (React/Vite/Tailwind) served at `/device-display/`. Four face styles: pixel, vector (system emoji), terminal (macOS-window chrome around the kawaii bear), and sprite (uses our existing sprite-pack pipeline).
+- **Mock hardware abstraction layer** (camera/audio/USB-gadget paths only — display is no longer a Frame/SPI swap; Chromium kiosk owns the panel):
+  - `MockGPIO`, `MockI2C`, `MockUSBGadget`, `MockCameraIO`
   - Clean interfaces so real drivers swap in later
 - **LLM backend abstraction**:
   - `OllamaBackend` (dev), `HailoBackend` (production — stubbed for now)
@@ -525,16 +575,18 @@ the **source of the quirk list**, not a runtime dependency. If Hailo
   available without per-skill Python ports.
 - Validate tool-calling reliability still ≥80% on Hailo via the new path
 - Configure USB gadget composite mode in `/boot/config.txt`
-- Configure SPI display driver (Waveshare 3.5")
+- Configure the Waveshare 3.5" SPI display as a framebuffer device
+  (`fbcon=map:N` + `fbtft_device` for the panel) so a windowing system
+  can target it
 - Configure Camera Module 3 Wide via libcamera
 - Configure I2C bus (for future modular sensor expansion)
 - **Replace each mocked hardware driver with real implementation**:
   - `MockGPIO` → real GPIO
-  - `MockI2C` → real I2C  
-  - `MockSPIDisplay` → real Waveshare driver
+  - `MockI2C` → real I2C
   - `MockUSBGadget` → real libcomposite
   - `MockCameraIO` → real libcamera
   - `OllamaBackend` → `HailoBackend`
+- **Install the Chromium kiosk autostart unit** (see `os-image/etc/systemd/system/lumi-display.service`). Pointed at `http://localhost:8080/device-display/`, kiosk-mode chrome, autorestart on crash.
 - Install MediaPipe gesture model on AI HAT+ 2
 - Performance and stress testing with all subsystems active
 
@@ -925,10 +977,23 @@ lumi/
 │   │   │   └── ...
 │   │   └── openclaw_bridge.py   # HTTP client to OpenClaw service
 │   ├── ui/
-│   │   ├── face/                # Face animations
-│   │   └── web/                 # FastAPI + HTMX
+│   │   ├── face/                # Sprite-pack metadata (idle_scenes.py
+│   │   │                        # owns the bundled+user-dir resolution).
+│   │   │                        # The pygame face renderers (pixel.py,
+│   │   │                        # vector.py, terminal.py, chrome.py,
+│   │   │                        # engine.py) are slated for removal —
+│   │   │                        # React device display owns rendering now.
+│   │   ├── web/                 # FastAPI + Jinja/HTMX dashboard
+│   │   │   ├── routes/          # Each dashboard area as a router
+│   │   │   ├── device_bus.py    # In-process SSE broadcaster
+│   │   │   ├── csrf.py          # SameSite=Strict middleware
+│   │   │   └── persistence.py   # user_settings.json (atomic writes)
+│   │   └── device_display/      # React/Vite/Tailwind app — the Lumi
+│   │                            # screen. Built into ../web/static/
+│   │                            # device-display/, served at /device-
+│   │                            # display/. Chromium kiosk renders it
+│   │                            # on the Pi.
 │   ├── hardware/
-│   │   ├── display.py           # SPI display driver (with mock)
 │   │   ├── audio_io.py          # ReSpeaker (with mock)
 │   │   ├── camera_io.py         # CSI camera (with mock)
 │   │   ├── gpio.py              # GPIO (with mock)

@@ -120,43 +120,32 @@ async def device_display_sprite(
 
 # ── State stream (SSE) ────────────────────────────────────────────────────
 #
-# Phase A (now): poll-based — the route synthesizes a snapshot every
-# second from app.state (last LumiState transition, last weather sample,
-# psutil CPU%). This already gives the React app live data with no
-# additional infrastructure.
-#
-# Phase B (when the voice loop is also a long-lived server): hook the
-# StateMachine's on_state_change callback into a broadcaster + push
-# transitions immediately instead of polling. Trivial drop-in then.
+# Push-based (Phase B). The DeviceBus owns subscriber queues; whoever
+# wants to change state publishes one snapshot and every connected
+# React client receives it instantly. Periodic CPU/weather refreshes
+# come from a single background task so we're not polling on every
+# subscriber's connection.
 
 
-_LAST_PERSISTED_FACE_STATE = "idle"        # updated by main.py state machine when wired
+_VALID_FACE_STATES = {"idle", "listen", "think", "speak"}
 
 
-def _device_snapshot(request: Request) -> dict:
+def _settings_snapshot(request: Request) -> dict:
+    """Read-only fields derived from on-disk settings — style, sprite
+    pack, theme. Recomputed on every publish so a /settings/face change
+    reflects without restarting the server."""
     from ..persistence import load_settings  # noqa: PLC0415
 
     settings = load_settings(request.app.state.data_dir)
-    face_state = getattr(request.app.state, "lumi_face_state", _LAST_PERSISTED_FACE_STATE)
-
-    # Map face_theme → device style. "terminal" is the only synonym;
-    # an idle-scene that's a sprite pack flips us into sprite mode.
     style = settings.face_theme if settings.face_theme in {"pixel", "vector", "terminal"} else "pixel"
     sprite_pack: str | None = None
     if settings.idle_scene and settings.idle_scene not in {"none", "rain", "snow"}:
         style = "sprite"
         sprite_pack = settings.idle_scene
-
-    cpu = psutil.cpu_percent(interval=None)        # non-blocking
-
     return {
-        "state": face_state,
         "style": style,
         "spritePack": sprite_pack,
-        "theme": "default",                         # multi-theme support: V2
-        "statusText": _status_text_for(face_state),
-        "weather": None,                            # wired in when weather skill exposes it
-        "cpuPct": round(cpu),
+        "theme": "default",         # multi-theme picker is V2
     }
 
 
@@ -169,34 +158,63 @@ def _status_text_for(face_state: str) -> str:
     }.get(face_state, "Connected to cloud")
 
 
+async def publish_face_state(request: Request, face_state: str) -> None:
+    """Helper for in-process callers (chat session, future state-machine
+    listener). Updates the cached settings-derived fields too so the
+    React client doesn't have to re-fetch /settings between transitions."""
+    from .. import device_bus as _bus_mod  # noqa: PLC0415
+
+    if face_state not in _VALID_FACE_STATES:
+        return
+    snapshot = {
+        "state": face_state,
+        "statusText": _status_text_for(face_state),
+        **_settings_snapshot(request),
+    }
+    await _bus_mod.get_bus(request.app).publish(snapshot)
+
+
 @router.get("/events")
 async def device_display_events(request: Request) -> StreamingResponse:
-    """SSE feed of device state. Emits one frame on connect + one every
-    second thereafter. Client is the React app's `useDeviceState` hook."""
+    """SSE feed. Each connection subscribes to the broadcaster, gets the
+    last-known snapshot delivered immediately (so the face renders
+    without waiting for the next transition), then receives push frames
+    whenever publish() is called from anywhere in the process.
+    """
+    from .. import device_bus as _bus_mod  # noqa: PLC0415
+
+    bus = _bus_mod.get_bus(request.app)
+
+    # Seed the bus with the current settings + an "idle" baseline if
+    # nothing's been published yet — guarantees first /events response
+    # has actual data for the client to render.
+    if bus.latest() is None:
+        await bus.publish({
+            "state": "idle",
+            "statusText": _status_text_for("idle"),
+            "weather": None,
+            "cpuPct": round(psutil.cpu_percent(interval=None)),
+            **_settings_snapshot(request),
+        })
+
     async def stream():
-        try:
-            while True:
-                if await request.is_disconnected():
-                    return
-                snapshot = _device_snapshot(request)
-                yield f"data: {json.dumps(snapshot)}\n\n".encode()
-                await asyncio.sleep(1.0)
-        except asyncio.CancelledError:
-            return
+        async for snapshot in bus.subscribe():
+            if await request.is_disconnected():
+                return
+            yield f"data: {json.dumps(snapshot)}\n\n".encode()
 
     return StreamingResponse(
         stream(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",        # disable nginx-style proxy buffering
+            "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
         },
     )
 
 
-# Warm psutil's CPU sampler so the first /events frame isn't 0% on a
-# cold start. cpu_percent() returns the % since the LAST call, so seed
-# it at module import.
+# Warm psutil's CPU sampler so the first publish isn't 0% on cold start.
+# cpu_percent() returns the delta since the LAST call.
 psutil.cpu_percent(interval=None)
-time.perf_counter()      # touch module so timing is hot
+time.perf_counter()

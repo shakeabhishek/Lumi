@@ -32,3 +32,33 @@ async def post_context(
         raise HTTPException(status_code=400, detail="empty text")
     write_pending(data_dir, CaptureResult(text=text, source=source))
     return {"ok": True, "chars": len(text), "source": source}
+
+
+# ── Device-state push ──────────────────────────────────────────────────────
+#
+# The voice loop (`lumi run`) is a separate OS process from the FastAPI
+# app (`lumi web`). It can't directly call into the DeviceBus, so it
+# pushes state transitions here via HTTP and we relay to subscribers.
+# Same-machine traffic only — bypassed in the CSRF middleware just like
+# /api/context.
+
+
+@router.post("/state")
+async def post_face_state(
+    request: Request,
+    state: Annotated[str, Form()],
+) -> dict[str, object]:
+    """Publish a face-state transition to /device-display/events subscribers.
+
+    Body: form-encoded `state=idle|listen|think|speak`. Used by the voice
+    loop and by tests; the web chat session calls the helper directly
+    instead of going through HTTP."""
+    from .device_display import publish_face_state, _VALID_FACE_STATES  # noqa: PLC0415
+
+    if state not in _VALID_FACE_STATES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"state must be one of {sorted(_VALID_FACE_STATES)}",
+        )
+    await publish_face_state(request, state)
+    return {"ok": True, "state": state}

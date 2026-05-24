@@ -133,7 +133,8 @@ About 10 minutes from unboxing to your first real conversation.
 
 Things I'm proud of building into this:
 
-- **Hybrid compute split** — Pi 5 CPU handles orchestration / Whisper STT / Piper TTS / web UI; Hailo-10H NPU does LLM inference + MediaPipe vision. Independent memory pools, no contention.
+- **React device display + Chromium kiosk** — Lumi's screen is a React/Vite/Tailwind app served by FastAPI at `/device-display/`. On the Pi, a systemd unit autostarts Chromium in kiosk mode pointing at `localhost:8080/device-display/`. Backend pushes face-state transitions (idle/listen/think/speak), sprite-pack changes, weather, and CPU% over Server-Sent Events through an in-process broadcaster — no polling, no separate display server. Means we can iterate the visual design in plain CSS/JSX with hot-reload rather than per-pixel pygame poking.
+- **Hybrid compute split** — Pi 5 CPU handles orchestration / Whisper STT / Piper TTS / web UI / Chromium; Hailo-10H NPU does LLM inference + MediaPipe vision. Independent memory pools, no contention.
 - **Two-path skill runtime** — Same router, two operating modes. **V1 hybrid** routes through `OpenClawBridge(runtime_mode="ollama")` with our hand-written Python tool implementations and direct Ollama `tool_calls` (94% reliability proven in Phase-1 viability test). **V2 cloud** routes the same skills through `npx openclaw agent` so a cloud LLM drives the full OpenClaw agent loop — unlocking the entire community plugin ecosystem. Auto-selected per query based on whether a cloud key is configured.
 - **Dual-layer skill priority** — Always-local native Python skills (timer, pomodoro, reminder, notes, volume, system stats, mode switch, clipboard) take precedence. Network-y skills (weather, wikipedia, currency, news) fall through to the bridge. Conversational fallback to the LLM is last.
 - **OpenClaw JS plugin authoring** — `openclaw-service/plugins/<name>/` is a real OpenClaw extension (package.json + openclaw.plugin.json + index.js using `api.registerTool`). Deploys via `setup.sh` into `~/.openclaw/extensions/` with `plugins.allow` auto-wired. The plugin is invoked by the cloud LLM in V2 mode; it's also visible to community OpenClaw users as a standard plugin.
@@ -148,9 +149,10 @@ Things I'm proud of building into this:
 - **Speaker verification** — On-device voice biometrics (Resemblyzer) so Lumi only responds to its owner. Embeddings stored as math vectors, never raw audio.
 - **Web chat as voice loop's twin** — Same SkillRouter, ConversationManager, and audit log path as the voice loop. Lets you exercise the entire stack from the browser without speaking. Shows handler badges (`native` / `tool` / `openclaw` / `llm`) and per-turn latency.
 - **Custom Pi OS image** — `pi-gen`-built distribution with all drivers, models, Node.js, OpenClaw 2026.04.20 (pinned), and services pre-configured. `log2ram` for SD card longevity.
-- **9-step onboarding flow** — Cross-device experience: voice enrollment, permission gates (with inline disclosures), skill curation, hotkey + weather-location config, face style with Twemoji cycling preview.
+- **9-step onboarding flow** — Voice enrollment, permission gates (with inline disclosures), skill curation, hotkey + weather-location config, face style picker.
 - **Privacy-first design** — Camera frames discarded immediately, active-indicator LEDs, granular per-skill permissions, full audit log, one-button data export, one-button factory reset.
-- **Tamagotchi-style idle scenes** — When Lumi is idle, swap the face for an ambient scene (rain, snow, sleeping cat) instead of a static expression. Pluggable framework for community sprite packs.
+- **Four face styles** sharing one SSE pipe: minimalist pixel (two rounded squares + oblong, blink + mouth pulse), vector emoji (system-font glyphs animated with motion-react), macOS terminal-window wrapping the kawaii bear `ʕ♥ᴥ♥ʔ` (traffic-light dots, green text, per-state ASCII + kaomoji), and sprite-pack loop (any uploaded animation).
+- **Sprite-pack pipeline + uploader** — Idle scenes are PNG-frame packs (`frame_NNN.png` + `manifest.json`) loaded by the React `SpriteSceneFace`. `/settings/sprites` lets users upload custom packs (ZIP, PNG-magic verified, size + frame caps, atomic extract). Resolution order is `data_dir/sprites/<name>/` → bundled assets — user uploads override bundled packs with the same name without renaming.
 
 Full architectural decision log and phase-by-phase development plan in [CLAUDE.md](CLAUDE.md).
 
@@ -181,23 +183,24 @@ Lumi has WiFi (used only by skills you explicitly enable). The camera has an act
 
 ### V1 (working today, pre-hardware)
 - Local LLM (qwen2.5:7b on Ollama), Whisper STT, Piper TTS
-- Voice loop with state machine (idle → listen → think → speak) + chrome'd face (clock, weather, status band, optional idle scenes)
+- Voice loop with state machine (idle → listen → think → speak)
+- **React device display at `/device-display/`** — three-zone screen (status bar + face area + widget bar) backed by SSE state push, ready for Chromium kiosk on the Pi
 - 8 native Python skills (timer, pomodoro, reminder, notes, volume, system stats, mode switch, clipboard)
 - 4 external-API skills via direct Ollama tool_calls (weather, wikipedia, currency, news) — 94% reliability proven in Phase-1 viability test
 - ChromaDB long-term memory (semantic recall across sessions)
+- Web chat dashboard with **optimistic send + token streaming** (your message renders instantly on Enter; replies arrive chunk-by-chunk via SSE)
 - Web dashboard at `localhost:8080`: chat UI, journal (LLM-summarized daily entries), settings, dev panel with skill test panel, skill audit log
+- **`/settings/sprites` upload UI** for custom idle-scene packs (ZIP with `frame_NNN.png` + `manifest.json`); user uploads override bundled packs with the same name
 - 9-step onboarding flow with voice enrollment, granular permissions, hotkey + weather location config, face style picker
-- Send-to-Lumi global hotkey (`Cmd+Alt+L` / `Ctrl+Alt+L`) with macOS notification on capture
-- OS-keychain secret storage, data export, factory reset
+- Send-to-Lumi global hotkey (`Cmd+Alt+L` / `Ctrl+Alt+L`) with macOS notification on capture, **and** automatic clipboard restore (so the hotkey doesn't trash whatever you had)
+- OS-keychain secret storage, data export, factory reset that **actually purges everything** (keychain entries, OpenClaw config, in-memory chat session, data_dir)
+- **Cloud LLM (Claude / GPT / Gemini) verified end-to-end** through OpenClaw as the agent operator. Auto-routes per query based on whether a key is set.
 - PII masking + pseudonymization on the cloud subprocess path (emails, phones, IBAN, JWT, AWS/GitHub/Google keys, addresses, owner name, etc.)
 - CSRF middleware on every mutating dashboard route; data_dir locked to 0700; OpenClaw config chmod 0600 with atomic writes
-- HailoBackend stub ready for Pi 5 deployment (Hailo 5.3+ protocol quirks pre-baked)
+- HailoBackend wired against Hailo-Ollama's native endpoint with in-process protocol normalization (Phase-5-ready, no separate adapter process needed)
 
 ### V2 (next)
-- **Cloud LLM as OpenClaw operator** — Claude / GPT / Gemini drives OpenClaw's agent loop, unlocking the entire community plugin ecosystem (Gmail, Calendar, Spotify, GitHub, Things, …). Auto-routes per query based on whether a key is set in Settings.
-- **Optimistic + streaming chat UI** — your message renders on Enter (not after the model replies), responses stream token-by-token
 - **Skills marketplace search** — Lumi can search and offer to install OpenClaw skills mid-conversation
-- **Sprite-pack uploader** — upload custom idle-scene PNG packs from `/settings/sprites`
 - **Gmail + Calendar JS plugins** — read-only via dedicated app passwords (V1 security policy stays)
 - **Cost + latency guardrails** for cloud mode — per-request token budget, fall-through to V1 hybrid on cloud failure, audit log shows $$ per turn
 - **Send-to-Lumi tier 3 + 4** — right-click "Send to Lumi" macOS Services bundle; Chrome/Firefox browser extension
@@ -223,7 +226,7 @@ Permission gated on `clipboard_enabled`. The voice loop picks up queued context 
 
 ## For developers and contributors
 
-This repository holds the Lumi software. The runtime, web UI, face engine, OpenClaw integration glue, and OS image build pipeline live here. Software contributions are welcome — most of Lumi can be developed and tested on a regular laptop using mocked hardware interfaces.
+This repository holds the Lumi software. The Python runtime, the FastAPI dashboard, the React device display (`src/lumi/ui/device_display/`), the OpenClaw integration glue, and the OS image build pipeline all live here. Software contributions are welcome — most of Lumi can be developed and tested on a regular laptop without any of the hardware; the device display is a browser tab in dev, a Chromium kiosk on the Pi.
 
 ### Prerequisites
 
@@ -251,13 +254,22 @@ The fastest way is the one-shot orchestrator, which starts Ollama (if not alread
 bash scripts/lumi-up.sh
 ```
 
-Visit `http://localhost:8080` for the web UI. To run individual pieces by hand:
+Visit `http://localhost:8080` for the web dashboard and `http://localhost:8080/device-display/` for Lumi's screen (what the Chromium kiosk will show on the Pi). To run individual pieces by hand:
 
 ```bash
-uv run lumi web                       # web dashboard only
+uv run lumi web                       # FastAPI server (dashboard + device display)
 uv run lumi run --backend ollama      # voice loop with local Ollama
 uv run lumi run --backend mock        # voice loop with mock LLM (no Ollama needed)
 uv run lumi hotkey                    # send-to-Lumi global hotkey daemon
+```
+
+For React device-display work with hot-reload:
+
+```bash
+cd src/lumi/ui/device_display
+npm install
+npm run dev                           # Vite dev server at :5173 — talks to FastAPI on :8080
+npm run build                         # production build into ../web/static/device-display/
 ```
 
 ### Contributing

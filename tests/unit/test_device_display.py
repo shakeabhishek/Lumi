@@ -1,0 +1,208 @@
+"""Tests for the React-device-display backend: DeviceBus, the SSE
+endpoint, /api/state push, and the sprite fallback chain."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+from fastapi.testclient import TestClient
+
+from lumi.ui.web.app import create_app
+from lumi.ui.web.device_bus import DeviceBus
+
+
+# ── DeviceBus unit tests ───────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_subscriber_gets_cached_snapshot_immediately() -> None:
+    """Joining mid-conversation should not blank the face — the bus
+    caches the last snapshot so a new subscriber receives it on its
+    very first iteration."""
+    bus = DeviceBus()
+    await bus.publish({"state": "speak", "cpuPct": 42})
+
+    sub = bus.subscribe()
+    first = await asyncio.wait_for(sub.__anext__(), timeout=0.5)
+    assert first == {"state": "speak", "cpuPct": 42}
+    await sub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_publish_merges_into_cache_for_partial_updates() -> None:
+    """Weather and CPU samplers publish only their own field. The bus
+    merges so switching face style doesn't erase the last weather
+    reading — subscribers always see the full state."""
+    bus = DeviceBus()
+    await bus.publish({"state": "idle", "weather": {"tempC": 22}})
+    await bus.publish({"cpuPct": 45})
+    snapshot = bus.latest()
+    assert snapshot == {"state": "idle", "weather": {"tempC": 22}, "cpuPct": 45}
+
+
+@pytest.mark.asyncio
+async def test_publish_delivers_to_active_subscriber() -> None:
+    """End-to-end via two awaitable steps: subscribe, then publish a
+    fresh frame, then pull the next yield. The cached snapshot is
+    delivered first (synchronously on iteration start), then the new
+    publish arrives as the second yield."""
+    bus = DeviceBus()
+    await bus.publish({"state": "speak"})       # seed cache
+
+    sub = bus.subscribe()
+    cached = await asyncio.wait_for(sub.__anext__(), timeout=0.5)
+    assert cached == {"state": "speak"}
+
+    await bus.publish({"state": "idle"})
+    fresh = await asyncio.wait_for(sub.__anext__(), timeout=0.5)
+    assert fresh == {"state": "idle"}
+
+    await sub.aclose()
+
+
+# ── HTTP integration ───────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def client() -> TestClient:
+    d = Path(tempfile.mkdtemp(prefix="lumi_dev_disp_"))
+    return TestClient(create_app(d))
+
+
+def test_device_display_index_serves_or_explains(client: TestClient) -> None:
+    """If the React bundle is built, /device-display/ returns 200 with
+    the index.html. If not, returns a 503 with a friendly hint about
+    running `npm run build`. Either is acceptable for tests — failing
+    because the build dir is missing would be brittle in CI."""
+    r = client.get("/device-display/")
+    assert r.status_code in (200, 503)
+    if r.status_code == 200:
+        assert "<div id=\"root\">" in r.text
+
+
+def test_api_state_publishes_to_bus(client: TestClient) -> None:
+    """POST /api/state must reach the DeviceBus so subscribers see the
+    new face state. The CSRF middleware bypasses /api/state because
+    the voice loop in main.py is a separate OS process with no cookie."""
+    r = client.post("/api/state", data={"state": "listen"})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "state": "listen"}
+
+    bus = client.app.state.device_bus
+    assert bus is not None
+    latest = bus.latest()
+    assert latest is not None
+    assert latest["state"] == "listen"
+    assert latest["statusText"] == "Listening…"
+
+
+def test_api_state_rejects_invalid_state(client: TestClient) -> None:
+    r = client.post("/api/state", data={"state": "bogus"})
+    assert r.status_code == 400
+    assert "idle" in r.text and "speak" in r.text
+
+
+@pytest.mark.asyncio
+async def test_bus_seeded_via_publish_face_state(tmp_path) -> None:
+    """The contract we care about: after publish_face_state() fires for
+    'idle', the bus reports a renderable snapshot. We don't exercise
+    /device-display/events directly in tests — TestClient's sync HTTPX
+    can't iter-lines an open SSE stream without deadlocking the
+    transport. The route is verified manually + by the smoke script."""
+    from lumi.ui.web.app import create_app  # noqa: PLC0415
+    from lumi.ui.web.routes.device_display import publish_face_state  # noqa: PLC0415
+    from unittest.mock import MagicMock  # noqa: PLC0415
+
+    app = create_app(tmp_path)
+    # publish_face_state takes a Request to read app.state — fake the
+    # minimum surface it needs.
+    fake_request = MagicMock()
+    fake_request.app = app
+    fake_request.app.state.data_dir = tmp_path
+
+    await publish_face_state(fake_request, "idle")
+    bus = app.state.device_bus
+    snapshot = bus.latest()
+    assert snapshot is not None
+    assert snapshot["state"] == "idle"
+    assert snapshot["statusText"] == "Connected to cloud"
+    assert "style" in snapshot
+
+
+def test_sprite_endpoint_serves_bundled_pack(client: TestClient) -> None:
+    """The /device-display/sprite/<pack>/<file> route mirrors the
+    pygame loader's bundled→user fallback so the React app can pull
+    frames the same way the pygame face used to."""
+    r = client.get("/device-display/sprite/cat/manifest.json")
+    assert r.status_code == 200
+    manifest = r.json()
+    assert "frames" in manifest
+
+
+def test_sprite_endpoint_rejects_path_traversal(client: TestClient) -> None:
+    """Pack name + file are both whitelisted so a hostile URL can't
+    pull arbitrary files."""
+    for bad in ("../../../etc/passwd", "..\\..\\boot.ini", "frame_001.svg"):
+        r = client.get(f"/device-display/sprite/cat/{bad}")
+        assert r.status_code in (404, 400, 405)
+
+
+# ── Chat-stream → device display integration ──────────────────────────────
+
+
+def test_chat_stream_publishes_face_states_to_device_display(client: TestClient, monkeypatch) -> None:
+    """A complete chat turn must drive the device display through
+    think → speak → idle so the face animates with the conversation,
+    not on a poll timer. Verified via DeviceBus state directly — going
+    through the SSE round-trip would tangle TestClient's sync httpx."""
+    from unittest.mock import MagicMock  # noqa: PLC0415
+
+    fake_router = MagicMock()
+    fake_router.handle_streaming.return_value = iter(["hi", " there"])
+    fake_router._bridge = None
+
+    from lumi.ui.web.routes import chat as chat_mod  # noqa: PLC0415
+
+    real_builder = chat_mod._get_or_build_session
+    patched = {"done": False}
+
+    def _patched(req):
+        sess = real_builder(req)
+        if not patched["done"]:
+            sess.router = fake_router
+            sess.conversation = MagicMock()
+            sess.history = []
+            patched["done"] = True
+        return sess
+
+    monkeypatch.setattr(chat_mod, "_get_or_build_session", _patched)
+
+    # We hook the DeviceBus directly: patch its publish() to record every
+    # call, then run the chat POST through TestClient (synchronous). After
+    # the turn finishes we should have seen think → speak → idle.
+    from lumi.ui.web import device_bus as bus_mod  # noqa: PLC0415
+
+    seen: list[str] = []
+    orig_publish = bus_mod.DeviceBus.publish
+
+    async def _record(self, snapshot):
+        if "state" in snapshot:
+            seen.append(snapshot["state"])
+        await orig_publish(self, snapshot)
+
+    monkeypatch.setattr(bus_mod.DeviceBus, "publish", _record)
+
+    client.get("/")
+    csrf = client.cookies.get("csrf_token", "")
+    r = client.post("/chat/stream", data={"message": "hi", "csrf_token": csrf})
+    assert r.status_code == 200
+
+    assert "think" in seen, f"think state missing: {seen}"
+    assert "speak" in seen, f"speak state missing: {seen}"
+    # idle must be the LAST state — turn-complete returns the face to rest.
+    assert seen[-1] == "idle", f"last state should be idle: {seen}"
