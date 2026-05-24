@@ -1,66 +1,221 @@
-"""Pixel face renderer — chunky 8-bit style with cute heart eyes.
+"""Pixel face renderer — kawaii 8-bit expressions per state.
 
-Renders on a 48×32 canvas then scales up 10×. Each canvas pixel becomes a
-10×10 block on the final 480×320 surface. Default color is pink (#FF6B9D).
+Replaces the original pink-heart-eye face. The redesign was driven by a
+Figma reference (face.zip in the project parent dir) showing a 16-face
+kawaii expression set: round black eyes with white highlights, pink
+blush ovals, eyelid lines above, and varying mouth shapes.
 
-States:
-  IDLE   — heart eyes + rosy cheeks + smile, slow blink
-  LISTEN — heart eyes, expanding square pulse ring
-  THINK  — squint lines + scrolling ellipsis dots
-  SPEAK  — heart eyes + animated blocky mouth
+Renders on a 48×32 canvas (same as before — engine wiring unchanged)
+then scales up to fill the 480×320 display. State → composition:
+
+  IDLE   — open eyes, gentle smile, blush. Slow blink every ~3s.
+  LISTEN — eyes wide + raised brows ("ready to hear"). Slight surprise.
+  THINK  — eyes glance up + flat mouth + side-floating dot trail.
+  SPEAK  — closed happy arcs (^_^) + open smile that pulses on mouth tick.
+
+Colour theming:
+  - `fg_color` (constructor) tints the outline/eyebrow accent — lets the
+    user pick their face colour in /settings/face.
+  - Eye black, white highlight, and pink blush stay fixed: the kawaii
+    palette is part of the style. Theming the eyes' base colour would
+    make every shade except the original look creepy.
 """
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from ...hardware.base import Frame
 from ...runtime.state_machine import LumiState
 
-_BG: tuple[int, int, int] = (26, 26, 26)
-_BLUSH: tuple[int, int, int] = (200, 100, 130)  # soft rosy cheek — independent of fg
+if TYPE_CHECKING:
+    import pygame as _pygame
 
-# 7 cols × 6 rows heart, relative to top-left origin
-_HEART: list[tuple[int, int]] = [
-    (1, 0), (2, 0), (4, 0), (5, 0),
-    (0, 1), (1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1),
-    (0, 2), (1, 2), (2, 2), (3, 2), (4, 2), (5, 2), (6, 2),
-    (1, 3), (2, 3), (3, 3), (4, 3), (5, 3),
-    (2, 4), (3, 4), (4, 4),
-    (3, 5),
-]
+# Canvas + display ---------------------------------------------------------
+_CW, _CH = 48, 32          # small grid scaled 10× to fill 480×320
 
-# Small canvas dimensions — scaled up 10× to fill 480×320
-_CW, _CH = 48, 32
+# Palette (kawaii-fixed except the accent) ----------------------------------
+_BG = (252, 240, 232)        # warm cream — soft on the eye for a desk display
+_EYE_DARK = (28, 20, 32)     # near-black with a hint of indigo
+_EYE_HIGHLIGHT = (255, 255, 255)
+_BLUSH = (255, 168, 184)     # pink — independent of accent so it doesn't clash
+_SHADOW = (220, 200, 196)    # subtle face shadow under the chin
 
-# Eye center positions on the small canvas
-_LEFT_EYE = (12, 11)
-_RIGHT_EYE = (36, 11)
+# Eye positions (centre x of each eye) — symmetrical around the face midline
+_EYE_Y = 13
+_LEFT_EYE_X = 17
+_RIGHT_EYE_X = 31
 
 
-def _draw_heart(canvas: object, color: tuple[int, int, int], cx: int, cy: int) -> None:
-    import pygame  # noqa: PLC0415
+# ── Component patterns (relative coordinates) ──────────────────────────────
+# Each pattern is a list of (dx, dy, colour-tag) tuples, anchored to the
+# component's centre. Colour tags: "dark" (eye outline), "hi" (highlight),
+# "blush", "accent" (uses fg_color).
 
-    for dx, dy in _HEART:
-        pygame.draw.rect(canvas, color, (cx - 3 + dx, cy - 3 + dy, 1, 1))
+EyeFrame = list[tuple[int, int, str]]
+
+
+def _eye_open() -> EyeFrame:
+    """4-wide, 5-tall round eye with a single white highlight pixel."""
+    out: EyeFrame = []
+    # Filled near-circle, 4×4
+    for dy in range(4):
+        for dx in range(4):
+            if (dx, dy) in {(0, 0), (3, 0), (0, 3), (3, 3)}:        # rounded corners
+                continue
+            out.append((dx, dy, "dark"))
+    # Highlight: top-left interior
+    out.append((1, 0, "hi"))
+    return out
+
+
+def _eye_blink() -> EyeFrame:
+    """Closed eye — a flat line at the bottom of the open-eye bounds."""
+    return [(dx, 3, "dark") for dx in range(4)]
+
+
+def _eye_happy() -> EyeFrame:
+    """^_^ closed arc — happy/speaking expression."""
+    return [
+        (0, 2, "dark"), (1, 1, "dark"), (2, 1, "dark"), (3, 2, "dark"),
+    ]
+
+
+def _eye_wide() -> EyeFrame:
+    """Slightly taller open eye for the surprised/listening state."""
+    out: EyeFrame = []
+    for dy in range(5):
+        for dx in range(4):
+            if (dx, dy) in {(0, 0), (3, 0), (0, 4), (3, 4)}:
+                continue
+            out.append((dx, dy, "dark"))
+    out.append((1, 1, "hi"))            # highlight a bit lower
+    return out
+
+
+def _eye_up() -> EyeFrame:
+    """Looking-up eye for THINK — pupil at the top."""
+    out: EyeFrame = []
+    # Outline only on the bottom + sides; iris/pupil at the very top
+    for dy in range(4):
+        for dx in range(4):
+            if dy == 0 and dx in {1, 2}:        # top: solid (the pupil moved up)
+                out.append((dx, dy, "dark"))
+            elif dy in {1, 2} and dx in {0, 3}:  # sides
+                out.append((dx, dy, "dark"))
+            elif dy == 3 and dx in {1, 2}:       # bottom curve
+                out.append((dx, dy, "dark"))
+    return out
+
+
+# Brow patterns -------------------------------------------------------------
+
+def _brow_neutral() -> EyeFrame:
+    """Subtle arched line above the eye."""
+    return [(0, 0, "accent"), (1, 0, "accent"), (2, 0, "accent"), (3, 0, "accent")]
+
+
+def _brow_raised() -> EyeFrame:
+    """Diagonal-up line — questioning / listening."""
+    return [(0, 1, "accent"), (1, 0, "accent"), (2, 0, "accent"), (3, 0, "accent")]
+
+
+def _brow_thinking() -> EyeFrame:
+    """Inverted arch — pinched / contemplative."""
+    return [(0, 0, "accent"), (1, 1, "accent"), (2, 1, "accent"), (3, 0, "accent")]
+
+
+# Mouth patterns ------------------------------------------------------------
+
+def _mouth_smile() -> list[tuple[int, int, str]]:
+    """Gentle "u" smile spanning ~10px wide.
+
+    Pixels are relative to the mouth's CENTRE-bottom anchor so it sits
+    symmetrically between the two blush cheeks.
+    """
+    return [
+        (-4, 0, "dark"),
+        (-3, 1, "dark"), (-2, 2, "dark"), (-1, 2, "dark"),
+        (0, 2, "dark"), (1, 2, "dark"), (2, 2, "dark"),
+        (3, 1, "dark"),
+        (4, 0, "dark"),
+    ]
+
+
+def _mouth_o() -> list[tuple[int, int, str]]:
+    """Small round "o" for surprise/listen."""
+    return [
+        (-1, 0, "dark"), (0, 0, "dark"),
+        (-2, 1, "dark"),                (1, 1, "dark"),
+        (-1, 2, "dark"), (0, 2, "dark"),
+    ]
+
+
+def _mouth_line() -> list[tuple[int, int, str]]:
+    """Flat line — thinking / unreadable."""
+    return [(dx, 1, "dark") for dx in range(-3, 4)]
+
+
+def _mouth_open_smile_small() -> list[tuple[int, int, str]]:
+    return [
+        (-3, 0, "dark"), (3, 0, "dark"),
+        (-2, 1, "dark"), (-1, 1, "dark"), (0, 1, "dark"), (1, 1, "dark"), (2, 1, "dark"),
+        (-1, 2, "dark"), (0, 2, "dark"), (1, 2, "dark"),
+    ]
+
+
+def _mouth_open_smile_wide() -> list[tuple[int, int, str]]:
+    return [
+        (-4, 0, "dark"), (4, 0, "dark"),
+        (-3, 1, "dark"), (-2, 1, "dark"), (-1, 1, "dark"),
+        (0, 1, "dark"), (1, 1, "dark"), (2, 1, "dark"), (3, 1, "dark"),
+        (-2, 2, "dark"), (-1, 2, "dark"), (0, 2, "dark"), (1, 2, "dark"), (2, 2, "dark"),
+        (-1, 3, "dark"), (0, 3, "dark"), (1, 3, "dark"),
+    ]
 
 
 class PixelFaceRenderer:
+    """Hand-pixeled kawaii expressions per state, composed at runtime.
+
+    Stays drop-in compatible with the engine: same constructor signature
+    and `render(state, tick)` contract as the previous heart-eye version.
+    The `fg_color` kwarg now tints only the eyebrow/accent — eye black,
+    blush pink, and highlight white are fixed because the kawaii palette
+    only reads right with that specific contrast.
+    """
+
     def __init__(
         self,
         width: int,
         height: int,
-        fg_color: tuple[int, int, int] = (255, 107, 157),  # default: cute pink
+        fg_color: tuple[int, int, int] = (255, 107, 157),  # pink accent — used for brows
     ) -> None:
         self._w = width
         self._h = height
-        self._fg = fg_color
+        self._accent = fg_color
+        self._color_for = {
+            "dark": _EYE_DARK,
+            "hi": _EYE_HIGHLIGHT,
+            "blush": _BLUSH,
+            "accent": self._accent,
+        }
+
+    # ── Public API ─────────────────────────────────────────────────────────
 
     def render(self, state: LumiState, tick: int) -> Frame:
         import pygame  # noqa: PLC0415
 
         canvas = pygame.Surface((_CW, _CH))
         canvas.fill(_BG)
+
+        # A soft chin shadow on every frame so the face has a base.
+        for x in range(8, _CW - 8):
+            canvas.set_at((x, _CH - 4), _SHADOW)
+        for x in range(10, _CW - 10):
+            canvas.set_at((x, _CH - 3), _SHADOW)
+
         match state:
             case LumiState.IDLE:
                 self._draw_idle(canvas, tick)
@@ -70,68 +225,81 @@ class PixelFaceRenderer:
                 self._draw_think(canvas, tick)
             case LumiState.SPEAK:
                 self._draw_speak(canvas, tick)
+
         scaled = pygame.transform.scale(canvas, (self._w, self._h))
         pixels = np.transpose(pygame.surfarray.array3d(scaled), (1, 0, 2))
         return Frame(pixels=pixels)
 
-    def _draw_blush(self, canvas: object) -> None:
-        import pygame  # noqa: PLC0415
+    # ── State compositions ─────────────────────────────────────────────────
 
-        pygame.draw.rect(canvas, _BLUSH, (7, 16, 4, 2))
-        pygame.draw.rect(canvas, _BLUSH, (37, 16, 4, 2))
+    def _draw_idle(self, canvas: _pygame.Surface, tick: int) -> None:
+        # Slow blink: closed for ~5 ticks every 100.
+        is_blinking = (tick % 100) < 5
+        eye = _eye_blink() if is_blinking else _eye_open()
+        self._draw_eyes(canvas, eye, _brow_neutral() if not is_blinking else [])
+        if not is_blinking:
+            self._draw_blush(canvas)
+        self._stamp_pattern(canvas, _mouth_smile(), _CW // 2, 22)
 
-    def _draw_idle(self, canvas: object, tick: int) -> None:
-        import pygame  # noqa: PLC0415
-
-        blink = tick % 90
-        if blink < 4:
-            # Blink: flat bars where hearts were
-            for ex, ey in (_LEFT_EYE, _RIGHT_EYE):
-                pygame.draw.rect(canvas, self._fg, (ex - 3, ey + 1, 7, 1))
-        else:
-            _draw_heart(canvas, self._fg, *_LEFT_EYE)
-            _draw_heart(canvas, self._fg, *_RIGHT_EYE)
+    def _draw_listen(self, canvas: _pygame.Surface, tick: int) -> None:        # noqa: ARG002
+        self._draw_eyes(canvas, _eye_wide(), _brow_raised())
         self._draw_blush(canvas)
-        # Cute smile: "U" shape made from dots
-        for mx in range(17, 32, 3):
-            pygame.draw.rect(canvas, self._fg, (mx, 23, 2, 1))
-        # Smile corners curve up
-        pygame.draw.rect(canvas, self._fg, (15, 22, 2, 1))
-        pygame.draw.rect(canvas, self._fg, (31, 22, 2, 1))
+        self._stamp_pattern(canvas, _mouth_o(), _CW // 2, 22)
 
-    def _draw_listen(self, canvas: object, tick: int) -> None:
-        import pygame  # noqa: PLC0415
-
-        _draw_heart(canvas, self._fg, *_LEFT_EYE)
-        _draw_heart(canvas, self._fg, *_RIGHT_EYE)
-        self._draw_blush(canvas)
-        # Expanding square pulse ring
-        pulse = (tick // 3) % 10
-        r = 6 + pulse * 2
-        cx, cy = _CW // 2, _CH // 2
-        pygame.draw.rect(canvas, self._fg, (cx - r, cy - r, r * 2, r * 2), 1)
-
-    def _draw_think(self, canvas: object, tick: int) -> None:
-        import pygame  # noqa: PLC0415
-
-        # Squint eyes — flat horizontal lines, no hearts
-        for ex, ey in (_LEFT_EYE, _RIGHT_EYE):
-            pygame.draw.rect(canvas, self._fg, (ex - 3, ey + 1, 7, 2))
-        # Three scrolling dots
+    def _draw_think(self, canvas: _pygame.Surface, tick: int) -> None:
+        self._draw_eyes(canvas, _eye_up(), _brow_thinking())
+        # No blush — thinking is a more sober expression.
+        self._stamp_pattern(canvas, _mouth_line(), _CW // 2, 22)
+        # Three dots scrolling at the side, indicating "processing".
         dot_phase = (tick // 12) % 3
         for i in range(3):
-            color = self._fg if i == dot_phase else tuple(c // 3 for c in self._fg)
-            pygame.draw.rect(canvas, color, (18 + i * 5, 22, 2, 2))
+            colour = self._accent if i == dot_phase else tuple(c // 3 for c in self._accent)
+            for dx in range(2):
+                for dy in range(2):
+                    canvas.set_at((38 + i * 3 + dx, 14 + dy), colour)
 
-    def _draw_speak(self, canvas: object, tick: int) -> None:
-        import pygame  # noqa: PLC0415
-
-        _draw_heart(canvas, self._fg, *_LEFT_EYE)
-        _draw_heart(canvas, self._fg, *_RIGHT_EYE)
+    def _draw_speak(self, canvas: _pygame.Surface, tick: int) -> None:
+        self._draw_eyes(canvas, _eye_happy(), _brow_neutral())
         self._draw_blush(canvas)
-        # Animated blocky mouth — zigzag that scrolls
-        phase = (tick // 4) % 6
-        step_y = [22, 21, 22, 23, 22, 21]
-        for i, mx in enumerate(range(14, 35, 3)):
-            y = step_y[(i + phase) % len(step_y)]
-            pygame.draw.rect(canvas, self._fg, (mx, y, 3, 2))
+        # Mouth alternates between small + wide smile so it reads as talking.
+        wide = (tick // 6) % 2 == 0
+        mouth = _mouth_open_smile_wide() if wide else _mouth_open_smile_small()
+        self._stamp_pattern(canvas, mouth, _CW // 2, 21)
+
+    # ── Helpers ────────────────────────────────────────────────────────────
+
+    def _draw_eyes(
+        self,
+        canvas: _pygame.Surface,
+        eye_pattern: EyeFrame,
+        brow_pattern: EyeFrame,
+    ) -> None:
+        # Each eye pattern is anchored to its top-left; the eye centre is
+        # offset by (2, 2) relative to that — so we subtract to position
+        # the *centre* over the eye coordinate.
+        for cx in (_LEFT_EYE_X, _RIGHT_EYE_X):
+            self._stamp_pattern(canvas, eye_pattern, cx - 1, _EYE_Y - 2)
+            if brow_pattern:
+                # Brow sits 3 pixels above the eye top.
+                self._stamp_pattern(canvas, brow_pattern, cx - 1, _EYE_Y - 5)
+
+    def _draw_blush(self, canvas: _pygame.Surface) -> None:
+        for cx in (_LEFT_EYE_X, _RIGHT_EYE_X):
+            for dx in range(-2, 3):
+                for dy in range(2):
+                    canvas.set_at((cx + dx, _EYE_Y + 4 + dy), _BLUSH)
+
+    def _stamp_pattern(
+        self,
+        canvas: _pygame.Surface,
+        pattern: list[tuple[int, int, str]],
+        x: int,
+        y: int,
+    ) -> None:
+        """Place a relative-coords pattern at canvas (x, y). Out-of-bounds
+        pixels are silently dropped."""
+        w, h = _CW, _CH
+        for dx, dy, tag in pattern:
+            px, py = x + dx, y + dy
+            if 0 <= px < w and 0 <= py < h:
+                canvas.set_at((px, py), self._color_for[tag])
