@@ -23,18 +23,17 @@ from .audio.voice_id import VoiceID
 from .audio.wake_word import PushToTalkWake, WakeSource
 from .config import LLMBackendName, Mode, Settings, WakeStrategy, get_settings
 from .hardware.audio_io import SoundDeviceInput
-from .hardware.display import make_display
 from .host_helper.send_to_lumi import consume_pending, format_hint
 from .llm import make_llm_backend
 from .log import configure_logging, get_logger
 from .runtime.conversation import ConversationManager
+from .runtime.device_display_client import state_callback as _device_display_callback
 from .runtime.errors import safe_error_message
 from .runtime.memory import MemoryStore
 from .runtime.storage import secure_data_dir
 from .runtime.perf import PerfLog, PipelineTimer
 from .runtime.state_machine import LumiState, StateMachine
 from .skills import AuditLog, SkillRouter
-from .ui.face.engine import FaceEngine
 
 app = typer.Typer(name="lumi", add_completion=False, pretty_exceptions_enable=False)
 log = get_logger(__name__)
@@ -87,9 +86,13 @@ def _voice_loop(
     voice_id: VoiceID,
     conversation: ConversationManager,
     sm: StateMachine,
-    face: FaceEngine,
     perf_log: PerfLog,
 ) -> None:
+    # Face rendering is owned by the React device display + Chromium kiosk
+    # (Phase 5), or the user's browser at /device-display/ (V1 laptop).
+    # The voice loop only emits state TRANSITIONS — the StateMachine's
+    # on_state_change callback (wired in `run()`) POSTs them to
+    # /api/state and the FastAPI server fans them out to subscribers.
     typer.echo(
         f"Lumi is ready.  backend={cfg.llm_backend.value}  mode={cfg.mode.value}  "
         f"record={cfg.audio_record_duration_s}s  "
@@ -108,13 +111,11 @@ def _voice_loop(
 
     while True:
         sm.transition(LumiState.IDLE)
-        face.show()
         wake.wait_for_wake()
 
         timer = PipelineTimer()
 
         sm.transition(LumiState.LISTEN)
-        face.show()
 
         # --- Failure mode: audio device disconnect ---
         try:
@@ -161,7 +162,6 @@ def _voice_loop(
             log.info("context.hotkey", source=pending.get("source"), chars=len(pending.get("text", "")))
 
         sm.transition(LumiState.THINK)
-        face.show()
 
         # --- Streaming LLM → TTS ---
         try:
@@ -175,7 +175,6 @@ def _voice_loop(
                 timer.mark("router_ms")
                 typer.echo("Lumi: ", nl=False)
                 sm.transition(LumiState.SPEAK)
-                face.show()
 
                 def _echo_and_stream() -> Iterator[str]:
                     yield first
@@ -201,7 +200,6 @@ def _voice_loop(
             reply_text = safe_error_message(exc, where="voice.router")
             typer.echo(f"Lumi: {reply_text}")
             sm.transition(LumiState.SPEAK)
-            face.show()
             try:
                 tts.speak(reply_text)
             except Exception:
@@ -286,28 +284,21 @@ def run(
     )
     perf_log = PerfLog(cfg.data_dir)
 
-    display = make_display(cfg.face_width, cfg.face_height)
+    # Face rendering happens in the browser (laptop V1) or the Chromium
+    # kiosk on the Pi (Phase 5) — both pointed at the FastAPI server's
+    # /device-display/ route. The voice loop's StateMachine just emits
+    # transitions via HTTP push.
     sm = StateMachine()
-    face = FaceEngine(
-        display=display,
-        theme=cfg.face_theme,
-        color=cfg.face_color,
-        models_dir=cfg.models_dir,
-        data_dir=cfg.data_dir,                     # for user-uploaded sprite packs
-        weather_location=_user.weather_location,   # empty = no weather chip
-        idle_scene=_user.idle_scene,
-    )
-    sm.on_state_change(face.set_state)
+    sm.on_state_change(_device_display_callback())
 
     with typer.progressbar(length=1, label="Loading Whisper model") as progress:
         stt._load()
         progress.update(1)
 
     try:
-        _voice_loop(cfg, wake, mic, stt, router, tts, voice_id, conversation, sm, face, perf_log)
+        _voice_loop(cfg, wake, mic, stt, router, tts, voice_id, conversation, sm, perf_log)
     except KeyboardInterrupt:
         typer.echo("\nGoodbye.")
-        display.close()
         sys.exit(0)
 
 

@@ -139,7 +139,9 @@ def _settings_snapshot(request: Request) -> dict:
     settings = load_settings(request.app.state.data_dir)
     style = settings.face_theme if settings.face_theme in {"pixel", "vector", "terminal"} else "pixel"
     sprite_pack: str | None = None
-    if settings.idle_scene and settings.idle_scene not in {"none", "rain", "snow"}:
+    if settings.idle_scene and settings.idle_scene != "none":
+        # An idle_scene that isn't "none" is always a sprite pack now —
+        # the React device display has no procedural rain/snow path.
         style = "sprite"
         sprite_pack = settings.idle_scene
     return {

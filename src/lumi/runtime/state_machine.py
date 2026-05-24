@@ -1,8 +1,11 @@
 """Lumi runtime state machine.
 
 States flow: IDLE → LISTEN → THINK → SPEAK → IDLE (repeat).
-Listeners registered via on_state_change() are called synchronously on every transition.
-The face engine and display register here to react to state changes.
+Listeners registered via on_state_change() are called synchronously on
+every transition. The voice loop's only listener is
+`runtime.device_display_client.state_callback()`, which fires a
+fire-and-forget POST to /api/state so the React device display
+animates in sync with the conversation.
 """
 
 from __future__ import annotations

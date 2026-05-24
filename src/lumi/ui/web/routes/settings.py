@@ -10,7 +10,7 @@ from typing import Annotated
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
-from ...face.idle_scenes import PROCEDURAL_SCENES, list_sprite_packs
+from ...face.idle_scenes import list_sprite_packs
 from ...face.sprite_upload import delete_user_pack, validate_and_extract_zip
 from ..persistence import FACE_THEMES, MODES, PIPER_VOICES, load_settings, save_settings
 
@@ -103,11 +103,10 @@ async def face_post(
     s = load_settings(data_dir)
     s.face_theme = face_theme
     s.face_color = face_color
-    # Valid idle scenes: "none" + every procedural + every available sprite
-    # pack (bundled or user-uploaded). Anything else falls back to none so
-    # we never persist a scene name the renderer can't resolve.
-    valid_scenes = {"none", *PROCEDURAL_SCENES.keys()}
-    valid_scenes.update(p["name"] for p in list_sprite_packs(data_dir))
+    # Valid idle scenes: "none" + every available sprite pack (bundled or
+    # user-uploaded). Anything else falls back to none so we never persist
+    # a scene name the React device display can't resolve.
+    valid_scenes = {"none", *(p["name"] for p in list_sprite_packs(data_dir))}
     s.idle_scene = idle_scene if idle_scene in valid_scenes else "none"
     save_settings(data_dir, s)
     return "/settings/face"

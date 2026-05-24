@@ -35,8 +35,6 @@
       <select id="idle_scene" name="idle_scene"
               style="padding:.45rem .65rem;border-radius:8px;border:1px solid var(--border);min-width:280px">
         <option value="none" {% if settings.idle_scene == "none" %}selected{% endif %}>Just the face (default)</option>
-        <option value="rain" {% if settings.idle_scene == "rain" %}selected{% endif %}>🌧 Rainfall on a night sky</option>
-        <option value="snow" {% if settings.idle_scene == "snow" %}selected{% endif %}>❄ Slow snowfall</option>
         {# Sprite packs — bundled + any the user has uploaded under /settings/sprites. #}
         {% for pack in sprite_packs or [] %}
           <option value="{{ pack.name }}"
