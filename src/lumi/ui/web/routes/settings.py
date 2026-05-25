@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from ...face.idle_scenes import list_sprite_packs
@@ -47,6 +47,11 @@ def _render(request: Request, template: str, **ctx: object) -> HTMLResponse:
 # settings section is just an entry here + a route + a template. Each
 # tuple is (path, icon-emoji, label, one-line description, group).
 # Groups order the cards on the hub.
+# Each section: (path, icon, label, description, group). `path` is a
+# segment relative to /settings/ — except entries flagged with a
+# leading "/" which point outside /settings (used to surface
+# /audit-log under the Memory & data group without having to mount
+# it inside the settings router).
 _SETTINGS_SECTIONS = [
     # Who Lumi is.
     ("personality", "✨", "Personality",  "System prompt + the name Lumi answers to.",     "Identity"),
@@ -59,6 +64,7 @@ _SETTINGS_SECTIONS = [
     # What Lumi knows about you.
     ("memory",      "🧠", "Memory",       "Browse what Lumi has learned about you. Wipe individual entries.", "Memory & data"),
     ("data",        "🛡", "Privacy & permissions",  "Toggle clipboard, active-window, camera, WiFi access. Export or factory-reset.", "Memory & data"),
+    ("/audit-log/", "📜", "Audit log",    "Every skill invocation, cloud escalation, and direct LLM turn — filter by source.", "Memory & data"),
 
     # Where Lumi reaches.
     ("cloud",       "☁️", "Cloud LLM",    "Configure a cloud provider key for smart routing.",     "Connections"),
@@ -77,8 +83,11 @@ async def settings_hub(request: Request) -> HTMLResponse:
     # Group by section while preserving order.
     groups: dict[str, list[dict[str, str]]] = {}
     for path, icon, label, desc, group in _SETTINGS_SECTIONS:
+        # Leading "/" → absolute (lets the hub surface non-/settings
+        # pages like /audit-log under a Settings group).
+        href = path if path.startswith("/") else f"/settings/{path}"
         groups.setdefault(group, []).append({
-            "path": f"/settings/{path}",
+            "path": href,
             "icon": icon,
             "label": label,
             "desc": desc,
@@ -316,23 +325,45 @@ async def data_post(
 
 
 @router.get("/memory", response_class=HTMLResponse)
-async def memory_get(request: Request) -> HTMLResponse:
+async def memory_get(
+    request: Request,
+    q: str = Query(""),
+) -> HTMLResponse:
+    """Memory browser. `q=foo` runs a semantic search; empty query
+    returns whatever the collection's nearest-neighbour to a blank
+    string is — which Chroma happens to treat as "everything",
+    yielding recent additions first. Total count is shown so the
+    user can tell when memory is silently empty vs full of stuff."""
     data_dir = request.app.state.data_dir
     s = load_settings(data_dir)
     conversations: list[str] = []
+    total = 0
+    memory_available = False
     if s.memory_enabled:
         try:
             from ....runtime.memory import MemoryStore  # noqa: PLC0415
 
             if MemoryStore.is_available():
+                memory_available = True
                 store = MemoryStore(data_dir)
-                conversations_raw = store.get_relevant_context("", n=20)
-                conversations = conversations_raw.split("\n\n") if conversations_raw else []
+                # Total — surfaces "memory toggle is on but you have 0
+                # entries because the deps aren't installed" vs "memory
+                # is genuinely empty because you haven't talked yet."
+                if store._collection is not None:                 # noqa: SLF001
+                    total = store._collection.count()              # noqa: SLF001
+                raw = store.get_relevant_context(q or "recent", n=20)
+                conversations = raw.split("\n\n") if raw else []
         except Exception:
             pass
     return request.app.state.templates.TemplateResponse(
         request, "settings/memory.html",
-        {"settings": s, "conversations": conversations},
+        {
+            "settings": s,
+            "conversations": conversations,
+            "memory_available": memory_available,
+            "total": total,
+            "q": q,
+        },
     )
 
 

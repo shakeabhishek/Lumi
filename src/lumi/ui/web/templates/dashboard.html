@@ -6,10 +6,7 @@
 <p>{{ settings.lumi_name }} is ready. Here's what's configured.</p>
 
 <div class="card-grid">
-  <div class="stat-card">
-    <div class="stat-label">Name</div>
-    <div class="stat-value">{{ settings.lumi_name }}</div>
-  </div>
+  {# Configuration row — what Lumi IS right now. #}
   <div class="stat-card">
     <div class="stat-label">Mode</div>
     <div class="stat-value" style="text-transform:capitalize">{{ settings.mode }}</div>
@@ -22,15 +19,54 @@
     <div class="stat-label">Voice ID</div>
     <div class="stat-value">{{ "On" if settings.voice_id_enabled else "Off" }}</div>
   </div>
-  <div class="stat-card">
+
+  {# Activity row — what Lumi has been DOING. Links to deeper surfaces. #}
+  <a href="/skills" class="stat-card" style="text-decoration:none;color:inherit">
+    <div class="stat-label">Skills active</div>
+    <div class="stat-value">{{ settings.enabled_skills | length }} OpenClaw</div>
+  </a>
+  <a href="/settings/memory" class="stat-card" style="text-decoration:none;color:inherit">
     <div class="stat-label">Memory</div>
-    <div class="stat-value">{{ "On" if settings.memory_enabled else "Off" }}</div>
+    <div class="stat-value">
+      {% if memory_count is none %}<span style="color:var(--muted-soft)">Off</span>
+      {% else %}{{ memory_count }} stored{% endif %}
+    </div>
+  </a>
+  <a href="/audit-log/?family=cloud" class="stat-card" style="text-decoration:none;color:inherit">
+    <div class="stat-label">Cloud routing</div>
+    <div class="stat-value">
+      {% if last_cloud_route %}
+        <span style="font-family:'Geist Mono',monospace;font-size:1.05rem">{{ last_cloud_route }}</span>
+      {% else %}
+        <span style="color:var(--muted-soft)">No recent escalation</span>
+      {% endif %}
+    </div>
+  </a>
+</div>
+
+{# Todo summary as its own card so it gets a little more breathing room
+   than a single stat tile. Clicks open the chat where the user can ask
+   "show my todos" — that's the canonical interaction. #}
+{% if todos.open or todos.done %}
+<div class="card" style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap">
+  <div>
+    <div class="stat-label">Todos</div>
+    <div style="display:flex;gap:1.5rem;margin-top:.2rem">
+      <div>
+        <span style="font-family:'Crimson Pro',serif;font-size:1.8rem;font-weight:600;color:var(--text)">{{ todos.open }}</span>
+        <span style="color:var(--muted);font-size:.88rem"> open</span>
+      </div>
+      <div>
+        <span style="font-family:'Crimson Pro',serif;font-size:1.8rem;font-weight:600;color:var(--muted)">{{ todos.done }}</span>
+        <span style="color:var(--muted);font-size:.88rem"> done</span>
+      </div>
+    </div>
   </div>
-  <div class="stat-card">
-    <div class="stat-label">Skills</div>
-    <div class="stat-value">{{ settings.enabled_skills | length }} active</div>
+  <div style="flex:1;color:var(--muted);font-size:.88rem">
+    Add or close from chat: <code>todo: write quarterly review</code>, <code>finish the report</code>.
   </div>
 </div>
+{% endif %}
 
 <div class="card">
   <h2>Recent activity</h2>

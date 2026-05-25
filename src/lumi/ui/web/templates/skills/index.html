@@ -51,16 +51,13 @@
 </div>
 
 <div class="card">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
-    <h2 style="margin:0">Audit log</h2>
-    <div style="display:flex;gap:.5rem;align-items:center">
-      <button class="btn" hx-get="/skills/audit-log/rows" hx-target="#log-rows" hx-swap="innerHTML">Refresh</button>
-      <form method="POST" action="/skills/audit-log/clear" style="display:inline"
-            onsubmit="return confirm('Clear all audit log entries?')">
-        <button type="submit" class="btn danger">Clear</button>
-      </form>
-    </div>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem">
+    <h2 style="margin:0">Recent activity</h2>
+    <a href="/audit-log/" class="btn">See full audit log →</a>
   </div>
+  <p style="font-size:.85rem;color:var(--muted);margin-bottom:.75rem">
+    Latest {{ recent | length }} entries. Filter by source family on the full audit log page.
+  </p>
 
   {% if recent %}
   <table class="log-table">

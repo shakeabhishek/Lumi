@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Audit log — Lumi{% endblock %}
+{% block content %}
+
+<h1>Audit log</h1>
+<p>
+  Every skill invocation, cloud escalation, and direct LLM turn — local to this device.
+  Filter by where the work happened.
+</p>
+
+<div class="card">
+  <div class="audit-filters">
+    {% for fid, label in families.items() %}
+    <a href="/audit-log/?family={{ fid }}&n={{ n }}"
+       class="audit-filter {{ 'audit-filter--active' if fid == active_family else '' }}">
+      <span class="audit-filter__label">{{ label }}</span>
+      <span class="audit-filter__count">{{ counts[fid] }}</span>
+    </a>
+    {% endfor %}
+  </div>
+
+  {% if entries %}
+  <table class="log-table" style="margin-top:1rem">
+    <thead>
+      <tr>
+        <th>Time (UTC)</th>
+        <th>Source</th>
+        <th>Skill</th>
+        <th>You said</th>
+        <th>Lumi replied</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in entries | reverse %}
+      <tr>
+        <td style="white-space:nowrap;color:var(--muted);font-family:'Geist Mono',monospace;font-size:.78rem">
+          {{ entry.ts[0:19].replace("T"," ") }}
+        </td>
+        <td>
+          {% set src = entry.source %}
+          {% if src.startswith("cloud:") %}
+            <span class="badge llm" title="Cloud escalation">{{ src }}</span>
+          {% else %}
+            <span class="badge {{ src }}">{{ src }}</span>
+          {% endif %}
+        </td>
+        <td>{{ entry.skill }}</td>
+        <td class="input" title="{{ entry.input }}">{{ entry.input }}</td>
+        <td class="result" title="{{ entry.result }}">{{ entry.result }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state" style="margin-top:1rem">
+    {% if active_family == "all" %}
+      No invocations yet — say something to Lumi and come back.
+    {% else %}
+      Nothing under <strong>{{ families[active_family] }}</strong> in the recent window.
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <form method="POST" action="/audit-log/clear" style="margin-top:1rem"
+        onsubmit="return confirm('Clear ALL audit log entries? This cannot be undone.')">
+    <button type="submit" class="btn danger">Clear entire audit log</button>
+  </form>
+</div>
+
+{% endblock %}

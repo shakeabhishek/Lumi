@@ -601,6 +601,43 @@ hr { border: none; border-top: 1px solid var(--border-soft); margin: 1.75rem 0; 
   font-weight: 600;
 }
 
+/* ── Audit filters ───────────────────────────────────────── */
+.audit-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  margin-bottom: .25rem;
+}
+.audit-filter {
+  display: inline-flex;
+  align-items: baseline;
+  gap: .45rem;
+  padding: .4rem .75rem;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.62);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
+  font-size: .85rem;
+  color: var(--muted);
+  text-decoration: none;
+  transition: transform .15s, box-shadow .15s, color .15s;
+}
+.audit-filter:hover {
+  transform: translateY(-1px);
+  color: var(--text);
+}
+.audit-filter__count {
+  font-family: 'Geist Mono', monospace;
+  font-size: .72rem;
+  color: var(--muted-soft);
+}
+.audit-filter--active {
+  background: var(--grad-accent);
+  color: #fff;
+  box-shadow: 0 6px 16px -6px rgba(255, 77, 143, 0.45);
+}
+.audit-filter--active .audit-filter__count { color: rgba(255, 255, 255, 0.85); }
+.audit-filter--active:hover { color: #fff; }
+
 /* ── Settings hub ────────────────────────────────────────── */
 .settings-grid {
   display: grid;
