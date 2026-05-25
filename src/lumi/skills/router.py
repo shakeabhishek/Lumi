@@ -25,6 +25,7 @@ from .native.pomodoro_skill import PomodoroSkill
 from .native.reminder_skill import ReminderSkill
 from .native.system_stats_skill import SystemStatsSkill
 from .native.timer import TimerSkill
+from .native.todo_skill import TodoSkill
 from .native.volume_skill import VolumeSkill
 from .openclaw_bridge import OpenClawBridge
 
@@ -56,6 +57,12 @@ class SkillRouter:
             ClipboardSkill(enabled=clipboard_enabled),
         ]
         if data_dir is not None:
+            # TodoSkill before NotesSkill — both match "remember X" / "I
+            # need to X" phrasings; todos are mutable tasks while notes
+            # are immutable observations. Putting todos first lets
+            # "I need to call mom" become a todo rather than a note,
+            # which is the more useful default.
+            self._native.append(TodoSkill(data_dir=data_dir))
             self._native.append(NotesSkill(data_dir=data_dir))
         self._bridge = bridge
         self._conversation = conversation
