@@ -6,7 +6,34 @@
 <p>Native skills run locally. OpenClaw skills use the internet when permitted.</p>
 
 <div class="card">
+  <h2>Native skills</h2>
+  <p style="margin-bottom:.75rem;color:var(--muted);font-size:.88rem">
+    Run locally — no network needed. Default on; disable any you find
+    triggers too often (e.g. <em>Volume</em> if "louder" is a false-positive
+    in your conversation).
+  </p>
+  {% for skill in native_skills %}
+  <div class="skill-row">
+    <div>
+      <strong>{{ skill.label }}</strong>
+      <div style="font-size:.82rem;color:var(--muted)">{{ skill.example }}</div>
+    </div>
+    <button class="toggle {{ 'on' if skill.enabled else 'off' }}"
+            hx-post="/skills/native/{{ skill.name }}/toggle"
+            hx-target="this"
+            hx-swap="outerHTML">
+      {{ "On" if skill.enabled else "Off" }}
+    </button>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card">
   <h2>OpenClaw skills</h2>
+  <p style="margin-bottom:.75rem;color:var(--muted);font-size:.88rem">
+    Use the internet when called. Each invocation lands in the audit log
+    below.
+  </p>
   {% for skill in available_skills %}
   <div class="skill-row">
     <div>
@@ -14,20 +41,13 @@
     </div>
     {% set enabled = skill in settings.enabled_skills %}
     <button class="toggle {{ 'on' if enabled else 'off' }}"
-            hx-post="/skills/{{ skill }}/toggle"
+            hx-post="/skills/openclaw/{{ skill }}/toggle"
             hx-target="this"
             hx-swap="outerHTML">
       {{ "On" if enabled else "Off" }}
     </button>
   </div>
   {% endfor %}
-</div>
-
-<div class="card">
-  <h2>Native skills</h2>
-  <p style="margin-bottom:.75rem">Always active — no network required.</p>
-  <div class="skill-row"><div><strong>Timer</strong><div style="font-size:.82rem;color:var(--muted)">"Set a timer for 5 minutes"</div></div><span class="badge native">Built-in</span></div>
-  <div class="skill-row"><div><strong>Mode switch</strong><div style="font-size:.82rem;color:var(--muted)">"Switch to code mode"</div></div><span class="badge native">Built-in</span></div>
 </div>
 
 <div class="card">

@@ -449,3 +449,31 @@ def test_bridge_with_empty_catalog_returns_none() -> None:
     # Patch httpx.post so we'd notice if it was called
     with patch("httpx.post", side_effect=AssertionError("should not be called")):
         assert OpenClawBridge(skills_dir=d).send("anything") is None
+
+
+def test_enabled_skills_filter_restricts_loaded_tools() -> None:
+    """The /skills page toggle (writes enabled_skills in user_settings)
+    must actually filter the tool catalog the bridge exposes — without
+    this the dashboard toggle was cosmetic. Regression for the bug
+    found 2026-05-24 during the skill-management audit.
+
+    The filter operates on MANIFEST names (`weather`, `unit_converter`)
+    because that's what AVAILABLE_SKILLS — and the dashboard — write
+    out. Loaded tool names (`get_weather`, `convert_units`) are
+    derived downstream and not what users see.
+    """
+    full_tools = OpenClawBridge().loaded_tools()
+    assert len(full_tools) >= 2, "test needs ≥2 tools in the default catalog"
+
+    # Whitelist only `weather` — a manifest name that exists in the
+    # default catalog AND has a Python impl in _SKILL_IMPLS (so it
+    # actually loads). Should produce exactly one tool: get_weather.
+    filtered = OpenClawBridge(enabled_skills=["weather"])
+    assert filtered.loaded_tools() == ["get_weather"]
+
+    # Empty list explicitly disables all tools — pure-LLM mode.
+    none_at_all = OpenClawBridge(enabled_skills=[])
+    assert none_at_all.loaded_tools() == []
+
+    # None (the default) loads everything — preserves prior behaviour.
+    assert set(OpenClawBridge(enabled_skills=None).loaded_tools()) == set(full_tools)

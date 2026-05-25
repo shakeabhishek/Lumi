@@ -114,6 +114,7 @@ def _get_or_build_session(request: Request) -> ChatSession:
         clipboard_enabled=user.clipboard_enabled,
         data_dir=data_dir,
         pseudonymizer=pseudo,   # also mask audit-log entries in cloud mode
+        disabled_native_skills=list(user.disabled_native_skills),
     )
     # Preserve in-flight chat history across a settings-driven rebuild —
     # changing your memory toggle shouldn't blow away the current

@@ -22,6 +22,24 @@ AVAILABLE_SKILLS: list[str] = [
     "file_search",
 ]
 
+
+# Native (always-on, local Python) skills the dashboard knows how to
+# show + toggle. Keys MUST match the names SkillRouter uses internally
+# (lowercased class name minus "Skill"; see SkillRouter._skill_name).
+# Each entry is what the user sees in /skills + an example trigger so
+# the listing reads as "what can I say" rather than "what's installed."
+NATIVE_SKILLS: list[dict[str, str]] = [
+    {"name": "timer",         "label": "Timer",          "example": "Set a timer for 5 minutes"},
+    {"name": "reminder",      "label": "Reminder",       "example": "Remind me to call mom in 20 minutes"},
+    {"name": "pomodoro",      "label": "Pomodoro",       "example": "Start a pomodoro"},
+    {"name": "mode_switch",   "label": "Mode switch",    "example": "Switch to focus mode"},
+    {"name": "volume",        "label": "Volume",         "example": '"Louder" / "quieter"'},
+    {"name": "systemstats",   "label": "System stats",   "example": "How's my machine doing?"},
+    {"name": "clipboard",     "label": "Clipboard",      "example": "What's on my clipboard?"},
+    {"name": "todo",          "label": "Todos",          "example": "Todo: ship the feature"},
+    {"name": "notes",         "label": "Notes",          "example": "Remember that I take oat milk"},
+]
+
 PIPER_VOICES: list[dict[str, str]] = [
     {"id": "en_US-amy-medium",     "label": "Amy (US, warm)"},
     {"id": "en_US-lessac-medium",  "label": "Lessac (US, clear)"},
@@ -93,6 +111,12 @@ class UserSettings(BaseModel):
     # Skills
     openclaw_enabled: bool = True
     enabled_skills: list[str] = Field(default_factory=lambda: list(AVAILABLE_SKILLS))
+    # Native skills are always-on by default — opt-out lives here as
+    # an explicit deny-list rather than a positive list, so adding a
+    # new native skill in code doesn't silently leave it disabled for
+    # existing users (a positive list would have stale defaults).
+    # The names match the keys in NATIVE_SKILLS below.
+    disabled_native_skills: list[str] = Field(default_factory=list)
 
     # Permissions
     active_window_enabled: bool = False

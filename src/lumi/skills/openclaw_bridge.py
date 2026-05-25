@@ -423,6 +423,7 @@ class OpenClawBridge:
         skills_dir: Path | None = None,
         runtime_mode: str = "ollama",
         pseudonymizer: object | None = None,   # runtime.privacy.Pseudonymizer
+        enabled_skills: list[str] | None = None,
     ) -> None:
         # `url` historically pointed at the OpenClaw gateway. If the caller
         # passes the old openclaw URL (port 18789), silently swap for Ollama.
@@ -448,6 +449,12 @@ class OpenClawBridge:
         # re-enables it. Audit #20.
         self._ollama_disabled = False
         catalog = discover_skills(skills_dir or OPENCLAW_SKILLS_DIR)
+        # User-toggleable allow-list. `None` (the default) means "everything
+        # in the catalog is on" — preserves the prior behaviour for callers
+        # that don't pass enabled_skills. An empty list explicitly disables
+        # every skill (rare but valid: pure-LLM mode).
+        if enabled_skills is not None:
+            catalog = [(name, meta) for (name, meta) in catalog if name in enabled_skills]
         self._tools, self._dispatch = _build_tools(catalog)
         log.info(
             "bridge.ready",
@@ -456,6 +463,7 @@ class OpenClawBridge:
             tools_loaded=len(self._tools),
             v2_only=[n for n, _ in catalog if n not in _SKILL_IMPLS],
             pseudonymizer=type(pseudonymizer).__name__ if pseudonymizer else None,
+            enabled_filter=enabled_skills,
         )
 
     # public surface

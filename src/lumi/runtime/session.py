@@ -81,6 +81,11 @@ def build_cloud_bridge(
         runtime_mode=runtime_mode,
         pseudonymizer=pseudo,
         timeout=timeout,
+        enabled_skills=list(user.enabled_skills),
     )
-    log.info("session.bridge_built", mode=runtime_mode, pseudonymized=pseudo is not None)
+    log.info(
+        "session.bridge_built",
+        mode=runtime_mode, pseudonymized=pseudo is not None,
+        enabled_skills=list(user.enabled_skills),
+    )
     return bridge, pseudo, runtime_mode

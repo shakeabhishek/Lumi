@@ -125,3 +125,47 @@ class TestLLMFallback:
 
         assert len(llm.received_messages) == 1
         assert llm.received_messages[0][-1]["content"] == "what is the meaning of life?"
+
+
+class TestNativeSkillOptOut:
+    """The /skills page lets users disable specific native skills via
+    `disabled_native_skills` in user_settings. Regression coverage for
+    a bug where the toggle existed in the UI but wasn't plumbed
+    through to the router — so flipping it did nothing."""
+
+    def test_disabled_native_skill_is_not_loaded(self, tmp_path) -> None:
+        """Pass a deny-list; the matching skill class should not be
+        in router._native at all (so it can't match, can't audit-log,
+        can't fire side effects like threading.Timer)."""
+        llm = MockLLMBackend(response="ok")
+        conversation = ConversationManager(llm)
+        router = SkillRouter(
+            conversation=conversation,
+            tts=MagicMock(),
+            data_dir=tmp_path,
+            disabled_native_skills=["timer", "volume"],
+        )
+        names = {type(s).__name__ for s in router._native}
+        assert "TimerSkill" not in names
+        assert "VolumeSkill" not in names
+        # …and the OTHERS are still present so we're not accidentally
+        # wiping the catalog.
+        assert "ReminderSkill" in names
+        assert "NotesSkill" in names
+
+    def test_empty_deny_list_loads_everything(self, tmp_path) -> None:
+        """Sanity: no opt-out → full native catalog."""
+        llm = MockLLMBackend(response="ok")
+        conversation = ConversationManager(llm)
+        router = SkillRouter(
+            conversation=conversation,
+            tts=MagicMock(),
+            data_dir=tmp_path,
+        )
+        names = {type(s).__name__ for s in router._native}
+        # All 9 native skills present.
+        assert {
+            "TimerSkill", "ReminderSkill", "PomodoroSkill", "ModeSwitchSkill",
+            "VolumeSkill", "SystemStatsSkill", "ClipboardSkill",
+            "TodoSkill", "NotesSkill",
+        } <= names

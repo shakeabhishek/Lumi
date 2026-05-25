@@ -46,8 +46,14 @@ class SkillRouter:
         clipboard_enabled: bool = False,
         data_dir: Path | None = None,
         pseudonymizer: object | None = None,    # runtime.privacy.Pseudonymizer
+        disabled_native_skills: list[str] | None = None,
     ) -> None:
-        self._native: list[NativeSkill] = [
+        # Build the full native skill list first, then filter by the
+        # user's deny-list. Done in this order (rather than skipping at
+        # construction time) so disabling a skill that has expensive
+        # construction — none today, but defence in depth — still does
+        # the work to fail fast if anything in the constructor breaks.
+        all_native: list[NativeSkill] = [
             ReminderSkill(tts=tts),   # before TimerSkill — more specific "remind me to X" pattern
             PomodoroSkill(tts=tts),   # before TimerSkill — "pomodoro" anchors avoid generic timer match
             TimerSkill(tts=tts),
@@ -62,8 +68,12 @@ class SkillRouter:
             # are immutable observations. Putting todos first lets
             # "I need to call mom" become a todo rather than a note,
             # which is the more useful default.
-            self._native.append(TodoSkill(data_dir=data_dir))
-            self._native.append(NotesSkill(data_dir=data_dir))
+            all_native.append(TodoSkill(data_dir=data_dir))
+            all_native.append(NotesSkill(data_dir=data_dir))
+        disabled = set(disabled_native_skills or [])
+        self._native: list[NativeSkill] = [
+            s for s in all_native if _skill_name(s) not in disabled
+        ]
         self._bridge = bridge
         self._conversation = conversation
         self._audit = audit_log

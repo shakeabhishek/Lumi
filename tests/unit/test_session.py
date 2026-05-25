@@ -18,11 +18,13 @@ class _FakeUser:
         cloud_llm_api_key_set: bool = False,
         cloud_llm_provider: str = "",
         owner_name: str = "",
+        enabled_skills: list[str] | None = None,
     ) -> None:
         self.openclaw_enabled = openclaw_enabled
         self.cloud_llm_api_key_set = cloud_llm_api_key_set
         self.cloud_llm_provider = cloud_llm_provider
         self.owner_name = owner_name
+        self.enabled_skills = enabled_skills if enabled_skills is not None else []
 
 
 def test_returns_no_bridge_when_openclaw_disabled() -> None:
