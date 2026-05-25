@@ -82,9 +82,15 @@ def _clear_clips(data_dir: Path) -> None:
 async def onboarding_get(request: Request, step: int) -> HTMLResponse:
     if step < 1 or step > TOTAL_STEPS:
         return RedirectResponse(url="/onboarding/1")  # type: ignore[return-value]
-    extra = {}
+    extra: dict[str, object] = {}
     if step == 4:
         extra["clip_count"] = _clip_count(request.app.state.data_dir)
+    if step == 6:
+        # Reuse the same palette list /settings/face renders so the
+        # onboarding picker can't drift from the dashboard picker.
+        from .settings import DISPLAY_THEMES  # noqa: PLC0415
+
+        extra["display_themes"] = DISPLAY_THEMES
     return _render(request, step, **extra)
 
 
@@ -235,6 +241,7 @@ async def step5(
 async def step6(
     request: Request,
     face_theme: Annotated[str, Form()] = "",      # blank = keep persisted default
+    display_theme: Annotated[str, Form()] = "",
 ) -> str:
     data_dir = request.app.state.data_dir
     s = load_settings(data_dir)
@@ -244,6 +251,13 @@ async def step6(
     # flip themes for users who re-run the flow after a factory reset.
     if face_theme:
         s.face_theme = face_theme
+    if display_theme:
+        # Reuse the validation allow-list owned by routes/settings.py so
+        # we don't drift on what palettes the React display supports.
+        from .settings import _VALID_DISPLAY_THEME_IDS  # noqa: PLC0415
+
+        if display_theme in _VALID_DISPLAY_THEME_IDS:
+            s.display_theme = display_theme
     s.onboarding_step = 7
     save_settings(data_dir, s)
     return "/onboarding/7"

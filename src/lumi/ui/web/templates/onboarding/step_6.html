@@ -53,6 +53,22 @@
           {{ (settings.face_color or '#FF7AC9') | upper }}
         </span>
       </div>
+
+      {# Background palette — gradient that washes behind Lumi on the
+         device display. Independent of the face style above. #}
+      <div class="ob-field-label" style="margin-top:22px">Background</div>
+      <div class="ob-palette-grid">
+        {% for tid, label, swatch in display_themes %}
+        <label class="ob-pick">
+          <input type="radio" name="display_theme" value="{{ tid }}"
+                 {% if settings.display_theme == tid %}checked{% endif %}>
+          <div class="ob-palette-swatch">
+            <span class="ob-palette-swatch__chip" style="background: {{ swatch }}"></span>
+            <span class="ob-palette-swatch__label">{{ label }}</span>
+          </div>
+        </label>
+        {% endfor %}
+      </div>
     </div>
   </div>
 
