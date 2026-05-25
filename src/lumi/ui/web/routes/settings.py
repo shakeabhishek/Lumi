@@ -40,6 +40,56 @@ def _render(request: Request, template: str, **ctx: object) -> HTMLResponse:
 # ---------------------------------------------------------------------------
 
 
+# ── Settings hub ────────────────────────────────────────────────────────────
+
+
+# Settings sub-page registry — drives the /settings hub page so a new
+# settings section is just an entry here + a route + a template. Each
+# tuple is (path, icon-emoji, label, one-line description, group).
+# Groups order the cards on the hub.
+_SETTINGS_SECTIONS = [
+    # Who Lumi is.
+    ("personality", "✨", "Personality",  "System prompt + the name Lumi answers to.",     "Identity"),
+    ("modes",       "🧭", "Modes",        "Switch between General / Developer / Focus / Dictation.", "Identity"),
+    ("voice",       "🎙", "Voice",        "Pick the TTS voice + manage your enrolled speaker profile.", "Identity"),
+
+    # How Lumi looks.
+    ("face",        "💗", "Face",         "Pixel / vector / terminal / sprite — and the background palette.", "Appearance"),
+
+    # What Lumi knows about you.
+    ("memory",      "🧠", "Memory",       "Browse what Lumi has learned about you. Wipe individual entries.", "Memory & data"),
+    ("data",        "🛡", "Privacy & permissions",  "Toggle clipboard, active-window, camera, WiFi access. Export or factory-reset.", "Memory & data"),
+
+    # Where Lumi reaches.
+    ("cloud",       "☁️", "Cloud LLM",    "Configure a cloud provider key for smart routing.",     "Connections"),
+]
+
+
+@router.get("", response_class=HTMLResponse)
+@router.get("/", response_class=HTMLResponse)
+async def settings_hub(request: Request) -> HTMLResponse:
+    """Hub page — one place to discover every settings section. Built
+    in response to the pre-2026-05-24 IA audit: the only way to reach
+    /settings/voice or /settings/cloud was a direct URL or by guessing
+    the dropdown wasn't there. The nav now lands here instead of
+    forcing the user into /settings/personality."""
+    settings = load_settings(request.app.state.data_dir)
+    # Group by section while preserving order.
+    groups: dict[str, list[dict[str, str]]] = {}
+    for path, icon, label, desc, group in _SETTINGS_SECTIONS:
+        groups.setdefault(group, []).append({
+            "path": f"/settings/{path}",
+            "icon": icon,
+            "label": label,
+            "desc": desc,
+        })
+    return _render(
+        request, "settings/hub.html",
+        settings=settings,
+        groups=groups,
+    )
+
+
 @router.get("/personality", response_class=HTMLResponse)
 async def personality_get(request: Request) -> HTMLResponse:
     return _render(request, "settings/personality.html")

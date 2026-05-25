@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Settings — Lumi{% endblock %}
+{% block content %}
+
+<h1>Settings</h1>
+<p>Everything you can change about {{ settings.lumi_name }} lives here.</p>
+
+{% for group, sections in groups.items() %}
+<h2 style="font-family:'Crimson Pro',serif;font-size:1.15rem;font-weight:600;
+           color:var(--muted);text-transform:uppercase;letter-spacing:.08em;
+           margin: 1.5rem 0 .75rem">
+  {{ group }}
+</h2>
+
+<div class="settings-grid">
+  {% for s in sections %}
+  <a href="{{ s.path }}" class="settings-card">
+    <span class="settings-card__icon">{{ s.icon }}</span>
+    <div class="settings-card__body">
+      <div class="settings-card__label">{{ s.label }}</div>
+      <div class="settings-card__desc">{{ s.desc }}</div>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% endfor %}
+
+{% endblock %}
