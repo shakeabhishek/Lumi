@@ -225,6 +225,103 @@ def test_stream_error_in_handler_yields_safe_message_not_traceback(
     assert "Sorry" in body              # generic message from safe_error_message
 
 
+def test_stream_closes_generator_on_completion(
+    client: TestClient, _no_external_calls, monkeypatch,
+) -> None:
+    """Regression for Phase 4's chat-stream stall (CLAUDE.md V2 backlog):
+    every /chat/stream call MUST close its handle_streaming generator,
+    even on the happy path. Without this, partial consumption (early
+    break, exception, client disconnect) leaks executor threads and
+    sockets — exactly the pattern that wedged the soak after ~11 min."""
+    closed = {"called": False}
+
+    def gen():
+        try:
+            yield "hello "
+            yield "world"
+        finally:
+            closed["called"] = True
+
+    fake_router = MagicMock()
+    fake_router.handle_streaming.return_value = gen()
+    fake_router._bridge = None
+    fake_conv = MagicMock()
+
+    from lumi.ui.web.routes import chat as chat_mod
+    real_builder = chat_mod._get_or_build_session
+
+    def _patched(request):
+        sess = real_builder(request)
+        sess.router = fake_router
+        sess.conversation = fake_conv
+        sess.history = []
+        return sess
+
+    monkeypatch.setattr(chat_mod, "_get_or_build_session", _patched)
+
+    r = client.post(
+        "/chat/stream",
+        data={"message": "hi", "csrf_token": _csrf(client)},
+    )
+    assert r.status_code == 200
+    assert closed["called"], "generator was leaked — gen.close() was not called"
+
+
+def test_stream_timeout_per_chunk_emits_safe_message(
+    client: TestClient, _no_external_calls, monkeypatch,
+) -> None:
+    """If a chunk takes longer than _CHUNK_TIMEOUT_S, the stream must
+    abort with a user-safe message rather than hanging forever.
+
+    Verifies the body shape, not wall-clock time — under TestClient's
+    anyio runner, response read blocks until the loop drains, which
+    includes the orphaned executor thread that's still inside the slow
+    generator. Production (uvicorn) drains the response as soon as the
+    handler coroutine yields its terminal frame, so users won't wait
+    for the orphaned thread. The body content is what we care about.
+    """
+    import threading
+
+    block = threading.Event()
+
+    def slow_gen():
+        # Block until cleanup signals the event. asyncio.wait_for
+        # fires its timeout long before this returns.
+        block.wait(timeout=8.0)
+        yield "never reaches the client"
+
+    fake_router = MagicMock()
+    fake_router.handle_streaming.return_value = slow_gen()
+    fake_router._bridge = None
+
+    from lumi.ui.web.routes import chat as chat_mod
+    real_builder = chat_mod._get_or_build_session
+
+    def _patched(request):
+        sess = real_builder(request)
+        sess.router = fake_router
+        sess.conversation = MagicMock()
+        sess.history = []
+        return sess
+
+    monkeypatch.setattr(chat_mod, "_get_or_build_session", _patched)
+    monkeypatch.setattr(chat_mod, "_CHUNK_TIMEOUT_S", 0.3)
+
+    try:
+        r = client.post(
+            "/chat/stream",
+            data={"message": "hi", "csrf_token": _csrf(client)},
+        )
+        body = r.content.decode()
+        # The per-chunk timeout fired and surfaced a user-safe chunk.
+        assert "timed out" in body, body
+        # …and the terminal "done" frame still arrives so the client
+        # can finalise the bubble.
+        assert "event: done" in body, body
+    finally:
+        block.set()
+
+
 def test_stream_disables_proxy_buffering(
     client: TestClient, _no_external_calls, monkeypatch,
 ) -> None:

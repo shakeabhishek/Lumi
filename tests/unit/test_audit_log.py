@@ -117,6 +117,36 @@ class TestGetRecent:
         entries = al.get_recent(n=3)
         assert len(entries) == 3
 
+    def test_tail_read_returns_correct_entries_for_a_huge_log(
+        self, tmp_path: Path,
+    ) -> None:
+        """The fast tail-read path (introduced 2026-05-24 to fix the Phase 4
+        chat-stream stall) must still return the last n entries when the file
+        is much larger than _TAIL_WINDOW. Regression for the previous
+        O(n²) `read_text().splitlines()` implementation that the chat
+        path was hitting on every turn."""
+        al = AuditLog(tmp_path)
+        # Pump the file well past 64 KB so we cross the tail window.
+        # Each entry serialises to ~120-200 bytes, so 1000 entries is
+        # comfortably over the threshold.
+        for i in range(1000):
+            al.log("native", "timer", f"in {i}", f"out {i}")
+        path = tmp_path / "audit_log.jsonl"
+        assert path.stat().st_size > AuditLog._TAIL_WINDOW
+
+        # get_recent(1) is the call /chat/stream makes after every turn;
+        # it MUST return the most recent entry regardless of how big the
+        # file has grown.
+        one = al.get_recent(n=1)
+        assert len(one) == 1
+        assert one[0]["input"] == "in 999"
+
+        # And a bigger window still works.
+        twenty = al.get_recent(n=20)
+        assert len(twenty) == 20
+        assert twenty[-1]["input"] == "in 999"
+        assert twenty[0]["input"] == "in 980"
+
 
 class TestRouterIntegration:
     """Verify the router logs invocations via the audit log."""

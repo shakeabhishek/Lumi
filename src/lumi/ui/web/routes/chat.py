@@ -58,6 +58,7 @@ class ChatSession:
     history: list[ChatMessage] = field(default_factory=list)
     router: SkillRouter | None = None
     conversation: ConversationManager | None = None
+    audit: AuditLog | None = None
 
 
 def _get_or_build_session(request: Request) -> ChatSession:
@@ -91,7 +92,7 @@ def _get_or_build_session(request: Request) -> ChatSession:
         data_dir=data_dir,
         pseudonymizer=pseudo,   # also mask audit-log entries in cloud mode
     )
-    session = ChatSession(history=[], router=sk_router, conversation=conv)
+    session = ChatSession(history=[], router=sk_router, conversation=conv, audit=audit)
     state.chat_session = session
     return session
 
@@ -153,7 +154,7 @@ async def chat_send(
             reply = safe_error_message(exc, where="chat.send")
         elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
 
-        last = AuditLog(data_dir).get_recent(n=1)
+        last = session.audit.get_recent(n=1) if session.audit else []
         handler = last[0]["source"] if last else "llm"
         skill = last[0]["skill"] if last else ""
 
@@ -179,6 +180,13 @@ async def chat_send(
 
 
 _STREAM_SENTINEL = object()
+
+# Cap on how long any single token (or whole-reply chunk for OpenClaw
+# / native skills) can take before we abort the stream. Long enough to
+# survive a cold cloud-LLM round-trip (~30s for Gemini through the
+# OpenClaw subprocess); short enough that a stuck generator can't
+# park an executor thread forever and starve the pool.
+_CHUNK_TIMEOUT_S = 45.0
 
 
 @router.post("/stream")
@@ -255,6 +263,7 @@ async def chat_stream(
         loop = asyncio.get_event_loop()
 
         first_chunk_seen = False
+        gen = None
         try:
             gen = session.router.handle_streaming(msg)
         except Exception as exc:
@@ -267,7 +276,24 @@ async def chat_stream(
                     # Each next(gen) runs in a worker thread so the chunk
                     # producer (which can block on httpx / Ollama) doesn't
                     # freeze the event loop.
-                    chunk = await loop.run_in_executor(None, next, gen, _STREAM_SENTINEL)
+                    #
+                    # Hard cap per chunk — if the producer hangs for any
+                    # reason (Ollama wedged, network dropping packets,
+                    # OpenClaw subprocess stuck) we'd otherwise park this
+                    # executor thread forever and starve the pool. After
+                    # _CHUNK_TIMEOUT_S we surface a graceful error chunk
+                    # and bail. Sized for cold cloud-LLM latency + a
+                    # safety margin.
+                    try:
+                        chunk = await asyncio.wait_for(
+                            loop.run_in_executor(None, next, gen, _STREAM_SENTINEL),
+                            timeout=_CHUNK_TIMEOUT_S,
+                        )
+                    except asyncio.TimeoutError:
+                        err = "(reply timed out — falling back to local on next turn)"
+                        collected.append(err)
+                        yield b"data: " + json.dumps({"chunk": err}).encode() + b"\n\n"
+                        break
                     if chunk is _STREAM_SENTINEL:
                         break
                     if not first_chunk_seen:
@@ -275,17 +301,35 @@ async def chat_stream(
                         await publish_face_state(request, "speak")
                     collected.append(chunk)
                     yield b"data: " + json.dumps({"chunk": chunk}).encode() + b"\n\n"
+                    # Bail fast if the browser tab went away. Without
+                    # this we'd keep pulling chunks out of the generator
+                    # (each blocking an executor thread) for an audience
+                    # of nobody — exactly the pattern that filled the
+                    # default thread pool in Phase 4's soak.
+                    if await request.is_disconnected():
+                        break
             except Exception as exc:
                 err = safe_error_message(exc, where="chat.stream")
                 collected.append(err)
                 yield b"data: " + json.dumps({"chunk": err}).encode() + b"\n\n"
+        finally:
+            # Always close the generator — releases sockets / file
+            # handles / OpenClaw subprocess pipes that handle_streaming
+            # may be holding. Without this, a partial consumption (early
+            # break, exception, timeout) leaves resources dangling until
+            # the GC eventually collects.
+            if gen is not None:
+                try:
+                    gen.close()
+                except Exception:
+                    pass
 
         elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
 
         # 3. Record the assembled reply in session history with metadata
         #    pulled from the audit log (router.handle_streaming wrote the
         #    audit entry for us with the right source label).
-        last = AuditLog(data_dir).get_recent(n=1)
+        last = session.audit.get_recent(n=1) if session.audit else []
         handler = last[0]["source"] if last else "llm"
         skill = last[0]["skill"] if last else ""
         reply_text = "".join(collected)

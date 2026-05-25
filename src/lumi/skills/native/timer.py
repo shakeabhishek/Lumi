@@ -55,7 +55,14 @@ class TimerSkill(NativeSkill):
             return SkillResult(text="How long should the timer be?")
 
         label = _humanize(seconds)
-        threading.Timer(seconds, self._alert, args=[label]).start()
+        # daemon=True so a 5-minute reminder doesn't block Python
+        # interpreter shutdown — particularly important under pytest,
+        # where a `set a timer for 5 minutes` test fixture would
+        # otherwise stall the entire suite for the timer's duration
+        # waiting on the join.
+        t = threading.Timer(seconds, self._alert, args=[label])
+        t.daemon = True
+        t.start()
         log.info("timer.set", seconds=seconds, label=label)
         return SkillResult(text=f"Timer set for {label}.")
 
