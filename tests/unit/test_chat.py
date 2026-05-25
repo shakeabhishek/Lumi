@@ -333,6 +333,44 @@ def test_stream_disables_proxy_buffering(
     assert r.headers.get("cache-control", "").startswith("no-cache")
 
 
+def test_settings_change_rebuilds_chat_session(
+    client: TestClient, _no_external_calls,
+) -> None:
+    """Toggling memory_enabled (or any setting that participates in
+    session wiring) must take effect on the next chat turn without
+    a process restart. The cached session keys off user_settings.json
+    mtime so a dashboard save invalidates it.
+
+    Regression for the previously-silent footgun where flipping a
+    toggle did nothing until you restarted `lumi web`.
+    """
+    from lumi.ui.web.routes import chat as chat_mod  # noqa: PLC0415
+
+    # Warm the session.
+    client.get("/chat/")
+    session_v1 = client.app.state.chat_session
+    assert session_v1 is not None
+    mtime_v1 = session_v1.settings_mtime
+
+    # Simulate a dashboard save: bump the settings file's mtime.
+    import os
+    import time as _t
+    settings_path = client.app.state.data_dir / "user_settings.json"
+    settings_path.touch()
+    # mtime resolution is filesystem-dependent — make sure we get a
+    # measurably different value.
+    new_mtime = mtime_v1 + 1.0
+    os.utime(settings_path, (new_mtime, new_mtime))
+    _t.sleep(0.01)
+
+    # Next chat hit should rebuild.
+    client.get("/chat/")
+    session_v2 = client.app.state.chat_session
+    assert session_v2 is not None
+    assert session_v2 is not session_v1, "session was not rebuilt after settings change"
+    assert session_v2.settings_mtime != mtime_v1
+
+
 # ── Regression: /chat/send still works (no-JS fallback) ────────────────────
 
 

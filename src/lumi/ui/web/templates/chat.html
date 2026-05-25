@@ -6,7 +6,10 @@
     <h1>Chat with {{ settings.lumi_name }}</h1>
     <div class="chat-sub">
       Same skills, same memory, same router as the voice loop — typed.
-      <span class="chat-sub-meta">backend: {{ backend }} · model: {{ model }}</span>
+      <span class="chat-sub-meta">
+        backend: {{ backend }} · model: {{ model }}
+        {% if memory_active %}· <span title="Long-term memory is active — past conversations inform context">memory ✓</span>{% endif %}
+      </span>
     </div>
   </header>
 

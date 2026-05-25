@@ -31,6 +31,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 
 from ....audio.tts import _PrintTTS
 from ....config import get_settings
+from ....log import get_logger
 from ....host_helper.send_to_lumi import consume_pending
 from ....llm import make_llm_backend
 from ....runtime.conversation import ConversationManager
@@ -40,6 +41,7 @@ from ....skills.audit_log import AuditLog
 from ....skills.router import SkillRouter
 from ..persistence import load_settings
 
+log = get_logger(__name__)
 router = APIRouter()
 
 
@@ -59,16 +61,37 @@ class ChatSession:
     router: SkillRouter | None = None
     conversation: ConversationManager | None = None
     audit: AuditLog | None = None
+    memory: object | None = None        # MemoryStore | None — typed loosely to dodge optional-dep import
+    # mtime of user_settings.json at session-build time. The next chat
+    # turn checks the file's current mtime; if it has changed we rebuild
+    # the session so toggles in /settings (memory_enabled, openclaw_enabled,
+    # cloud_llm_*) take effect without a process restart.
+    settings_mtime: float = 0.0
+
+
+def _settings_mtime(data_dir) -> float:
+    """Wall-clock mtime of user_settings.json, or 0 if it doesn't exist yet.
+    Used to detect dashboard-driven settings changes and invalidate the
+    cached chat session — without this, toggling memory_enabled (or any
+    other setting that participates in build_cloud_bridge or memory
+    wiring) wouldn't take effect until the process restarted."""
+    p = data_dir / "user_settings.json"
+    try:
+        return p.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def _get_or_build_session(request: Request) -> ChatSession:
-    """One ChatSession per app process. Built lazily on first /chat hit."""
+    """One ChatSession per app process, rebuilt when user_settings.json
+    changes. Built lazily on first /chat hit."""
     state = request.app.state
+    data_dir = state.data_dir
+    mtime = _settings_mtime(data_dir)
     existing = getattr(state, "chat_session", None)
-    if existing is not None:
+    if existing is not None and existing.settings_mtime == mtime:
         return existing
 
-    data_dir = state.data_dir
     cfg = get_settings()
     user = load_settings(data_dir)
 
@@ -92,7 +115,14 @@ def _get_or_build_session(request: Request) -> ChatSession:
         data_dir=data_dir,
         pseudonymizer=pseudo,   # also mask audit-log entries in cloud mode
     )
-    session = ChatSession(history=[], router=sk_router, conversation=conv, audit=audit)
+    # Preserve in-flight chat history across a settings-driven rebuild —
+    # changing your memory toggle shouldn't blow away the current
+    # conversation, just affect what happens on subsequent turns.
+    prior_history = existing.history if existing is not None else []
+    session = ChatSession(
+        history=prior_history, router=sk_router, conversation=conv,
+        audit=audit, memory=memory, settings_mtime=mtime,
+    )
     state.chat_session = session
     return session
 
@@ -109,6 +139,7 @@ async def chat_index(request: Request) -> HTMLResponse:
             "messages": session.history,
             "model": cfg.ollama_model,
             "backend": cfg.llm_backend.value,
+            "memory_active": session.memory is not None,
         },
     )
 
@@ -162,6 +193,15 @@ async def chat_send(
             role="lumi", text=reply, handler=handler, skill=skill, elapsed_ms=elapsed_ms,
         ))
         session.history.append(new_msgs[-1])
+
+        # Memory write-back for non-LLM paths — same rationale as in
+        # /chat/stream. ConversationManager handles the LLM path
+        # internally; native/openclaw/tool paths need this hook.
+        if session.memory is not None and reply and handler in {"llm", "openclaw", "tool"}:
+            try:
+                session.memory.store_turn(msg, reply)  # type: ignore[attr-defined]
+            except Exception as exc:
+                log.warning("chat.memory_store_failed", error=str(exc))
 
         # If the cloud subprocess failed silently this turn, surface a
         # one-shot notice so the user knows their cloud LLM isn't engaged
@@ -337,6 +377,20 @@ async def chat_stream(
             role="lumi", text=reply_text,
             handler=handler, skill=skill, elapsed_ms=elapsed_ms,
         ))
+
+        # 3b. Persist the exchange to long-term memory if enabled.
+        # ConversationManager already stores LLM-path turns from inside
+        # stream_chat(), but native/openclaw paths never reach that code
+        # — they're handled by the router/bridge directly. Storing here
+        # covers those too, so "what did we talk about earlier?" works
+        # regardless of how we answered. Skip native skills since
+        # those are mostly utility (timer / volume / mode) and not
+        # worth recall.
+        if session.memory is not None and reply_text and handler in {"llm", "openclaw", "tool"}:
+            try:
+                session.memory.store_turn(msg, reply_text)  # type: ignore[attr-defined]
+            except Exception as exc:
+                log.warning("chat.memory_store_failed", error=str(exc))
 
         # 4. Cloud-failure one-shot notice — same logic as /chat/send.
         if session.router._bridge is not None:                # noqa: SLF001
