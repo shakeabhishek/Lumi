@@ -76,6 +76,14 @@ class UserSettings(BaseModel):
     # device_display/src/styles/index.css.
     display_theme: str = "default"
 
+    # Cloud routing — when True (and a cloud_llm_provider + key are
+    # configured), RoutedBackend re-asks the cloud LLM whenever the
+    # local model emits a low-confidence reply ("I don't know" /
+    # short / boilerplate). See llm/routed_backend.py for the gating
+    # signals. Off by default — opt-in because every escalated turn
+    # is a network round-trip and a cloud-API spend.
+    cloud_routing_enabled: bool = False
+
     # Conversation mode
     mode: str = "general"
 

@@ -95,7 +95,7 @@ def _get_or_build_session(request: Request) -> ChatSession:
     cfg = get_settings()
     user = load_settings(data_dir)
 
-    llm = make_llm_backend(cfg)
+    llm = make_llm_backend(cfg, user_settings=user)
     memory = MemoryStore(data_dir) if user.memory_enabled and MemoryStore.is_available() else None
     # Shared session helper — same wiring as the voice loop in main.py, so
     # cloud-mode + PII masking can't drift between the two surfaces.

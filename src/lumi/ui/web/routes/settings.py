@@ -430,6 +430,7 @@ async def cloud_post(
     cloud_llm_provider: Annotated[str, Form()] = "",
     cloud_llm_api_key: Annotated[str, Form()] = "",
     cloud_llm_model: Annotated[str, Form()] = "",
+    cloud_routing_enabled: Annotated[str, Form()] = "",
     clear_key: Annotated[str, Form()] = "",
     clear_confirm: Annotated[str, Form()] = "",
 ) -> str:
@@ -443,6 +444,7 @@ async def cloud_post(
         provider = ""
     s.cloud_llm_provider = provider
     s.cloud_llm_model = cloud_llm_model.strip()
+    s.cloud_routing_enabled = cloud_routing_enabled == "on"
 
     # Defence-in-depth: the UI shows a two-step confirmation requiring the
     # literal word "clear", but a hand-crafted form post could still hit

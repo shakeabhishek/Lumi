@@ -144,4 +144,11 @@ class SkillRouter:
             parts.append(chunk)
             yield chunk
         if self._audit:
-            self._audit.log("llm", "llm", self._audit_text(transcript), self._audit_text("".join(parts)))
+            # If a RoutedBackend served this turn it exposes `.last_route`
+            # so the audit log can tell local-vs-cloud:provider apart at
+            # a glance. Otherwise default to plain "llm".
+            backend = getattr(self._conversation, "_backend", None)
+            route = getattr(backend, "last_route", "")
+            src = f"cloud:{route.split(':', 1)[1]}" if route.startswith("cloud:") else "llm"
+            skill = "llm"
+            self._audit.log(src, skill, self._audit_text(transcript), self._audit_text("".join(parts)))

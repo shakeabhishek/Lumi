@@ -73,6 +73,24 @@
       </div>
     </div>
 
+    <div class="form-group">
+      <label class="inline" style="font-weight:500">
+        <input type="checkbox" name="cloud_routing_enabled" value="on"
+               {% if settings.cloud_routing_enabled %}checked{% endif %}>
+        Enable smart cloud routing
+      </label>
+      <div class="form-hint">
+        When on, Lumi tries the local model first and only escalates to
+        the cloud provider above when the local reply looks evasive
+        ("I don't know" / very short / boilerplate). Each turn that
+        escalates is logged in the audit log as <code>cloud:{provider}</code>.
+        Memory snippets are stripped before any cloud call — only the
+        live conversation + system prompt are sent.
+        You can also force a cloud call on any turn by prefixing the
+        message with <code>cloud: …</code>.
+      </div>
+    </div>
+
     <div class="btn-row">
       <button type="submit" class="btn primary">Save</button>
       {% if settings.cloud_llm_api_key_set %}

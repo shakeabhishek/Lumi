@@ -18,9 +18,17 @@ from ..log import get_logger
 
 log = get_logger(__name__)
 
-Source = Literal["native", "tool", "openclaw", "llm"]
-# "tool"     = bridge in ollama mode (local Python tool impls)
-# "openclaw" = bridge in openclaw_cloud mode (real OpenClaw agent loop)
+Source = str
+# Known values:
+#   "native"          — local Python skill
+#   "tool"            — bridge in ollama mode (local Python tool impls)
+#   "openclaw"        — bridge in openclaw_cloud mode (real OpenClaw agent loop)
+#   "llm"             — direct LLM (no skill, no bridge)
+#   "cloud:gemini"    — RoutedBackend escalated to Gemini
+#   "cloud:anthropic" — RoutedBackend escalated to Anthropic (future)
+#   "cloud:openai"    — RoutedBackend escalated to OpenAI (future)
+# Open string instead of a Literal because the cloud:* family is
+# extensible — adding a provider shouldn't require touching this file.
 
 
 class AuditLog:

@@ -81,7 +81,7 @@ class MockLLMBackend(LLMBackend):
             yield word + " "
 
 
-def make_llm_backend(cfg: Settings) -> LLMBackend:
+def _local_backend(cfg: Settings) -> LLMBackend:
     if cfg.llm_backend == LLMBackendName.MOCK:
         return MockLLMBackend()
     if cfg.llm_backend == LLMBackendName.OLLAMA:
@@ -91,3 +91,45 @@ def make_llm_backend(cfg: Settings) -> LLMBackend:
 
         return HailoBackend(host=cfg.hailo_host, model_name=cfg.hailo_model)
     raise ValueError(f"Unknown LLM backend: {cfg.llm_backend}")
+
+
+def make_llm_backend(cfg: Settings, *, user_settings: Any = None) -> LLMBackend:
+    """Build the LLM backend the conversation manager will use.
+
+    If `user_settings` has cloud_routing_enabled + a configured cloud
+    provider AND a key in the keychain, returns a RoutedBackend that
+    wraps the local backend with a cloud fallback. Otherwise returns
+    the local backend unwrapped.
+
+    `user_settings` is duck-typed (UserSettings) so this module
+    doesn't pick up a routes/persistence import cycle.
+    """
+    local = _local_backend(cfg)
+
+    if user_settings is None:
+        return local
+
+    routing_on = getattr(user_settings, "cloud_routing_enabled", False)
+    provider = getattr(user_settings, "cloud_llm_provider", "") or ""
+    model = getattr(user_settings, "cloud_llm_model", "") or ""
+    key_set = getattr(user_settings, "cloud_llm_api_key_set", False)
+    if not (routing_on and provider and key_set):
+        return local
+
+    # Lazy import to avoid pulling httpx into the import chain when
+    # cloud routing isn't configured.
+    from .cloud_clients import build_cloud_client, get_cloud_api_key  # noqa: PLC0415
+    from .routed_backend import RoutedBackend  # noqa: PLC0415
+
+    api_key = get_cloud_api_key(provider)
+    cloud = build_cloud_client(provider, model, api_key)
+    if cloud is None:
+        log.warning(
+            "llm.cloud_routing_unconfigured",
+            provider=provider, key_in_keychain=bool(api_key),
+            advice="set /settings/cloud key and confirm provider/model are filled in",
+        )
+        return local
+
+    log.info("llm.routed_backend_active", provider=provider, model=model)
+    return RoutedBackend(local=local, cloud=cloud)
