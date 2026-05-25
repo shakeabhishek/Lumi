@@ -3,79 +3,79 @@
 {% block content %}
 <h1>Developer dashboard</h1>
 
-<div class="card">
-  <h2>Hardware &amp; backend status</h2>
-  <table class="audit-table">
-    <thead><tr><th>Component</th><th>Status</th></tr></thead>
-    <tbody>
-      {% set checks = [
-        ("whisper",     "faster-whisper (STT)"),
-        ("piper",       "Piper (TTS)"),
-        ("ollama",      "Ollama (LLM)"),
-        ("pynput",      "pynput (HID inject)"),
-        ("chromadb",    "ChromaDB (memory)"),
-        ("resemblyzer", "Resemblyzer (voice ID)"),
-        ("psutil",      "psutil (system stats)"),
-      ] %}
-      {% for key, label in checks %}
-      <tr>
-        <td>{{ label }}</td>
-        <td>
-          {% if hw[key] %}
-            <span style="color: var(--amber)">✓ available</span>
-          {% else %}
-            <span style="opacity:.5">✗ not installed</span>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-      <tr><td>Platform</td><td>{{ hw.platform }} / Python {{ hw.python }}</td></tr>
-    </tbody>
-  </table>
-</div>
-
-<div class="card">
-  <h2>Skill test panel</h2>
-  <p style="font-size:.88rem;color:var(--muted);margin-bottom:.75rem">
-    Type a transcript as if you'd said it aloud. See which handler fires and the latency.
-    Uses a mock LLM (so it works without Ollama running), but native + OpenClaw skills run for real.
-  </p>
-  <form hx-post="/dev/test" hx-target="#test-result" hx-swap="innerHTML"
-        style="display:flex;gap:.5rem;align-items:center">
-    <input type="text" name="transcript" placeholder='e.g. "start a pomodoro for 25 minutes"'
-           required style="flex:1" autocomplete="off">
-    <button type="submit" class="btn primary">Run</button>
-  </form>
-  <div id="test-result"></div>
-</div>
-
-<div class="card">
-  <h2>Pipeline latency
-    <small style="font-weight:normal; font-size:.8em; margin-left:.5rem">
-      auto-refresh every 5 s
-    </small>
-  </h2>
-  <div id="perf-rows"
-       hx-get="/dev/perf/rows"
-       hx-trigger="every 5s"
-       hx-swap="innerHTML">
-    {% include "dev_perf_rows.html" %}
+<div class="card reveal-on-scroll">
+    <h2>Hardware &amp; backend status</h2>
+    <table class="kv-table">
+      <thead><tr><th>Component</th><th>Status</th></tr></thead>
+      <tbody>
+        {% set checks = [
+          ("whisper",     "faster-whisper (STT)"),
+          ("piper",       "Piper (TTS)"),
+          ("ollama",      "Ollama (LLM)"),
+          ("pynput",      "pynput (HID inject)"),
+          ("chromadb",    "ChromaDB (memory)"),
+          ("resemblyzer", "Resemblyzer (voice ID)"),
+          ("psutil",      "psutil (system stats)"),
+        ] %}
+        {% for key, label in checks %}
+        <tr>
+          <td>{{ label }}</td>
+          <td>
+            {% if hw[key] %}
+              <span style="color: var(--amber); display: flex; align-items: center;"><span class="status-led"></span> available</span>
+            {% else %}
+              <span style="opacity:.5">✗ not installed</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        <tr><td>Platform</td><td>{{ hw.platform }} / Python {{ hw.python }}</td></tr>
+      </tbody>
+    </table>
   </div>
-</div>
 
-<div class="card">
-  <h2>Current config</h2>
-  <table class="audit-table">
-    <tbody>
-      <tr><td>Lumi name</td><td>{{ settings.lumi_name }}</td></tr>
-      <tr><td>Mode</td><td>{{ settings.mode }}</td></tr>
-      <tr><td>Voice</td><td>{{ settings.piper_voice }}</td></tr>
-      <tr><td>Face theme</td><td>{{ settings.face_theme }}</td></tr>
-      <tr><td>Memory</td><td>{{ "on" if settings.memory_enabled else "off" }}</td></tr>
-      <tr><td>Clipboard</td><td>{{ "on" if settings.clipboard_enabled else "off" }}</td></tr>
-      <tr><td>Active window</td><td>{{ "on" if settings.active_window_enabled else "off" }}</td></tr>
-      <tr><td>OpenClaw</td><td>{{ "on" if settings.openclaw_enabled else "off" }}</td></tr>
-    </tbody>
-  </table>
-</div>
+  <div class="card reveal-on-scroll">
+    <h2>Current config</h2>
+    <table class="kv-table">
+      <tbody>
+        <tr><td>Lumi name</td><td>{{ settings.lumi_name }}</td></tr>
+        <tr><td>Mode</td><td>{{ settings.mode }}</td></tr>
+        <tr><td>Voice</td><td>{{ settings.piper_voice }}</td></tr>
+        <tr><td>Face theme</td><td>{{ settings.face_theme }}</td></tr>
+        <tr><td>Memory</td><td>{{ "on" if settings.memory_enabled else "off" }}</td></tr>
+        <tr><td>Clipboard</td><td>{{ "on" if settings.clipboard_enabled else "off" }}</td></tr>
+        <tr><td>Active window</td><td>{{ "on" if settings.active_window_enabled else "off" }}</td></tr>
+        <tr><td>OpenClaw</td><td>{{ "on" if settings.openclaw_enabled else "off" }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card reveal-on-scroll">
+    <h2>Skill test panel</h2>
+    <p style="font-size:.88rem;color:var(--muted);margin-bottom:.75rem">
+      Type a transcript as if you'd said it aloud. See which handler fires and the latency.
+      Uses a mock LLM (so it works without Ollama running), but native + OpenClaw skills run for real.
+    </p>
+    <form hx-post="/dev/test" hx-target="#test-result" hx-swap="innerHTML"
+          style="display:flex;gap:.75rem;align-items:center;margin-bottom:1rem">
+      <input type="text" name="transcript" class="form-input" placeholder='e.g. "start a pomodoro for 25 minutes"'
+             required style="flex:1" autocomplete="off">
+      <button type="submit" class="btn primary">Run</button>
+    </form>
+    <div id="test-result"></div>
+  </div>
+
+  <div class="card reveal-on-scroll">
+    <h2>Pipeline latency
+      <small style="font-weight:normal; font-size:.8em; margin-left:.5rem; color:var(--muted)">
+        auto-refresh every 5 s
+      </small>
+    </h2>
+    <div id="perf-rows"
+         hx-get="/dev/perf/rows"
+         hx-trigger="every 5s"
+         hx-swap="innerHTML">
+      {% include "dev_perf_rows.html" %}
+    </div>
+
 {% endblock %}

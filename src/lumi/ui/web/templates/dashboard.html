@@ -1,44 +1,46 @@
 {% extends "base.html" %}
 {% block title %}Dashboard — Lumi{% endblock %}
+
+{% block hero %}
+<div class="hero-content">
+  <div class="hero-section">
+    <h1 class="hero-title typewriter-text">Welcome to Lumi 🤍</h1>
+    <p class="hero-subtitle">Your AI companion. Always on. Always yours.</p>
+  </div>
+</div>
+{% endblock %}
+
 {% block content %}
-
-<h1>Hello{% if settings.owner_name %}, {{ settings.owner_name }}{% endif %} 👋</h1>
-<p>{{ settings.lumi_name }} is ready. Here's what's configured.</p>
-
 <div class="card-grid">
-  {# Configuration row — what Lumi IS right now. #}
-  <div class="stat-card">
-    <div class="stat-label">Mode</div>
-    <div class="stat-value" style="text-transform:capitalize">{{ settings.mode }}</div>
+  <div class="stat-card reveal-on-scroll">
+    <div class="stat-label">MODE</div>
+    <div class="stat-value" style="text-transform:capitalize">{{ settings.mode | default('General') }}</div>
   </div>
-  <div class="stat-card">
-    <div class="stat-label">Face</div>
-    <div class="stat-value" style="text-transform:capitalize">{{ settings.face_theme }}</div>
+  <div class="stat-card reveal-on-scroll">
+    <div class="stat-label">FACE</div>
+    <div class="stat-value" style="text-transform:capitalize">{{ settings.face_theme | default('Default') }}</div>
   </div>
-  <div class="stat-card">
-    <div class="stat-label">Voice ID</div>
+  <div class="stat-card reveal-on-scroll">
+    <div class="stat-label">VOICE ID</div>
     <div class="stat-value">{{ "On" if settings.voice_id_enabled else "Off" }}</div>
   </div>
-
-  {# Activity row — what Lumi has been DOING. Links to deeper surfaces. #}
-  <a href="/skills" class="stat-card" style="text-decoration:none;color:inherit">
-    <div class="stat-label">Skills active</div>
+  <a href="/skills" class="stat-card reveal-on-scroll" style="text-decoration:none;color:inherit">
+    <div class="stat-label">SKILLS ACTIVE</div>
     <div class="stat-value">{{ settings.enabled_skills | length }} OpenClaw</div>
   </a>
-  <a href="/settings/memory" class="stat-card" style="text-decoration:none;color:inherit">
-    <div class="stat-label">Memory</div>
+  <a href="/settings/memory" class="stat-card reveal-on-scroll" style="text-decoration:none;color:inherit">
+    <div class="stat-label">MEMORY</div>
     <div class="stat-value">
-      {% if memory_count is none %}<span style="color:var(--muted-soft)">Off</span>
-      {% else %}{{ memory_count }} stored{% endif %}
+      {% if memory_count is none %}<span style="color:#A7B0C7">Off</span>{% else %}{{ memory_count }} stored{% endif %}
     </div>
   </a>
-  <a href="/audit-log/?family=cloud" class="stat-card" style="text-decoration:none;color:inherit">
-    <div class="stat-label">Cloud routing</div>
+  <a href="/audit-log/?family=cloud" class="stat-card reveal-on-scroll" style="text-decoration:none;color:inherit">
+    <div class="stat-label">CLOUD ROUTING</div>
     <div class="stat-value">
       {% if last_cloud_route %}
-        <span style="font-family:'Geist Mono',monospace;font-size:1.05rem">{{ last_cloud_route }}</span>
+        <span style="font-size:1.25rem">{{ last_cloud_route }}</span>
       {% else %}
-        <span style="color:var(--muted-soft)">No recent escalation</span>
+        <span style="color:#A7B0C7">None</span>
       {% endif %}
     </div>
   </a>
@@ -48,27 +50,27 @@
    than a single stat tile. Clicks open the chat where the user can ask
    "show my todos" — that's the canonical interaction. #}
 {% if todos.open or todos.done %}
-<div class="card" style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap">
+<div class="card reveal-on-scroll" style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap">
   <div>
     <div class="stat-label">Todos</div>
     <div style="display:flex;gap:1.5rem;margin-top:.2rem">
       <div>
-        <span style="font-family:'Crimson Pro',serif;font-size:1.8rem;font-weight:600;color:var(--text)">{{ todos.open }}</span>
-        <span style="color:var(--muted);font-size:.88rem"> open</span>
+        <span style="font-family:'Crimson Pro',serif;font-size:1.8rem;font-weight:600;color:#FFFFFF">{{ todos.open }}</span>
+        <span style="color:rgba(255,255,255,0.7);font-size:.88rem"> open</span>
       </div>
       <div>
-        <span style="font-family:'Crimson Pro',serif;font-size:1.8rem;font-weight:600;color:var(--muted)">{{ todos.done }}</span>
-        <span style="color:var(--muted);font-size:.88rem"> done</span>
+        <span style="font-family:'Crimson Pro',serif;font-size:1.8rem;font-weight:600;color:rgba(255,255,255,0.5)">{{ todos.done }}</span>
+        <span style="color:rgba(255,255,255,0.5);font-size:.88rem"> done</span>
       </div>
     </div>
   </div>
-  <div style="flex:1;color:var(--muted);font-size:.88rem">
+  <div style="flex:1;color:rgba(255,255,255,0.7);font-size:.88rem">
     Add or close from chat: <code>todo: write quarterly review</code>, <code>finish the report</code>.
   </div>
 </div>
 {% endif %}
 
-<div class="card">
+<div class="card reveal-on-scroll">
   <h2>Recent activity</h2>
   {% if recent %}
   <table class="log-table">
@@ -123,12 +125,11 @@
   {% else %}
   <div class="empty-state">
     <p>No conversations yet — start talking to {{ settings.lumi_name }}!</p>
-    <p style="font-size:.85rem">Run <code>uv run lumi --backend mock</code> in a terminal to start.</p>
   </div>
   {% endif %}
 </div>
 
-<div style="display:flex;gap:.75rem;flex-wrap:wrap">
+<div style="display:flex;justify-content:center;gap:.75rem;flex-wrap:wrap;padding-bottom: 8rem;">
   <a href="/skills" class="btn">Manage skills</a>
   <a href="/settings/personality" class="btn">Edit system prompt</a>
   <a href="/settings/data" class="btn">Permissions</a>
