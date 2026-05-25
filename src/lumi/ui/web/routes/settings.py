@@ -86,10 +86,32 @@ async def voice_post(
 # ---------------------------------------------------------------------------
 
 
+# Background gradient palettes available on the device display.
+# (id, label, swatch) — swatch is a CSS gradient string used as the
+# picker's preview chip. Must stay aligned with `_VALID_THEMES` in
+# routes/device_display.py and the [data-theme=...] selectors in
+# src/lumi/ui/device_display/src/styles/index.css.
+DISPLAY_THEMES = [
+    ("default",   "Cosmic",     "linear-gradient(135deg,#581c87,#9d174d,#312e81)"),
+    ("sunset",    "Sunset",     "linear-gradient(135deg,#f97316,#ec4899,#7c3aed)"),
+    ("ocean",     "Ocean",      "linear-gradient(135deg,#1d4ed8,#14b8a6,#22d3ee)"),
+    ("forest",    "Forest",     "linear-gradient(135deg,#166534,#059669,#0d9488)"),
+    ("sakura",    "Sakura",     "linear-gradient(135deg,#fbcfe8,#fda4af,#f9a8d4)"),
+    ("mint",      "Mint",       "linear-gradient(135deg,#6ee7b7,#99f6e4,#67e8f9)"),
+    ("lavender",  "Lavender",   "linear-gradient(135deg,#c4b5fd,#ddd6fe,#a5b4fc)"),
+    ("monochrome","Monochrome", "linear-gradient(135deg,#374151,#1f2937,#111827)"),
+]
+_VALID_DISPLAY_THEME_IDS = {t[0] for t in DISPLAY_THEMES}
+
+
 @router.get("/face", response_class=HTMLResponse)
 async def face_get(request: Request) -> HTMLResponse:
     sprite_packs = list_sprite_packs(request.app.state.data_dir)
-    return _render(request, "settings/face.html", sprite_packs=sprite_packs)
+    return _render(
+        request, "settings/face.html",
+        sprite_packs=sprite_packs,
+        display_themes=DISPLAY_THEMES,
+    )
 
 
 @router.post("/face", response_class=RedirectResponse, status_code=303)
@@ -98,6 +120,7 @@ async def face_post(
     face_theme: Annotated[str, Form()] = "vector",
     face_color: Annotated[str, Form()] = "",
     idle_scene: Annotated[str, Form()] = "none",
+    display_theme: Annotated[str, Form()] = "default",
 ) -> str:
     data_dir = request.app.state.data_dir
     s = load_settings(data_dir)
@@ -108,7 +131,13 @@ async def face_post(
     # a scene name the React device display can't resolve.
     valid_scenes = {"none", *(p["name"] for p in list_sprite_packs(data_dir))}
     s.idle_scene = idle_scene if idle_scene in valid_scenes else "none"
+    s.display_theme = display_theme if display_theme in _VALID_DISPLAY_THEME_IDS else "default"
     save_settings(data_dir, s)
+    # Push a fresh snapshot so the React device-display re-renders
+    # with the new palette right away — no F5 needed.
+    from .device_display import publish_face_state  # noqa: PLC0415
+
+    await publish_face_state(request, "idle")
     return "/settings/face"
 
 

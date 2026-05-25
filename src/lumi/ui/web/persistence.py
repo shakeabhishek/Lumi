@@ -65,9 +65,16 @@ class UserSettings(BaseModel):
     # Face
     face_theme: str = "vector"
     # Ambient scene shown when Lumi is IDLE instead of the face.
-    # Options: "none" | "rain" | "snow". Default none = face floats alone.
+    # "none" (default) = face floats alone; any other value is a sprite
+    # pack name (bundled or uploaded under /settings/sprites).
     idle_scene: str = "none"
     face_color: str = ""  # empty = use per-theme default
+    # Background gradient palette for the device display. Independent
+    # of face_theme — that picks WHO is drawn (pixel/vector/terminal/
+    # sprite); display_theme picks the colour wash behind them. Values
+    # must match the [data-theme=...] selectors in
+    # device_display/src/styles/index.css.
+    display_theme: str = "default"
 
     # Conversation mode
     mode: str = "general"

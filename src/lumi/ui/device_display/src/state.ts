@@ -77,5 +77,13 @@ export function useDeviceState(): DeviceState {
     return () => source?.close();
   }, []);
 
+  // Promote `data-theme` onto <html> so the CSS variable overrides
+  // cascade into `body, #root` (where index.css paints the gradient).
+  // If we only set it on the App wrapper, :root would still hold the
+  // default palette and the background wouldn't repaint.
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', state.theme);
+  }, [state.theme]);
+
   return state;
 }

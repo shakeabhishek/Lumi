@@ -134,6 +134,53 @@ async def test_bus_seeded_via_publish_face_state(tmp_path) -> None:
     assert "style" in snapshot
 
 
+def test_display_theme_persists_and_flows_into_snapshot(
+    client: TestClient,
+) -> None:
+    """Picking a palette on /settings/face must (1) persist on disk
+    and (2) appear in the next SSE snapshot the device display
+    consumes — without a page refresh on the React side. Whitelists
+    keep an unknown id from blanking the gradient."""
+    # warm the CSRF cookie
+    client.get("/")
+    csrf = client.cookies.get("csrf_token", "")
+
+    r = client.post(
+        "/settings/face",
+        data={
+            "csrf_token": csrf,
+            "face_theme": "vector",
+            "face_color": "",
+            "idle_scene": "none",
+            "display_theme": "sunset",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+
+    # Snapshot should reflect the new theme — face_post publishes idle.
+    snapshot = client.app.state.device_bus.latest()
+    assert snapshot is not None
+    assert snapshot["theme"] == "sunset"
+
+    # Unknown id falls back to default rather than passing through.
+    r = client.post(
+        "/settings/face",
+        data={
+            "csrf_token": csrf,
+            "face_theme": "vector",
+            "face_color": "",
+            "idle_scene": "none",
+            "display_theme": "evil-palette",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    snapshot = client.app.state.device_bus.latest()
+    assert snapshot is not None
+    assert snapshot["theme"] == "default"
+
+
 def test_sprite_endpoint_serves_bundled_pack(client: TestClient) -> None:
     """The /device-display/sprite/<pack>/<file> route mirrors the
     pygame loader's bundled→user fallback so the React app can pull

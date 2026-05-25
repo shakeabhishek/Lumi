@@ -129,6 +129,16 @@ async def device_display_sprite(
 
 _VALID_FACE_STATES = {"idle", "listen", "think", "speak"}
 
+# Whitelist of palette keys the React device display knows how to
+# render. Must stay in sync with the [data-theme=...] selectors in
+# src/lumi/ui/device_display/src/styles/index.css. Exposed here as the
+# single source of truth so the settings route and the SSE snapshot
+# agree on which themes exist.
+_VALID_THEMES = frozenset({
+    "default", "sunset", "ocean", "forest",
+    "sakura", "mint", "lavender", "monochrome",
+})
+
 
 def _settings_snapshot(request: Request) -> dict:
     """Read-only fields derived from on-disk settings — style, sprite
@@ -144,10 +154,14 @@ def _settings_snapshot(request: Request) -> dict:
         # the React device display has no procedural rain/snow path.
         style = "sprite"
         sprite_pack = settings.idle_scene
+    # Whitelist the theme against the React app's known palettes — an
+    # unknown value falls back to the default gradient instead of
+    # producing an invisible (un-styled) display.
+    theme = settings.display_theme if settings.display_theme in _VALID_THEMES else "default"
     return {
         "style": style,
         "spritePack": sprite_pack,
-        "theme": "default",         # multi-theme picker is V2
+        "theme": theme,
     }
 
 

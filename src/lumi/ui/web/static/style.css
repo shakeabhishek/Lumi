@@ -512,3 +512,43 @@ hr { border: none; border-top: 1px solid var(--border-soft); margin: 1.75rem 0; 
 }
 .chat-hint summary { cursor: pointer; color: var(--muted); }
 .chat-hint p { margin-top: .5rem; color: var(--muted); }
+
+/* ── Theme swatches (device-display palette picker) ───────── */
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+  gap: .65rem;
+}
+.theme-swatch {
+  display: flex;
+  flex-direction: column;
+  gap: .4rem;
+  align-items: center;
+  padding: .55rem .35rem .5rem;
+  background: var(--bg-card);
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px var(--border-soft);
+  cursor: pointer;
+  transition: transform .15s, box-shadow .15s;
+}
+.theme-swatch:hover { transform: translateY(-1px); }
+.theme-swatch input { display: none; }
+.theme-swatch__chip {
+  display: block;
+  width: 100%;
+  height: 56px;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+}
+.theme-swatch__label {
+  font-size: .82rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+.theme-swatch:has(input:checked) {
+  box-shadow: inset 0 0 0 2px var(--amber), 0 8px 22px -10px rgba(255, 77, 143, 0.32);
+}
+.theme-swatch:has(input:checked) .theme-swatch__label {
+  color: var(--text);
+  font-weight: 600;
+}

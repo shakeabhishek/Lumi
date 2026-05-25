@@ -31,6 +31,23 @@
     </div>
 
     <div class="form-row" style="margin-top:1.5rem">
+      <label>Background palette</label>
+      <div style="font-size:.82rem;color:var(--muted);margin-bottom:.65rem">
+        Gradient that washes behind Lumi on the device display.
+      </div>
+      <div class="theme-grid">
+        {% for tid, label, swatch in display_themes %}
+          <label class="theme-swatch">
+            <input type="radio" name="display_theme" value="{{ tid }}"
+                   {% if settings.display_theme == tid %}checked{% endif %}>
+            <span class="theme-swatch__chip" style="background: {{ swatch }}"></span>
+            <span class="theme-swatch__label">{{ label }}</span>
+          </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="form-row" style="margin-top:1.5rem">
       <label for="idle_scene">When Lumi is idle, show:</label>
       <select id="idle_scene" name="idle_scene"
               style="padding:.45rem .65rem;border-radius:8px;border:1px solid var(--border);min-width:280px">
