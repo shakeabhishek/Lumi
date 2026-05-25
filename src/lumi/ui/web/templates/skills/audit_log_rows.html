@@ -3,10 +3,8 @@
   <td style="white-space:nowrap;color:var(--muted)">{{ entry.ts[0:19].replace("T"," ") }}</td>
   <td><span class="badge {{ entry.source }}">{{ entry.source }}</span></td>
   <td>{{ entry.skill }}</td>
-  <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-      title="{{ entry.input }}">{{ entry.input }}</td>
-  <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-      title="{{ entry.result }}">{{ entry.result }}</td>
+  <td class="input" title="{{ entry.input }}">{{ entry.input }}</td>
+  <td class="result" title="{{ entry.result }}">{{ entry.result }}</td>
 </tr>
 {% else %}
 <tr><td colspan="5" style="text-align:center;color:var(--muted);padding:1.5rem">No entries yet.</td></tr>

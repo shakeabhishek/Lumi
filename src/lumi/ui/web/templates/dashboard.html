@@ -51,8 +51,8 @@
         <td style="white-space:nowrap;color:var(--muted)">{{ entry.ts[11:19] }}</td>
         <td><span class="badge {{ entry.source }}">{{ entry.source }}</span></td>
         <td>{{ entry.skill }}</td>
-        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ entry.input }}</td>
-        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ entry.result }}</td>
+        <td class="input">{{ entry.input }}</td>
+        <td class="result">{{ entry.result }}</td>
       </tr>
       {% endfor %}
     </tbody>
