@@ -3,7 +3,7 @@
 {% block title %}All set — Lumi{% endblock %}
 {% block body %}
 
-<form method="POST" action="/onboarding/9" style="display:contents;">
+<form method="POST" action="/onboarding/9" style="display:contents;" id="ob-step9-form">
   <div class="ob-greet">
     <div class="ob-blob ob-blob--pink"></div>
     <div class="ob-blob ob-blob--blue"></div>
@@ -17,18 +17,25 @@
       <span id="ob-typing"></span><span class="ob-cursor"></span>
     </div>
 
-    <div class="ob-input-hint">
+    {# Real input — submits with name=first_message. The post handler
+       hands it off to /chat via ?prefill= so the first turn fires
+       the moment the dashboard loads. Enter sends; the visible name
+       field below is optional. #}
+    <label class="ob-input-hint" for="ob-first-msg" style="cursor:text">
       <span class="dot"></span>
-      <span style="font-size:14px;color:var(--iris-mute);">Speak, or type here.</span>
-      <span style="flex:1;"></span>
+      <input id="ob-first-msg" name="first_message" type="text"
+             placeholder="Speak, or type here…"
+             style="flex:1;border:0;background:transparent;outline:none;
+                    font-size:14px;color:var(--iris-ink);min-width:0"
+             autocomplete="off">
       <span class="mono" style="font-size:10px;color:var(--iris-mute-soft);letter-spacing:0.06em;">
-        ⏎ to send · ⌥ space to mute
+        ⏎ to send · skip with the button
       </span>
-    </div>
+    </label>
 
     <div style="margin-top:36px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;justify-content:center;">
-      <label class="ob-field-label" style="margin:0;">Your name (optional)</label>
-      <input class="ob-input" type="text" name="owner_name"
+      <label class="ob-field-label" style="margin:0;" for="ob-owner-name">Your name (optional)</label>
+      <input id="ob-owner-name" class="ob-input" type="text" name="owner_name"
              placeholder="e.g. Alex" value="{{ settings.owner_name }}"
              style="width:200px;height:42px;">
       <button type="submit" class="ob-btn ob-btn--primary">
@@ -38,6 +45,16 @@
     </div>
   </div>
 </form>
+
+<script>
+  // The first-message field shares the "Enter to submit" reflex with
+  // the dashboard chat input. Both fields are inside the same form so
+  // Enter naturally submits — but we want a typed first message to
+  // win over an Enter while in the name field (which would otherwise
+  // submit with first_message empty). No special handling needed: the
+  // browser already submits the form on Enter from either field, and
+  // the handler picks up `first_message` if it's non-empty.
+</script>
 
 <script>
   (function () {

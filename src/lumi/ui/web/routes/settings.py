@@ -62,7 +62,7 @@ _SETTINGS_SECTIONS = [
     ("face",        "💗", "Face",         "Pixel / vector / terminal / sprite — and the background palette.", "Appearance"),
 
     # What Lumi knows about you.
-    ("memory",      "🧠", "Memory",       "Browse what Lumi has learned about you. Wipe individual entries.", "Memory & data"),
+    ("memory",      "🧠", "Memory",       "Browse what Lumi has learned about you. Toggle on/off here.", "Memory & data"),
     ("data",        "🛡", "Privacy & permissions",  "Toggle clipboard, active-window, camera, WiFi access. Export or factory-reset.", "Memory & data"),
     ("/audit-log/", "📜", "Audit log",    "Every skill invocation, cloud escalation, and direct LLM turn — filter by source.", "Memory & data"),
 
@@ -322,6 +322,22 @@ async def data_post(
 # ---------------------------------------------------------------------------
 # Memory browser
 # ---------------------------------------------------------------------------
+
+
+@router.post("/memory/toggle", response_class=RedirectResponse, status_code=303)
+async def memory_toggle(request: Request) -> str:
+    """Flip memory_enabled — used by the /settings/memory CTA when
+    memory is off and the user wants to turn it on right there
+    instead of going hunting through /settings/data.
+
+    Stays a separate route from /settings/data POST so the redirect
+    target makes sense (back to /settings/memory, not back to data).
+    """
+    data_dir = request.app.state.data_dir
+    s = load_settings(data_dir)
+    s.memory_enabled = not s.memory_enabled
+    save_settings(data_dir, s)
+    return "/settings/memory"
 
 
 @router.get("/memory", response_class=HTMLResponse)

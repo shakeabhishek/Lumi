@@ -5,10 +5,20 @@
 <p>What {{ settings.lumi_name }} remembers from past conversations. Stored locally in ChromaDB.</p>
 
 {% if not settings.memory_enabled %}
-<div class="msg info">
-  Long-term memory is disabled. Turn it on under
-  <a href="/settings/data">Privacy &amp; permissions</a> and install the optional deps:
-  <code>uv pip install -e ".[memory]"</code>
+<div class="card" style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+  <div style="flex:1;min-width:260px">
+    <strong style="font-size:1.05rem;display:block;margin-bottom:.25rem">
+      Long-term memory is off
+    </strong>
+    <p style="margin:0;color:var(--muted);font-size:.9rem">
+      Turn it on to let {{ settings.lumi_name }} recall things you've talked about
+      before. Memories live locally in ChromaDB — nothing leaves the device.
+      Requires the optional deps: <code>uv pip install -e ".[memory]"</code>.
+    </p>
+  </div>
+  <form method="POST" action="/settings/memory/toggle">
+    <button type="submit" class="btn primary">Turn on memory</button>
+  </form>
 </div>
 {% elif not memory_available %}
 <div class="msg err">
@@ -59,6 +69,13 @@
     via the LLM or a cloud route gets stored here.
   </div>
   {% endif %}
+
+  <div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--border-soft);color:var(--muted);font-size:.85rem">
+    Memory is currently <strong style="color:var(--text)">on</strong>.
+    <form method="POST" action="/settings/memory/toggle" style="display:inline">
+      <button type="submit" class="btn" style="margin-left:.5rem">Turn off</button>
+    </form>
+  </div>
 </div>
 
 {% endif %}

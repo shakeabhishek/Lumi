@@ -318,10 +318,28 @@ async def step8(
 async def step9(
     request: Request,
     owner_name: Annotated[str, Form()] = "",
+    first_message: Annotated[str, Form()] = "",
 ) -> str:
+    """Wrap up onboarding. The user can type a first message into the
+    bubble — if they do, we land in /chat with it queued (via the
+    same hotkey-context pending mechanism that the global hotkey
+    uses) so their first conversation turn lights up the moment the
+    dashboard loads."""
     data_dir = request.app.state.data_dir
     s = load_settings(data_dir)
-    s.owner_name = owner_name
+    s.owner_name = owner_name.strip()
     s.onboarding_complete = True
     save_settings(data_dir, s)
+
+    msg = first_message.strip()
+    if msg:
+        # Forward the message to /chat via a query param. The chat
+        # page reads `?prefill=…` and auto-fires it on load — same
+        # path the user would take by typing it themselves. Avoids
+        # tangling onboarding with the chat session builder or the
+        # hotkey-context machinery (which is keyed on clipboard
+        # permission + has a 60s freshness window we don't want here).
+        import urllib.parse  # noqa: PLC0415
+
+        return f"/chat/?prefill={urllib.parse.quote(msg)}"
     return "/"

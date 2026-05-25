@@ -6,6 +6,8 @@
   <title>{% block title %}Lumi{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
   <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+  <script src="/static/log-expander.js" defer></script>
+  <script src="/static/location-typeahead.js" defer></script>
   {# CSRF: tell HTMX to include the token on every request, expose the
      token as a meta tag for inline JS, and inject a hidden csrf_token
      input into every form right before submission so we don't have to

@@ -56,8 +56,9 @@
         </div>
         <input name="weather_location" type="text"
                class="ob-input" style="max-width:260px;margin-top:10px;"
-               placeholder="e.g. San Francisco, Tokyo, Berlin"
-               value="{{ settings.weather_location }}">
+               placeholder="Start typing — e.g. San Francisco"
+               value="{{ settings.weather_location }}"
+               data-location-typeahead>
       </div>
 
       <div class="ob-card" style="margin-top:18px;">

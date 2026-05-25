@@ -1,10 +1,37 @@
 {% for entry in recent | reverse %}
-<tr>
+{% set row_id = "skill-audit-" ~ loop.index %}
+<tr class="row-summary" data-detail-for="{{ row_id }}-detail">
   <td style="white-space:nowrap;color:var(--muted)">{{ entry.ts[0:19].replace("T"," ") }}</td>
-  <td><span class="badge {{ entry.source }}">{{ entry.source }}</span></td>
+  <td>
+    {% set src = entry.source %}
+    {% if src.startswith("cloud:") %}
+      <span class="badge llm" title="Cloud escalation">{{ src }}</span>
+    {% else %}
+      <span class="badge {{ src }}">{{ src }}</span>
+    {% endif %}
+  </td>
   <td>{{ entry.skill }}</td>
-  <td class="input" title="{{ entry.input }}">{{ entry.input }}</td>
-  <td class="result" title="{{ entry.result }}">{{ entry.result }}</td>
+  <td class="input">
+    <div class="row-clip">
+      <span class="row-clip__text">{{ entry.input }}</span>
+    </div>
+  </td>
+  <td class="result">
+    <div class="row-clip">
+      <span class="row-clip__text">{{ entry.result }}</span>
+      <button type="button" class="row-expand" aria-label="Expand row">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+    </div>
+  </td>
+</tr>
+<tr id="{{ row_id }}-detail" class="row-detail">
+  <td colspan="5">
+    <dl class="row-detail__grid">
+      <dt>You said</dt>   <dd>{{ entry.input }}</dd>
+      <dt>Lumi replied</dt> <dd>{{ entry.result }}</dd>
+    </dl>
+  </td>
 </tr>
 {% else %}
 <tr><td colspan="5" style="text-align:center;color:var(--muted);padding:1.5rem">No entries yet.</td></tr>

@@ -333,14 +333,75 @@ input[type=color] { padding: 4px; height: 44px; cursor: pointer; }
 .log-table tr:hover td {
   background: rgba(255, 77, 143, 0.05);
 }
-/* Audit log rows can stretch — cap input/result cells so a multi-paragraph
- * cloud reply doesn't push every other column off-screen. */
+
+/* Expandable audit/activity rows ── the Result column can be a
+ * multi-paragraph cloud reply that would otherwise blow out the
+ * card width. Strategy: a `.row-clip` flex slot with the chevron
+ * pinned at the end of the row, summary text clamped on one line.
+ * Clicking the row toggles `aria-expanded` which switches to the
+ * full panel beneath. Pure CSS — no JS needed for the toggle,
+ * just for the click handler which lives in chat-stream.js'
+ * sibling expander.js.
+ */
 .log-table td.input,
 .log-table td.result {
-  max-width: 280px;
+  max-width: 320px;
+}
+.log-table .row-clip {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  min-width: 0;          /* lets the inner span shrink instead of pushing the chevron offscreen */
+}
+.log-table .row-clip__text {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.log-table .row-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 0;
+  background: transparent;
+  color: var(--muted-soft);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform .15s, color .15s, background .15s;
+}
+.log-table .row-expand:hover { color: var(--text); background: rgba(255, 77, 143, 0.08); }
+.log-table tr.row-expanded .row-expand { transform: rotate(90deg); color: var(--amber); }
+
+.log-table tr.row-detail { display: none; }
+.log-table tr.row-detail.row-detail--open { display: table-row; }
+.log-table tr.row-detail td {
+  padding: .5rem 1rem 1rem;
+  background: rgba(255, 240, 246, 0.45);
+  color: var(--text-soft);
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: .82rem;
+  line-height: 1.55;
+}
+.log-table tr.row-detail .row-detail__grid {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: .35rem 1rem;
+}
+.log-table tr.row-detail .row-detail__grid > dt {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-size: .72rem;
+}
+.log-table tr.row-detail .row-detail__grid > dd {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
 }
 
 .badge {
@@ -599,6 +660,48 @@ hr { border: none; border-top: 1px solid var(--border-soft); margin: 1.75rem 0; 
 .theme-swatch:has(input:checked) .theme-swatch__label {
   color: var(--text);
   font-weight: 600;
+}
+
+/* ── Location typeahead ──────────────────────────────────── */
+.loc-typeahead {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  border-radius: 12px;
+  box-shadow:
+    0 16px 40px -12px rgba(26, 29, 58, 0.22),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.65);
+  overflow: hidden;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.loc-typeahead__item {
+  display: block;
+  width: 100%;
+  padding: .55rem .85rem;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  font-size: .9rem;
+  color: var(--text);
+  cursor: pointer;
+  transition: background .12s;
+}
+.loc-typeahead__item:hover,
+.loc-typeahead__item--active {
+  background: rgba(255, 77, 143, 0.10);
+  color: var(--text);
+}
+.loc-typeahead__item + .loc-typeahead__item {
+  border-top: 1px solid var(--border-soft);
 }
 
 /* ── Audit filters ───────────────────────────────────────── */

@@ -26,6 +26,20 @@
 
   if (!form || !log || !input) return;            // page hydration race
 
+  // `?prefill=foo` lets onboarding step 9 hand the user's first
+  // message off to chat without needing a separate transport. Strip
+  // it from the URL after consuming so a reload doesn't re-fire.
+  (function maybePrefill() {
+    const params = new URLSearchParams(window.location.search);
+    const msg = params.get('prefill');
+    if (!msg) return;
+    history.replaceState(null, '', window.location.pathname);
+    input.value = msg;
+    // Defer submit by a tick so the page paints first — the user
+    // sees their message land in the input before the spinner fires.
+    setTimeout(() => form.requestSubmit(), 60);
+  })();
+
   function now() {
     const d = new Date();
     return d.toTimeString().slice(0, 8);          // HH:MM:SS
