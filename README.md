@@ -104,10 +104,15 @@ For transparency, here's what's in every Lumi:
 | Component | Role |
 |---|---|
 | Raspberry Pi 5 (16GB) | Main computer |
+| Raspberry Pi 5 Active Cooler | Mandatory cooling for the Pi 5 under load |
+| Raspberry Pi 27W USB-C PD Power | Required power supply to drive the Pi 5 and NPU |
 | Raspberry Pi AI HAT+ 2 | LLM + vision inference (40 TOPS, 8GB dedicated AI RAM) |
-| ReSpeaker 2-Mics HAT | Audio I/O, RGB indicator LEDs |
+| ReSpeaker 2-Mics HAT | Audio input (mics) and RGB indicator LEDs |
+| 3W 8-Ohm Speaker (JST 2.0) | Audio output (plugs into the ReSpeaker HAT) |
 | Pi Camera Module 3 Wide | Gestures + presence (with active-indicator LED) |
+| Pi 5 Camera FPC Cable | Required mini-to-standard ribbon cable for Pi 5 |
 | Waveshare 3.5" IPS display | Lumi's animated face |
+| Extra-Tall 40-pin GPIO Headers | Required for stacking the display and ReSpeaker HATs |
 | 256GB high-endurance microSD | All storage |
 | Custom Lumi OS | Everything tuned to work together |
 

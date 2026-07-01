@@ -39,6 +39,8 @@ export interface DeviceState {
   spritePack?: string;
   weather: WeatherSnapshot | null;
   cpuPct: number;
+  memPct: number;
+  cpuTempC: number;
 }
 
 const INITIAL: DeviceState = {
@@ -49,6 +51,8 @@ const INITIAL: DeviceState = {
   statusText: 'Standalone preview',
   weather: null,
   cpuPct: 0,
+  memPct: 0,
+  cpuTempC: 0,
 };
 
 export function useDeviceState(): DeviceState {

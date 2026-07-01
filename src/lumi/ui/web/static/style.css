@@ -77,9 +77,25 @@ body {
   width: 100%;
   display: flex;
   justify-content: center;
-  padding-top: 1.5rem;
+  padding-top: 1.25rem;
   z-index: 100;
   pointer-events: none;
+}
+
+/* Fading frosted band behind the (pill-less) nav — strongest at the very
+   top, blurs away to nothing as it approaches the main content (2026-07-01). */
+.header-blur {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 150px;
+  z-index: 99;
+  pointer-events: none;
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,0.9) 42%, rgba(0,0,0,0) 100%);
+          mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,0.9) 42%, rgba(0,0,0,0) 100%);
 }
 
 .pill-nav {
@@ -87,14 +103,11 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: rgba(255, 255, 255, 0.26);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  border-radius: 9999px;
-  padding: 0.65rem 1.25rem;
-  width: 90%;
-  max-width: 900px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2), inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+  width: 94%;
+  max-width: 1180px;
+  padding: 0.35rem 0.75rem;
+  /* Pill container removed 2026-07-01 — links float over the fading frosted
+     band (.header-blur); no background/border/pill radius here anymore. */
 }
 
 .nav-left {
@@ -310,7 +323,7 @@ input[type=color], select, textarea {
   border-radius: 10px;
   background: #fff;
   box-shadow: inset 0 0 0 1px var(--border);
-  color: var(--text);
+  color: var(--text-soft);
   font-family: inherit;
   font-size: .95rem;
   outline: none;
@@ -1018,41 +1031,9 @@ hr { border: none; border-top: 1px solid var(--border-soft); margin: 1.75rem 0; 
   display: inline-block;
 }
 
-/* 5. Custom Glass Cursor */
-body, a, button, input {
-  cursor: none !important;
-}
-#custom-cursor {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 28px;
-  height: 28px;
-  opacity: 0;
-  pointer-events: none;
-  z-index: 99999;
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  /* A sleek, modern arrow shape */
-  clip-path: polygon(0 0, 35% 100%, 50% 65%, 100% 50%);
-  filter: drop-shadow(0 4px 8px rgba(16, 185, 129, 0.4));
-  transition: width 0.2s cubic-bezier(0.25, 1, 0.5, 1), 
-              height 0.2s cubic-bezier(0.25, 1, 0.5, 1), 
-              background 0.2s,
-              opacity 0.2s ease-in;
-  will-change: transform, width, height, opacity;
-}
-#custom-cursor.active {
-  opacity: 1;
-}
-#custom-cursor.hovering {
-  width: 36px;
-  height: 36px;
-  background: rgba(16, 185, 129, 0.9);
-  filter: drop-shadow(0 8px 16px rgba(16, 185, 129, 0.6));
-  backdrop-filter: blur(12px);
-}
+/* 5. Custom cursor removed 2026-07-01 — it glitched; native pointer restored.
+   (The #custom-cursor div is gone from base.html; interactions.js is guarded
+   by `if (cursor)` so its cursor block is now inert.) */
 
 /* 6. Audio Visualizer */
 .simulated-visualizer {

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css?v=2">
+  <link rel="stylesheet" href="/static/style.css?v=4">
   <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
   <script src="/static/log-expander.js" defer></script>
   <script src="/static/location-typeahead.js" defer></script>
@@ -53,6 +53,7 @@
   </div>
   
   <header class="header-container">
+    <div class="header-blur"></div>
     <nav class="pill-nav">
       <div class="nav-left">
         <span class="nav-dot"></span>
@@ -76,6 +77,5 @@
   </main>
   
   <canvas id="bg-canvas" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 9000;"></canvas>
-  <div id="custom-cursor"></div>
 </body>
 </html>

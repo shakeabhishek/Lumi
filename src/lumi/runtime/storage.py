@@ -39,6 +39,7 @@ _SENSITIVE_FILE_NAMES: tuple[str, ...] = (
     "perf_log.jsonl",
     "notes.jsonl",
     "journal.jsonl",
+    ".secrets.json",  # cloud API-key file fallback on headless devices (no keychain)
 )
 
 

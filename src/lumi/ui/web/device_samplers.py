@@ -2,7 +2,7 @@
 
 Two long-running asyncio tasks owned by the FastAPI lifespan:
 
-  * CPU sampler — psutil.cpu_percent every few seconds. Cheap.
+  * System sampler — CPU%, RAM%, and SoC temperature every few seconds. Cheap.
   * Weather sampler — OpenWeatherMap fetch every N minutes, gated on
     settings.weather_location being non-empty AND
     openweathermap_api_key being in the keychain. We keep the cadence
@@ -31,16 +31,41 @@ _WEATHER_INTERVAL_S = 600.0      # 10 minutes — comfortable for the OWM free t
 _WEATHER_RETRY_INTERVAL_S = 60.0  # back off harder when something's wrong
 
 
+def _read_cpu_temp_c() -> int | None:
+    """SoC temperature in °C. Reads the Linux thermal zone (Pi 5's SoC);
+    falls back to psutil sensors; returns None where unavailable (macOS dev)."""
+    try:
+        raw = Path("/sys/class/thermal/thermal_zone0/temp").read_text().strip()
+        return round(int(raw) / 1000)
+    except Exception:
+        pass
+    try:
+        temps = psutil.sensors_temperatures()  # type: ignore[attr-defined]
+        for entries in temps.values():
+            if entries and entries[0].current:
+                return round(entries[0].current)
+    except Exception:
+        pass
+    return None
+
+
 async def cpu_sampler(bus: DeviceBus) -> None:
-    """Publish CPU% every _CPU_INTERVAL_S. Never exits unless cancelled."""
+    """Publish CPU%, RAM%, and SoC temp every _CPU_INTERVAL_S. Never exits
+    unless cancelled."""
     # Warm psutil so the first reading isn't 0 (cpu_percent returns the
     # delta since the previous call).
     psutil.cpu_percent(interval=None)
     try:
         while True:
             await asyncio.sleep(_CPU_INTERVAL_S)
-            cpu = psutil.cpu_percent(interval=None)
-            await bus.publish({"cpuPct": round(cpu)})
+            payload: dict[str, object] = {
+                "cpuPct": round(psutil.cpu_percent(interval=None)),
+                "memPct": round(psutil.virtual_memory().percent),
+            }
+            temp = _read_cpu_temp_c()
+            if temp is not None:
+                payload["cpuTempC"] = temp
+            await bus.publish(payload)
     except asyncio.CancelledError:
         return
 

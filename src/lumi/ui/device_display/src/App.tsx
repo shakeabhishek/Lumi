@@ -65,6 +65,8 @@ export function App() {
         <WidgetBar
           weather={device.weather}
           cpuPct={device.cpuPct}
+          memPct={device.memPct}
+          cpuTempC={device.cpuTempC}
         />
       </motion.div>
     </div>

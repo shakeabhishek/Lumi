@@ -66,3 +66,7 @@ os-image/work/
 os-image/deploy/
 *.img
 *.img.xz
+
+# Local working notes (not part of the repo)
+bom_risk_analysis.md
+.antigravitycli/

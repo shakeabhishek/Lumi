@@ -1,14 +1,23 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Calendar, Cloud, CloudRain, CloudSnow, Cpu, Moon, Sun } from 'lucide-react';
+import { Calendar, Cloud, CloudRain, CloudSnow, Cpu, MemoryStick, Moon, Sun, Thermometer } from 'lucide-react';
 import type { WeatherSnapshot } from '../state';
 
 interface WidgetBarProps {
   weather: WeatherSnapshot | null;
   cpuPct: number;
+  memPct: number;
+  cpuTempC: number;
 }
 
-export function WidgetBar({ weather, cpuPct }: WidgetBarProps) {
+// SoC temp colour: green < 60°C, amber 60–74°C, red ≥ 75°C (Pi throttles ~80°C).
+function tempColor(t: number): string {
+  if (t >= 75) return 'text-red-400';
+  if (t >= 60) return 'text-amber-300';
+  return 'text-orange-300';
+}
+
+export function WidgetBar({ weather, cpuPct, memPct, cpuTempC }: WidgetBarProps) {
   const [now, setNow] = useState<Date>(() => new Date());
 
   useEffect(() => {
@@ -27,7 +36,7 @@ export function WidgetBar({ weather, cpuPct }: WidgetBarProps) {
 
   return (
     <div className="w-full bg-gradient-to-r from-indigo-500/20 to-purple-500/20 backdrop-blur-sm px-4 py-3 border-t border-white/10">
-      <div className="grid grid-cols-4 gap-3 text-center">
+      <div className="grid grid-cols-6 gap-3 text-center">
         {/* Time */}
         <div className="flex flex-col items-center gap-1">
           <div className="text-xl font-bold text-white tabular-nums tracking-tight">
@@ -65,6 +74,36 @@ export function WidgetBar({ weather, cpuPct }: WidgetBarProps) {
               className="h-full bg-gradient-to-r from-green-400 to-blue-400"
               initial={{ width: 0 }}
               animate={{ width: `${Math.min(100, Math.max(0, cpuPct))}%` }}
+              transition={{ duration: 0.8 }}
+            />
+          </div>
+        </div>
+
+        {/* RAM */}
+        <div className="flex flex-col items-center gap-1">
+          <MemoryStick className="w-4 h-4 text-purple-300" />
+          <div className="text-xs font-medium text-white">{memPct}%</div>
+          <div className="w-12 h-1 bg-white/20 rounded-full overflow-hidden">
+            <motion.div
+              className="h-full bg-gradient-to-r from-purple-400 to-pink-400"
+              initial={{ width: 0 }}
+              animate={{ width: `${Math.min(100, Math.max(0, memPct))}%` }}
+              transition={{ duration: 0.8 }}
+            />
+          </div>
+        </div>
+
+        {/* CPU temperature */}
+        <div className="flex flex-col items-center gap-1">
+          <Thermometer className={`w-4 h-4 ${tempColor(cpuTempC)}`} />
+          <div className="text-xs font-medium text-white">
+            {cpuTempC ? `${cpuTempC}°C` : '—'}
+          </div>
+          <div className="w-12 h-1 bg-white/20 rounded-full overflow-hidden">
+            <motion.div
+              className="h-full bg-gradient-to-r from-orange-400 to-red-400"
+              initial={{ width: 0 }}
+              animate={{ width: `${Math.min(100, Math.max(0, (cpuTempC / 85) * 100))}%` }}
               transition={{ duration: 0.8 }}
             />
           </div>

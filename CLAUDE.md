@@ -8,8 +8,11 @@ Lumi is a portable physical AI desk companion that plugs into any computer via U
 
 ## Project status
 
-**Pre-hardware design phase.** All major architecture decisions are locked
-in. Pi 5 + AI HAT+ 2 + Hailo on order. Software runs on a laptop; the
+**Pre-hardware design phase.** Core architecture is settled; the **AI HAT+ 2
+is the one open hardware decision** (optional, pending a Pi-CPU vision
+benchmark — see Open questions). Plan (2026-06-20): order the **16GB Pi 5**
+now; the LLM is **cloud-primary with a small Pi-CPU local model** as the
+offline/private floor. Software runs on a laptop; the
 mocked hardware interfaces remain only for the wake-word / mic / camera
 paths — the **device display is now a React/Vite app rendered by a
 Chromium kiosk on the Pi** (pivot 2026-05-24, see "Device display
@@ -100,7 +103,7 @@ the always-works floor; V2 cloud is the rich ceiling.
 
 **What makes Lumi different from ChatGPT or Claude.ai:**
 - Physical presence on your desk
-- Truly local AI (V1 has zero cloud LLM dependency for inference)
+- Local-first AI (a private on-device model floor runs on the Pi CPU; the cloud LLM is opt-in, not required)
 - Ambient awareness via camera and microphones
 - Owns its data — your conversations, embeddings, and preferences live on the device
 - Extensible via OpenClaw's skill ecosystem (curated for safety in V1)
@@ -109,7 +112,7 @@ the always-works floor; V2 cloud is the rich ceiling.
 
 ## Architecture overview
 
-Lumi runs a **purely onboard LLM** for V1 — no cloud LLM calls during inference. WiFi is available for OpenClaw skills that need network access (email, calendar, weather, etc.) but the LLM itself stays local.
+Lumi runs **cloud-primary** for V1's smart replies, with a **small local LLM on the Pi 5 CPU** as the private/offline floor + router. WiFi carries cloud-LLM turns and OpenClaw skills that need network access (email, calendar, weather, etc.); the CPU floor keeps Lumi working with no network and no cloud key. *(The diagram below shows the maximal config with the optional AI HAT+ 2 installed; in the current baseline the LLM is cloud + Pi-CPU — not the HAT — and the HAT itself is pending the vision benchmark.)*
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
@@ -122,7 +125,7 @@ Lumi runs a **purely onboard LLM** for V1 — no cloud LLM calls during inferenc
 │                     │  - LLM       │                            │
 │  ┌─────────────┐    │  - MediaPipe │    ┌─────────────────┐    │
 │  │  Display    │◀── │  (8GB RAM)   │ ──▶│    Speaker      │    │
-│  │  (SPI bus)  │    │              │    │  (analog)       │    │
+│  │  (DSI bus)  │    │              │    │  (analog)       │    │
 │  └─────────────┘    └──────┬───────┘    └─────────────────┘    │
 │                            │                                     │
 │                     ┌──────▼───────┐                            │
@@ -142,10 +145,10 @@ Lumi runs a **purely onboard LLM** for V1 — no cloud LLM calls during inferenc
 ```
 
 **Compute & memory split:**
-- **AI HAT+ 2 (8GB dedicated RAM)**: LLM inference, MediaPipe gesture recognition. Isolated memory pool.
-- **Pi 5 (16GB system RAM)**: OS, Lumi Python app, Whisper, Piper, ChromaDB, FastAPI, **OpenClaw service (Node.js)**, audio pipeline, **Chromium kiosk** rendering the device display from `localhost:8080/device-display/`. ~13 GB free at idle; Chromium adds ~500-800 MB which still leaves comfortable headroom.
+- **Pi 5 (16GB system RAM)**: OS, Lumi Python app, Whisper, Piper, ChromaDB, FastAPI, **OpenClaw service (Node.js)**, audio pipeline, MediaPipe vision (CPU), the **CPU tiny-LLM floor** (~1 GB resident), and the **Chromium kiosk** rendering the device display from `localhost:8080/device-display/`. ~12–13 GB free at idle; Chromium adds ~500-800 MB and the local model ~1 GB — still comfortable margin.
+- **AI HAT+ 2 (8GB dedicated RAM) — optional**: if added (pending the vision benchmark), it offloads MediaPipe vision off the CPU. Isolated memory pool that is **not** addable to Pi system RAM, and **not** the LLM host in the current plan (cloud + Pi CPU handle inference). HEF conversion required for any model run on it.
 
-**Why memory separation works:** AI HAT+ 2 handles the heavy LLM workload in its own 8GB. Pi RAM is never used for LLM inference, so OpenClaw + the FastAPI server + the Chromium kiosk all share the 16 GB system pool. Confirmed memory headroom ~12 GB free at idle even with Chromium running.
+**Why 16GB:** with the LLM back on the Pi CPU and the HAT no longer assumed present, the 16 GB system pool carries everything — OpenClaw, FastAPI, Chromium, ChromaDB, and a ~1 GB CPU-resident model — with comfortable headroom (~12–13 GB free at idle; a V2-heavy peak with full OpenClaw + MCP + grown ChromaDB still leaves multiple GB). The HAT's isolated 8 GB can't be borrowed for these general-compute workloads, which is why **system RAM (not the HAT) is the binding resource** — and why the 06-15 downgrade to 8GB was reversed once the LLM moved off the HAT.
 
 ## Device display architecture
 
@@ -190,7 +193,7 @@ Mic → Whisper Tiny (CPU) → text
 
 **Data flow (gesture):**
 ```
-Camera → MediaPipe via AI HAT+ 2 → hand landmarks
+Camera → MediaPipe on Pi 5 CPU → hand landmarks
        → gesture classifier → action
 ```
 
@@ -200,23 +203,24 @@ Camera → MediaPipe via AI HAT+ 2 → hand landmarks
 
 | Category | Component | Purpose |
 |---|---|---|
-| **Core compute** | Raspberry Pi 5 (16GB) | Main computer, runs Lumi OS + OpenClaw |
-| | Raspberry Pi AI HAT+ 2 | LLM + vision inference (40 TOPS, 8GB onboard RAM) |
+| **Core compute** | Raspberry Pi 5 (16GB) | Main computer, runs Lumi OS + OpenClaw + the CPU tiny-LLM floor |
+| | Raspberry Pi AI HAT+ 2 *(optional — pending vision benchmark)* | Vision offload **only if** the Pi CPU can't keep up (40 TOPS, 8GB onboard RAM); LLM is cloud + Pi CPU, not the HAT |
 | | Active cooler for Pi 5 | Thermal management (required) |
-| **Storage** | SanDisk Extreme Pro 256GB A2 microSD | OS, models, ChromaDB, user data |
-| **Display** | Waveshare 3.5" IPS SPI display (480x320) | Lumi's animated face |
-| **Audio** | ReSpeaker 2-Mics Pi HAT V2.0 | Mics + speaker output + 3 RGB LEDs + 1 button |
+| **Storage** | SanDisk Extreme 256GB A2 V30 microSD (`SDSQXAV-256G-GN6MA`) | OS, models, ChromaDB, user data |
+| **Display** | Raspberry Pi Touch Display 2 (7", run landscape 1280×720) in a SmartiPi Touch Pro 3 enclosure | Lumi's animated face + the finished product shell |
+| **Audio** | ReSpeaker 2-Mics Pi HAT V2.0 | Mics + speaker output + 3 RGB LEDs + 1 button (compact HAT) |
 | | 3-5W 4Ω speaker with JST connector | Voice output |
 | **Camera** | Pi Camera Module 3 Wide | Gestures + presence detection (102° FOV, autofocus) |
-| | CSI ribbon cable (Pi 5 fine-pitch) | Pi 5 uses smaller CSI connector |
+| | CSI ribbon cable (Pi 5 15→22-pin, CAM variant) | Camera on the Pi 5's 2nd MIPI port |
+| | DSI ribbon cable (Pi 5 22-pin) | Display on the Pi 5's 1st MIPI port |
 | **Power & wiring** | USB-C to USB-C cable (1m, braided) | Connection to host PC |
 | | Pi 5 official 27W USB-C power supply | Power during dev / when not host-powered |
-| | Premium jumper wire kit | SPI display GPIO connections |
+| | Premium jumper wire kit | General prototyping |
 | **Structure** | M2.5 standoffs + screws kit | HAT stacking |
 | | Acrylic mounting plate | Bare-bones V1 base |
 | | Self-adhesive rubber feet | Non-slip base |
 
-**PCIe lane usage:** Single PCIe lane on Pi 5 is dedicated to AI HAT+ 2. NVMe storage is intentionally not used — onboard storage is microSD only.
+**PCIe lane usage:** The single PCIe lane is reserved for the AI HAT+ 2 *if* it's fitted (pending the vision benchmark); if the HAT is skipped the lane is free. Either way NVMe is intentionally not used — onboard storage is microSD only.
 
 ---
 
@@ -229,7 +233,7 @@ Operating system          Raspberry Pi OS Lite       64-bit, headless
                           (Bookworm or Trixie)
 
 Runtime                   Python 3.11+               Lumi core
-                          Node.js 20+                OpenClaw service
+                          Node.js 22.14+                OpenClaw service
 
 Speech-to-text            Whisper Tiny               ~150MB, runs on Pi CPU
                                                       ~0.5s for short clips
@@ -240,12 +244,18 @@ Text-to-speech            Piper TTS                  ~100MB, runs on Pi CPU
 Wake word                 OpenWakeWord or Porcupine  Local detection
                           (curated name palette)      "Hey Lumi" + alternatives
 
-Local LLM                 Qwen2.5 1.5B               Runs on AI HAT+ 2
-                                                      Quantized for Hailo
+Local LLM (floor)         Qwen2.5 1.5B /             Runs on the Pi 5 CPU
+                          Llama 3.2 1B               (~7-15 tok/s). Private/
+                                                      offline floor; cloud LLM
+                                                      is the opt-in ceiling.
                                                       (qwen2:1.5b lacks tool support)
+Cloud LLM (ceiling)       Anthropic / OpenAI /       Opt-in API key; handles hard
+                          Gemini                     turns via RoutedBackend
 
-Vision                    MediaPipe Hand Landmarks   Runs on AI HAT+ 2
-                          + custom gesture classifier 30 fps
+Vision                    MediaPipe Hand Landmarks   Runs on Pi 5 CPU
+                          + custom gesture classifier ~5-15 fps (enough for
+                                                      held poses; HAT/HEF
+                                                      offload optional later)
 
 Vector database           ChromaDB (embedded)        Local personal data
                                                       Up to ~1GB
@@ -397,7 +407,7 @@ Six-phase plan. Phases 1-4 happen on laptop before hardware arrives. Phases 5-6 
 
 **Tasks** ✓ all done
 - Initialize GitHub repo, project structure per the directory layout below
-- Set up dev environment: Python 3.11+, Node.js 20+, Whisper, Piper, Ollama
+- Set up dev environment: Python 3.11+, Node.js 22.14+, Whisper, Piper, Ollama
 - Install Qwen2.5 1.5B via Ollama (`ollama pull qwen2.5:1.5b`)
   - Note: `qwen2:1.5b` does not support Ollama's tools API; use `qwen2.5:1.5b`
 - Implement basic voice loop: mic → Whisper → Ollama → Piper → speaker (laptop)
@@ -559,10 +569,10 @@ the **source of the quirk list**, not a runtime dependency. If Hailo
 
 **Tasks**
 - Flash base Pi OS Lite 64-bit, set up Pi dev environment
-- Install Node.js 20+ on Pi (for OpenClaw)
+- Install Node.js 22.14+ on Pi (for OpenClaw)
 - **Install OpenClaw 2026.04.20** specifically (not latest):
   `pnpm add -g openclaw@2026.04.20`
-- Configure ALSA with ReSpeaker 2-Mics HAT
+- Configure ALSA with the ReSpeaker 2-Mics HAT
 - Install Hailo runtime, load LLM models in `.hef` format
 - **HailoBackend talks to Hailo directly** on `:8000`. Already wired:
   `cfg.hailo_host` defaults to `http://127.0.0.1:8000`,
@@ -575,9 +585,11 @@ the **source of the quirk list**, not a runtime dependency. If Hailo
   available without per-skill Python ports.
 - Validate tool-calling reliability still ≥80% on Hailo via the new path
 - Configure USB gadget composite mode in `/boot/config.txt`
-- Configure the Waveshare 3.5" SPI display as a framebuffer device
-  (`fbcon=map:N` + `fbtft_device` for the panel) so a windowing system
-  can target it
+- Configure the **Raspberry Pi Touch Display 2** (7", run **landscape
+  1280×720** — rotate native 720×1280) via its DSI/KMS overlay so the
+  Chromium kiosk renders to it. One of the Pi 5's two MIPI ports is the
+  display (DSI), the other is the camera (CSI) — both active
+  simultaneously. Mount it in the **SmartiPi Touch Pro 3** enclosure.
 - Configure Camera Module 3 Wide via libcamera
 - Configure I2C bus (for future modular sensor expansion)
 - **Replace each mocked hardware driver with real implementation**:
@@ -587,7 +599,8 @@ the **source of the quirk list**, not a runtime dependency. If Hailo
   - `MockCameraIO` → real libcamera
   - `OllamaBackend` → `HailoBackend`
 - **Install the Chromium kiosk autostart unit** (see `os-image/etc/systemd/system/lumi-display.service`). Pointed at `http://localhost:8080/device-display/`, kiosk-mode chrome, autorestart on crash.
-- Install MediaPipe gesture model on AI HAT+ 2
+- Set up MediaPipe gesture recognition on the Pi CPU (~5-15 fps is enough for
+  held poses; optionally HEF-convert + offload to the Hailo later for 30 fps)
 - Performance and stress testing with all subsystems active
 
 **Deliverables**
@@ -596,7 +609,7 @@ the **source of the quirk list**, not a runtime dependency. If Hailo
 - Memory headroom validation (Pi 5 RAM usage with OpenClaw + everything)
 - Stress test results: 30 min concurrent voice + gesture + skills
 
-**🚦 Gate criterion:** Real Lumi hardware matches laptop Lumi behavior with ≤2x latency penalty on voice query loop. RAM usage stays under 6GB on Pi (well within 16GB budget).
+**🚦 Gate criterion:** Real Lumi hardware matches laptop Lumi behavior with ≤2x latency penalty on voice query loop. RAM usage stays under 6GB on Pi (within the 8GB budget).
 
 ---
 
@@ -609,9 +622,9 @@ Package the whole thing into a flashable .img file users can install.
 - Bake in:
   - Pi OS Lite 64-bit base
   - Python runtime + all dependencies
-  - Node.js 20+ + OpenClaw + curated skills
+  - Node.js 22.14+ + OpenClaw + curated skills
   - All AI models pre-downloaded (Whisper, Piper, MediaPipe, Qwen2.5 .hef)
-  - ReSpeaker HAT drivers configured
+  - ReSpeaker 2-Mics HAT drivers configured
   - Camera Module 3 configured
   - Hailo runtime + LLM models
   - USB gadget mode in `/boot/config.txt`
@@ -729,7 +742,7 @@ Camera frames               → Never stored, never persisted
 - Weather API — public, no user data sent
 - All skill network traffic logged in audit log
 
-**Camera-active indicator:** NeoPixel on ReSpeaker HAT lights red when camera is active. Manual 3D-printed privacy cap for V1; integrated slider shutter for V2.
+**Camera-active indicator:** a NeoPixel on the ReSpeaker HAT lights red when camera is active. Manual 3D-printed privacy cap for V1; integrated slider shutter for V2.
 
 **Data export:** Export everything (conversations, embeddings, preferences, audit log) as a single archive via web UI.
 
@@ -852,7 +865,7 @@ are already correct; logs `storage.data_dir_perms_tightened` on a fix.
 
 **Vision pipeline:**
 ```
-Camera → libcamera → frame buffer → MediaPipe Hand Landmarks (on AI HAT+ 2)
+Camera → libcamera → frame buffer → MediaPipe Hand Landmarks (on Pi 5 CPU)
        → 21 hand keypoints per frame at 30 fps
        → custom gesture classifier (Python)
        → gesture event → Lumi action
@@ -878,10 +891,10 @@ Camera → libcamera → frame buffer → MediaPipe Hand Landmarks (on AI HAT+ 2
 
 **Single microSD card holds everything:** OS, application code, all AI models, ChromaDB, conversation history, user data, OpenClaw + skills.
 
-**Card spec:** SanDisk Extreme Pro 256GB A2 (or equivalent). 200MB/s read, 90MB/s write, 4000 IOPS.
+**Card spec:** SanDisk Extreme 256GB A2 V30 (`SDSQXAV-256G-GN6MA`) — a reputable A2 card, deliberately the plain "Extreme" not "Extreme Pro." The Pi 5 SD slot is UHS-I/SDR104 (~90 MB/s real sequential — the card's ~190 MB/s rating is unreachable here, so it's not worth a premium), but A2 random IOPS (~5000 read / 2000 write) *are* usable on the Pi 5 thanks to its SD command-queue support — and random I/O is what the OS/ChromaDB workload leans on. (Any reputable 256GB A2 card is equivalent on the Pi; SanDisk picked for endurance reputation on a 24/7 device.)
 
 **Why microSD is sufficient (not a compromise):**
-- LLM runs entirely from AI HAT+ 2's onboard 8GB RAM (never hits disk)
+- The smart LLM is cloud (no local weights to load); the small CPU floor model (~1 GB) loads once at boot and stays resident
 - Models load once at boot into Pi RAM
 - ChromaDB queries are RAM-cached after warmup
 - Writes are tiny (kilobytes per conversation + small audit log entries)
@@ -1036,11 +1049,11 @@ Key decisions made during design, with reasoning. Future sessions: do not re-lit
 
 | Decision | Reasoning |
 |---|---|
-| **Pi 5 16GB** (vs 4GB/8GB) | Comfortable RAM headroom for Whisper + Piper + ChromaDB + OpenClaw + future. |
-| **AI HAT+ 2** (vs original AI HAT+) | 40 TOPS + 8GB dedicated RAM = LLM-capable. Vision still excellent. |
+| **Pi 5 16GB** *(re-revised 2026-06-20, reversing the 06-15 8GB call)* | The 06-15 downgrade to 8GB rested on "the LLM always runs off Pi system RAM — Hailo's own 8GB or the cloud." That premise changed: V1 is now **cloud-primary with a small local LLM on the Pi 5 CPU** as the private/offline floor (see "Cloud-primary LLM" entry), and the **AI HAT+ 2 is no longer a committed component** (see its entry). So local inference now consumes ~1 GB of *system* RAM and the HAT's isolated 8 GB can't be assumed present — headroom matters again. 16GB restores comfortable margin for Chromium + OpenClaw + ChromaDB + a CPU-resident model. Accepted the 2026 DRAM-shortage cost/availability premium for that headroom. *(If 16GB proves unavailable, 8GB still works — ~3 GB free — but tighter; the onnx-embedding swap that banked ~1 GB keeps 8GB viable as a fallback.)* |
+| **AI HAT+ 2 — optional, vision-only, pending benchmark** *(revised 2026-06-20, was a committed component)* | No longer a locked V1 part. With the LLM on cloud + Pi CPU, the HAT's only remaining job is offloading **continuous MediaPipe vision** off the CPU; whether that's needed is gated on one Phase-5 benchmark (see Open questions). V1 ships on the 16GB Pi alone; the HAT is bought **only if** the Pi 5 CPU can't sustain continuous vision + a live turn. *(If kept, its 40 TOPS + 8GB still beats the original AI HAT+ as a vision accelerator and needs HEF-converted models; if dropped, the single PCIe lane frees up — storage stays microSD by design either way. Note: the Hailo is NOT a good LLM host — bandwidth-bound, no faster than the Pi CPU on 1–1.5B models.)* |
 | **microSD only** (no NVMe, no external SSD) | AI HAT+ 2 takes PCIe lane. External SSD kills portability. Workload doesn't need NVMe. |
 | **microSD + log2ram** | Mitigates write wear. Standard pattern in Pi production projects. |
-| **Pure onboard LLM** (V1) | No cloud dependency for inference. Simpler architecture. Stronger brand. |
+| **Cloud-primary LLM + CPU tiny-LLM floor** *(revised 2026-06-20, was "Pure onboard LLM")* | V1's smart brain is the **cloud LLM** (opt-in key); a **small local model (Qwen2.5 1.5B / Llama 3.2 1B) runs on the Pi 5 CPU** as the privacy/offline floor + router — handling simple/sensitive turns and keeping Lumi working with no network and no key. The Hailo NPU is **not** the LLM host: it's memory-bandwidth-bound and runs these small models no faster than the Pi 5 CPU, so CPU inference is simpler and removes the HAT from the critical path. Preserves the "private/offline by default, cloud when you opt in" brand. *(`RoutedBackend` already ships this local-floor + cloud-ceiling design; the original "zero cloud dependency" framing is retired. Strategic note: the privacy wedge now rests on the local floor + on-device data, not on the LLM being fully local — keep that floor real.)* |
 | **OpenClaw included in V1** | Industry standard agent framework. Memory separation makes it feasible (LLM on HAT, OpenClaw on Pi RAM). Gives users a rich skill ecosystem out of the box. |
 | **Curated skill set for V1** | Small LLM (1.5B) can't reliably orchestrate complex multi-step skills. Limit to simple single-step, read-only skills for safety and reliability. |
 | **Dedicated accounts for all external integrations** | Never use the user's primary email/calendar. Dedicated accounts mean a compromised skill can only access a limited, purpose-built inbox/calendar. |
@@ -1048,18 +1061,18 @@ Key decisions made during design, with reasoning. Future sessions: do not re-lit
 | **macOS Calendar/Contacts access denied at OS level** | CalDAV skill hits a remote endpoint (dedicated Google account); it has no legitimate reason to touch the local macOS Calendar app. Deny at System Privacy. |
 | **No third-party ClawHub skills** | Documented security incidents (ClawHavoc, ~20% malicious plugins per Cisco). Only Lumi-vetted skills shipped. |
 | **Custom LLM provider for OpenClaw** | Lets OpenClaw use our Hailo NPU (production) or Ollama (dev). Same interface, swappable backend. |
-| **Qwen2.5 1.5B** (not Qwen2 1.5B) | `qwen2:1.5b` does not support Ollama's tools API. `qwen2.5:1.5b` does (94% tool-call accuracy in Phase 1 gate test). |
+| **Qwen2.5 1.5B — local floor (VALIDATED on-Pi 2026-07-01)** | `qwen2:1.5b` lacks Ollama's tools API; `qwen2.5:1.5b` has it (94% tool-call accuracy, Phase 1). **On-device benchmark — 6 models / 5 providers, Chromium face running, thinking off (real Lumi conditions):** qwen2.5:1.5b **7.4 tok/s / 1.4 GB** · qwen2.5:3b 4.0 / 2.4 GB · phi4-mini 3.1 · gemma3:4b 3.1 · qwen3.5:4b 2.4 · **gpt-oss:20b 1.85 tok/s, 159 s load, ~14 GB (touches swap, no room for the live-turn stack)**. **Bigger + MoE rejected on data:** the Pi 5's memory-bandwidth wall + a ~2× "face tax" (Chromium contention) make bigger dense models crawl; reasoning models (qwen3.5, gpt-oss) default to multi-minute chain-of-thought; the 20B MoE was the *slowest* AND RAM-starving. **Conclusion: quality comes from the cloud ceiling, not a big local floor — keep the floor small + fast.** Optional smarter floor = `qwen2.5:3b` (2.4 GB, ~4 tok/s) via one-line `LUMI_OLLAMA_MODEL` change. Do not re-litigate "run a bigger/MoE local model" without new hardware (e.g. the AI HAT+ 2 — see its separate LLM data point in bom.md). |
 | **Tool-calling tested via Ollama directly** | OpenClaw gateway does not forward external tool definitions — it routes through its own skills system. Model-level tool calling is tested via Ollama's native API (`/api/chat`). |
 | **Hailo protocol bridge runs in-process, not as a separate adapter** (2026-05-23) | Considered `pip install tishyk/hailo-ollama-openclaw-adapter@2026.04.20` as a runtime dep but rejected on three counts: (a) Lumi V1 is the only thing on the Pi talking to Hailo (OpenClaw in V2 cloud mode points at a cloud provider, not Hailo), so the adapter would be a redundant network hop; (b) tracking a third-party pin in our critical path adds maintenance risk if upstream goes quiet; (c) the four extra rules we needed beyond what we already had (deep-sanitize, ASCII-encoded JSON, empty-message filter, user-first-turn) total ~30 lines of Python. tishyk's repo remains the **source of the quirk list** for future Hailo SDK releases — port new quirks into `hailo_backend.py` directly. |
 | **wikipedia_lookup needs explicit phrasing** | Model answers general knowledge questions directly (correct). Skill activates on "look up X on Wikipedia" style prompts, not bare factual questions. |
 | **Skill router (native first, OpenClaw fallback)** | Native skills are fast and reliable for simple commands. OpenClaw extends reach but with more overhead. |
-| **ReSpeaker 2-Mics HAT** | Single board replaces three components. Better integration. |
+| **ReSpeaker 2-Mics HAT** | Compact single board (mics + speaker-out + 3 RGB LEDs + button) with good integration in a small footprint. Briefly evaluated the XVF3800 4-Mic USB array (hardware AEC + far-field) but its 99 mm circular board was too big for the compact desk form — reverted to the 2-Mics HAT and handle AEC in software. Stacks on the AI HAT+ via a taller stacking header. |
 | **No mechanical buttons in V1** | Pushed to V2. V1 leans into voice + gesture as the differentiator. |
 | **Camera Module 3 Wide** (vs AI Camera IMX500) | AI HAT+ 2 is more capable; AI Camera redundant. Wide FOV needed for desk gestures. |
 | **Curated wake-word palette** (vs custom training) | Pre-trained = reliable. Custom training has poor accuracy. |
 | **Lumi OS image distribution** | Same pattern as Home Assistant OS, OctoPrint. Professional, consistent. |
 | **No cloud backup in V1** | V1 is local-only. Backup is V2 feature with user's own cloud accounts. |
-| **3.5" Waveshare SPI display** | Best balance of size, drivers, cost. Square-ish form factor works for face. |
+| **Raspberry Pi Touch Display 2 (7", run landscape 1280×720) in a SmartiPi Touch Pro 3 enclosure** *(revised 2026-06-20, was 4.3" Waveshare DSI)* | Deliberate **form-factor change** for **product finish**: a 7" official touchscreen in a SmartiPi Touch Pro 3 (weighted tilting stand, VESA, side power button, microSD extender, front camera mount) reads as a finished product for Lang Center demos + customer-discovery interviews, vs. a 4.3" panel on exposed acrylic. Display ~$87 (CanaKit) + case $40 + fan ≈ $135. Trades the "small ambient creature" feel for a "7" touch-tablet companion" — an intentional brand call. **New risks this creates (see bom.md open questions):** (1) **audio** — Pi+ReSpeaker sealed in the case cavity vs. mics needing to hear the user → route mics/speaker out or mount externally (biggest risk); (2) **cavity** fits ~Pi 5 + cooler + one HAT, so it likely **can't also house the optional AI HAT+ 2** — the enclosure and HAT decisions now interact; (3) UI re-canvas to **1280×720 landscape** (rotate native 720×1280 — a rescale, not a rebuild). Supersedes the 06-14 4.3" DSI entry. |
 | **Pi OS Lite 64-bit** | Headless, minimal, fast boot. We build our own UI. |
 | **Piper TTS** (vs ElevenLabs in V1) | Local, free, good quality. ElevenLabs is V2 premium tier. |
 
@@ -1070,15 +1083,18 @@ Key decisions made during design, with reasoning. Future sessions: do not re-lit
 Surface to user when relevant.
 
 - **OpenClaw viability with Qwen2.5 1.5B** — ✅ RESOLVED: 94% (47/50). OpenClaw stays in V1.
-- **Specific LLM model choice for V1** — Qwen2.5 1.5B confirmed for dev. Test `.hef` quantization on Hailo in Phase 5; fallback to Llama 3.2 1B if needed.
+- **Specific LLM model choice for V1** — ✅ RESOLVED (on-Pi benchmark 2026-07-01): **qwen2.5:1.5b** is the local floor — fastest (7.4 tok/s) + smallest (1.4 GB) of 6 models across 5 providers with the face running. Bigger dense, MoE (gpt-oss:20b), and reasoning models (qwen3.5) all measured slower and were rejected on data (see decision log). `qwen2.5:3b` is the optional smarter/slower alt. *(Hailo `.hef` path only revisited if the AI HAT+ 2 is added.)*
 - **Wake word palette** — Initial candidates: Lumi, Aria, Nova, Sage, Atlas, Iris, Juno, Hugo, Echo, Pip. Need to test which pre-trained models work cleanly.
 - **Piper voice selection** — Listen through candidates and pick 3-4 matching the warm/calm brand.
 - **Face style designs** — Need actual designs for pixel / vector / terminal.
 - **Onboarding system prompts** — Per work mode (Developer / Writer / Student / General).
 - **CSI ribbon cable** — Pi 5 uses smaller CSI connector than Camera Module 3 ships with. Verify adapter needed.
 - **3D-printed manual privacy cap** — V1 trust signal — needs design.
+- **Audio in the SmartiPi enclosure** 🟠 *(2026-06-20, top hardware risk; plan forming)* — seal the Pi + ReSpeaker behind the screen → use the case's **rear grill vents**. Speaker (detachable JST) fires out a rear vent = easy; mics are **soldered to the 2-Mics HAT**, so they listen from wherever the board sits — orient the mic ports toward a vent. Keep **mics and speaker on separate vents, far apart** (no hardware AEC → co-location kills barge-in) + software WebRTC AEC. Rear mics face away from the user → OK near-field with wake-word + button; **fallback** = front-mounted USB mic. Validate pickup early. See bom.md.
+- **SmartiPi cavity vs. optional AI HAT+ 2** 🟡 — the 45 mm cavity fits ~Pi 5 + cooler + one HAT (ReSpeaker); if the vision benchmark forces the AI HAT+ 2 in, two HATs likely won't fit and the enclosure must be revisited.
 - **OpenClaw service startup time** — Adds to Pi boot time. Acceptable threshold?
 - **Skill timeout default** — How long before a stuck skill is killed? (Default 10s, configurable per skill)
+- **Pi-CPU vision headroom** 🟡 *(decides the AI HAT+ 2 order — 2026-06-20)* — can the Pi 5 CPU run continuous MediaPipe vision (presence + gesture) while a live turn fires (CPU tiny-LLM + Whisper + Piper + Chromium)? **Pass → ship the 16GB Pi, no HAT.** **Fail → add the AI HAT+ 2 for vision offload only** (HEF-convert the vision models). Benchmark on a borrowed/rented Pi 5 before committing the HAT spend.
 
 ---
 
