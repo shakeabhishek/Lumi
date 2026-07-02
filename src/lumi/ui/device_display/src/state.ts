@@ -41,6 +41,8 @@ export interface DeviceState {
   cpuPct: number;
   memPct: number;
   cpuTempC: number;
+  volume: number;
+  micMuted: boolean;
 }
 
 const INITIAL: DeviceState = {
@@ -53,6 +55,8 @@ const INITIAL: DeviceState = {
   cpuPct: 0,
   memPct: 0,
   cpuTempC: 0,
+  volume: 50,
+  micMuted: false,
 };
 
 export function useDeviceState(): DeviceState {

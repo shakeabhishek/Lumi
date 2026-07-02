@@ -8,6 +8,7 @@ import { TerminalFace } from './components/TerminalFace';
 import { SpriteSceneFace } from './components/SpriteSceneFace';
 import { SoundVisualizer } from './components/SoundVisualizer';
 import { AudioControls } from './components/AudioControls';
+import { RightPanel } from './components/RightPanel';
 import { useDeviceState, type FaceStyle, type FaceState } from './state';
 
 export function App() {
@@ -34,14 +35,14 @@ export function App() {
       className="h-full w-full flex items-center justify-center p-4 relative"
       data-theme={device.theme ?? 'default'}
     >
-      <AudioControls />
+      <AudioControls micMuted={device.micMuted} volume={device.volume} />
       <motion.div
         layout
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.4 }}
-        className="w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden border border-white/20 bg-white/5 backdrop-blur-xl flex flex-col relative"
-        style={{ minHeight: '560px' }}
+        className="w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden border border-white/20 bg-white/5 backdrop-blur-xl flex flex-col relative"
+        style={{ minHeight: '640px' }}
       >
         <StatusBar
           connected={device.connected}
@@ -56,7 +57,8 @@ export function App() {
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
               transition={{ duration: 0.25 }}
-              className="flex flex-col items-center gap-4"
+              className="flex flex-col items-center gap-4 cursor-pointer"
+              whileTap={{ scale: 0.9, rotate: -2 }}
             >
               {renderFace(style, state, device.spritePack)}
               {state === 'speak' && style !== 'terminal' && <SoundVisualizer />}
@@ -71,6 +73,8 @@ export function App() {
           cpuTempC={device.cpuTempC}
         />
       </motion.div>
+
+      <RightPanel weather={device.weather} />
     </div>
   );
 }

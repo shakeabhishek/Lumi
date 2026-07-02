@@ -41,6 +41,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 _BYPASS_PREFIXES: tuple[str, ...] = (
     "/api/context",      # send-to-Lumi daemon — runs locally with no browser
     "/api/state",        # voice loop pushing face-state transitions to the device display
+    "/device-display/audio",  # on-screen mute/volume controls — same device, physical touch
     "/static/",          # static assets, no state
 )
 

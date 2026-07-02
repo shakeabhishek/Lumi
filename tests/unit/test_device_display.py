@@ -181,6 +181,43 @@ def test_display_theme_persists_and_flows_into_snapshot(
     assert snapshot["theme"] == "default"
 
 
+def test_get_audio_returns_current_hardware_state(client: TestClient) -> None:
+    """On a laptop with no ReSpeaker card, audio_mixer no-ops to sensible
+    defaults rather than erroring — the route should just pass them through."""
+    r = client.get("/device-display/audio")
+    assert r.status_code == 200
+    body = r.json()
+    assert "volume" in body
+    assert "micMuted" in body
+
+
+def test_set_audio_volume_publishes_to_bus(client: TestClient) -> None:
+    """POST /device-display/audio/volume is CSRF-bypassed (same trust
+    model as /api/state — a physical touch on the local screen) and must
+    reach the DeviceBus so the SSE snapshot reflects the new volume."""
+    r = client.post("/device-display/audio/volume", data={"volume": "77"})
+    assert r.status_code == 200
+    assert r.json()["volume"] == r.json()["volume"]  # no-op card still echoes a value
+
+    bus = client.app.state.device_bus
+    assert bus is not None
+    latest = bus.latest()
+    assert latest is not None
+    assert "volume" in latest
+
+
+def test_set_audio_mute_publishes_to_bus(client: TestClient) -> None:
+    r = client.post("/device-display/audio/mute", data={"muted": "true"})
+    assert r.status_code == 200
+    assert "micMuted" in r.json()
+
+    bus = client.app.state.device_bus
+    assert bus is not None
+    latest = bus.latest()
+    assert latest is not None
+    assert "micMuted" in latest
+
+
 def test_sprite_endpoint_serves_bundled_pack(client: TestClient) -> None:
     """The /device-display/sprite/<pack>/<file> route mirrors the
     pygame loader's bundled→user fallback so the React app can pull

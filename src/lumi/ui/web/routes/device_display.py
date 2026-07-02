@@ -33,10 +33,13 @@ import asyncio
 import json
 import time
 from pathlib import Path
+from typing import Annotated
 
 import psutil  # type: ignore[import-not-found]
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+
+from ....hardware import audio_mixer
 
 from ...face.idle_scenes import _BUNDLED_DIR_FOR, _SPRITES_DIR
 
@@ -165,6 +168,52 @@ def _settings_snapshot(request: Request) -> dict:
     }
 
 
+def _audio_snapshot() -> dict:
+    """Real current hardware state for the on-screen mic-mute button and
+    volume slider — read fresh each time so it can't drift from whatever
+    changed the mixer out-of-band (e.g. a future voice-loop process)."""
+    return {
+        "volume": audio_mixer.get_volume(),
+        "micMuted": audio_mixer.get_mic_muted(),
+    }
+
+
+# ── Audio controls (speaker volume + mic privacy mute) ──────────────────────
+#
+# Real hardware, not app-level flags — see hardware/audio_mixer.py. The
+# React device display posts here on slider drag / mute-button tap; we
+# apply it via amixer, then publish an SSE snapshot so every connected
+# client (in practice just the kiosk, but future browsers too) shows the
+# same, real, current value rather than optimistic local-only state.
+# Bypassed in CSRF middleware — same trust model as /api/state: same
+# device, same origin, a physical touch on the local screen.
+
+
+@router.get("/audio")
+async def get_audio() -> dict:
+    return _audio_snapshot()
+
+
+@router.post("/audio/volume")
+async def set_audio_volume(request: Request, volume: Annotated[int, Form()]) -> dict:
+    from .. import device_bus as _bus_mod  # noqa: PLC0415
+
+    audio_mixer.set_volume(volume)
+    snapshot = _audio_snapshot()
+    await _bus_mod.get_bus(request.app).publish(snapshot)
+    return snapshot
+
+
+@router.post("/audio/mute")
+async def set_audio_mute(request: Request, muted: Annotated[str, Form()]) -> dict:
+    from .. import device_bus as _bus_mod  # noqa: PLC0415
+
+    audio_mixer.set_mic_muted(muted.lower() in ("true", "1", "on"))
+    snapshot = _audio_snapshot()
+    await _bus_mod.get_bus(request.app).publish(snapshot)
+    return snapshot
+
+
 def _status_text_for(face_state: str) -> str:
     return {
         "idle":   "Connected to cloud",
@@ -211,6 +260,7 @@ async def device_display_events(request: Request) -> StreamingResponse:
             "weather": None,
             "cpuPct": round(psutil.cpu_percent(interval=None)),
             **_settings_snapshot(request),
+            **_audio_snapshot(),
         })
 
     async def stream():
