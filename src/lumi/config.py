@@ -46,6 +46,14 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # Web dashboard + device display. `lumi run` (voice loop, a separate
+    # process) reads this to know where to POST face-state changes to
+    # `lumi web` — keeping both in sync via one setting instead of two
+    # independently-hardcoded defaults that can silently drift apart
+    # (this exact drift broke the Pi kiosk once: lumi-web moved to :80,
+    # the voice-loop client still defaulted to :8080).
+    web_port: int = 8080
+
     # LLM
     llm_backend: LLMBackendName = LLMBackendName.OLLAMA
     ollama_host: str = "http://127.0.0.1:11434"

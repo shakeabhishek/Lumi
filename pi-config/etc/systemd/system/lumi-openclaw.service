@@ -1,0 +1,16 @@
+[Unit]
+Description=Lumi OpenClaw gateway (skills + cloud agent operator)
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+User=lumi
+WorkingDirectory=/home/lumi/lumi
+Environment=HOME=/home/lumi
+Environment=PATH=/usr/bin:/bin:/usr/local/bin:/home/lumi/.local/bin
+ExecStart=/usr/bin/npx openclaw gateway run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

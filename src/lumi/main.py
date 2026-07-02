@@ -287,9 +287,10 @@ def run(
     # Face rendering happens in the browser (laptop V1) or the Chromium
     # kiosk on the Pi (Phase 5) — both pointed at the FastAPI server's
     # /device-display/ route. The voice loop's StateMachine just emits
-    # transitions via HTTP push.
+    # transitions via HTTP push. base_url follows cfg.web_port so this
+    # can't silently drift from wherever `lumi web` actually runs.
     sm = StateMachine()
-    sm.on_state_change(_device_display_callback())
+    sm.on_state_change(_device_display_callback(base_url=f"http://127.0.0.1:{cfg.web_port}"))
 
     with typer.progressbar(length=1, label="Loading Whisper model") as progress:
         stt._load()
@@ -544,7 +545,9 @@ def keys(
 
 @app.command()
 def web(
-    port: int = typer.Option(8080, "--port", help="Port to listen on"),
+    port: int | None = typer.Option(
+        None, "--port", help="Port to listen on (default: LUMI_WEB_PORT / 8080)"
+    ),
     host: str = typer.Option("0.0.0.0", "--host", help="Host to bind"),  # noqa: S104
     reload: bool = typer.Option(False, "--reload", help="Auto-reload on code changes (dev)"),
 ) -> None:
@@ -559,6 +562,7 @@ def web(
 
     configure_logging("INFO")
     cfg = get_settings()
+    resolved_port = port if port is not None else cfg.web_port
     web_app = create_app(cfg.data_dir)
-    typer.echo(f"Lumi dashboard → http://localhost:{port}")
-    uvicorn.run(web_app, host=host, port=port, reload=reload)
+    typer.echo(f"Lumi dashboard → http://localhost:{resolved_port}")
+    uvicorn.run(web_app, host=host, port=resolved_port, reload=reload)

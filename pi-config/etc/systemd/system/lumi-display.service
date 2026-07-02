@@ -1,0 +1,24 @@
+[Unit]
+Description=Lumi device display (cage + Chromium kiosk)
+After=lumi-web.service systemd-user-sessions.service getty@tty1.service
+Wants=lumi-web.service
+Conflicts=getty@tty1.service
+
+[Service]
+Type=simple
+User=lumi
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=XDG_SESSION_TYPE=wayland
+ExecStart=/usr/bin/cage -- /home/lumi/kiosk.sh
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

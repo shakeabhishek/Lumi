@@ -75,11 +75,20 @@ def test_get_returns_empty_when_keyring_missing() -> None:
         assert secrets.get_secret("anything") == ""
 
 
-def test_set_raises_when_keyring_missing() -> None:
-    """set_secret must NOT silently swallow — caller needs to know it failed."""
+def test_set_falls_back_to_file_when_keyring_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a headless device with no OS keychain (e.g. the Pi appliance),
+    set_secret must fall back to the 0600 file store rather than raising —
+    otherwise cloud setup is impossible on that hardware."""
+    monkeypatch.setenv("LUMI_DATA_DIR", str(tmp_path))
     with patch.dict(sys.modules, {"keyring": None}):
-        with pytest.raises(secrets.BackendUnavailable):
-            secrets.set_secret("k", "v")
+        assert secrets.backend_kind() == "file"
+        secrets.set_secret("k", "v")
+        assert secrets.get_secret("k") == "v"
+    secrets_file = tmp_path / secrets.SECRETS_FILENAME
+    assert secrets_file.exists()
+    assert oct(secrets_file.stat().st_mode)[-3:] == "600"
 
 
 # ── migration: lift plaintext key out of user_settings.json into keychain ──

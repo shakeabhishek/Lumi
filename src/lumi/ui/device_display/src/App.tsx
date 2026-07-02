@@ -7,6 +7,7 @@ import { VectorFace } from './components/VectorFace';
 import { TerminalFace } from './components/TerminalFace';
 import { SpriteSceneFace } from './components/SpriteSceneFace';
 import { SoundVisualizer } from './components/SoundVisualizer';
+import { AudioControls } from './components/AudioControls';
 import { useDeviceState, type FaceStyle, type FaceState } from './state';
 
 export function App() {
@@ -30,15 +31,16 @@ export function App() {
 
   return (
     <div
-      className="h-full w-full flex items-center justify-center p-4"
+      className="h-full w-full flex items-center justify-center p-4 relative"
       data-theme={device.theme ?? 'default'}
     >
+      <AudioControls />
       <motion.div
         layout
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.4 }}
-        className="w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden border border-white/20 bg-white/5 backdrop-blur-xl flex flex-col"
+        className="w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden border border-white/20 bg-white/5 backdrop-blur-xl flex flex-col relative"
         style={{ minHeight: '560px' }}
       >
         <StatusBar

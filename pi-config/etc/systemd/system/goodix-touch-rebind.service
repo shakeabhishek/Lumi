@@ -1,0 +1,10 @@
+[Unit]
+Description=Retry Goodix touchscreen I2C bind (boot-time probe race workaround)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/goodix-touch-rebind.sh
+
+[Install]
+WantedBy=multi-user.target
