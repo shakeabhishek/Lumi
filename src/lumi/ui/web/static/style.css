@@ -383,8 +383,8 @@ input[type=color] { padding: 4px; height: 44px; cursor: pointer; }
               0 14px 28px -10px rgba(16, 185, 129, 0.65);
 }
 
-.btn.danger { box-shadow: inset 0 0 0 1px #EF4444; color: #EF4444; }
-.btn.danger:hover { background: rgba(239, 68, 68, 0.15); box-shadow: inset 0 0 0 1px #F87171; color: #F87171; }
+.btn.danger { background: #EF4444; color: #FFFFFF; box-shadow: 0 4px 14px rgba(239, 68, 68, 0.25); border: none; }
+.btn.danger:hover { background: #DC2626; color: #FFFFFF; box-shadow: 0 6px 20px rgba(220, 38, 38, 0.35); transform: translateY(-2px); }
 
 .btn-row { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-top: 1.25rem; }
 
