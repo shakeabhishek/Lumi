@@ -299,117 +299,132 @@ async def chat_stream(
 
         await publish_face_state(request, "think")
 
-        t0 = time.perf_counter()
-        collected: list[str] = []
-        loop = asyncio.get_event_loop()
-
-        first_chunk_seen = False
-        gen = None
+        # Outer try/finally guarantees the face returns to IDLE no matter
+        # how this generator exits — normal completion, an exception, OR
+        # cancellation. The latter matters: if the client disconnects (or
+        # this whole worker gets killed mid-request, e.g. a service
+        # restart) while still awaiting the FIRST chunk, Starlette cancels
+        # this generator at that await point. asyncio.CancelledError is a
+        # BaseException in modern Python, so it is NOT caught by the plain
+        # `except Exception` blocks below — without this outer finally,
+        # execution would jump straight past step 6 and never publish
+        # "idle", leaving the device-display stuck showing "Thinking…"
+        # until some unrelated future turn happens to complete (observed
+        # on the real Pi, 2026-07-02 — the actual root cause, not merely
+        # a demonstration of a theoretical edge case).
         try:
-            gen = session.router.handle_streaming(msg)
-        except Exception as exc:
-            err = safe_error_message(exc, where="chat.stream")
-            collected.append(err)
-            yield b"data: " + json.dumps({"chunk": err}).encode() + b"\n\n"
-        else:
+            t0 = time.perf_counter()
+            collected: list[str] = []
+            loop = asyncio.get_event_loop()
+
+            first_chunk_seen = False
+            gen = None
             try:
-                while True:
-                    # Each next(gen) runs in a worker thread so the chunk
-                    # producer (which can block on httpx / Ollama) doesn't
-                    # freeze the event loop.
-                    #
-                    # Hard cap per chunk — if the producer hangs for any
-                    # reason (Ollama wedged, network dropping packets,
-                    # OpenClaw subprocess stuck) we'd otherwise park this
-                    # executor thread forever and starve the pool. After
-                    # _CHUNK_TIMEOUT_S we surface a graceful error chunk
-                    # and bail. Sized for cold cloud-LLM latency + a
-                    # safety margin.
-                    try:
-                        chunk = await asyncio.wait_for(
-                            loop.run_in_executor(None, next, gen, _STREAM_SENTINEL),
-                            timeout=_CHUNK_TIMEOUT_S,
-                        )
-                    except asyncio.TimeoutError:
-                        err = "(reply timed out — falling back to local on next turn)"
-                        collected.append(err)
-                        yield b"data: " + json.dumps({"chunk": err}).encode() + b"\n\n"
-                        break
-                    if chunk is _STREAM_SENTINEL:
-                        break
-                    if not first_chunk_seen:
-                        first_chunk_seen = True
-                        await publish_face_state(request, "speak")
-                    collected.append(chunk)
-                    yield b"data: " + json.dumps({"chunk": chunk}).encode() + b"\n\n"
-                    # Bail fast if the browser tab went away. Without
-                    # this we'd keep pulling chunks out of the generator
-                    # (each blocking an executor thread) for an audience
-                    # of nobody — exactly the pattern that filled the
-                    # default thread pool in Phase 4's soak.
-                    if await request.is_disconnected():
-                        break
+                gen = session.router.handle_streaming(msg)
             except Exception as exc:
                 err = safe_error_message(exc, where="chat.stream")
                 collected.append(err)
                 yield b"data: " + json.dumps({"chunk": err}).encode() + b"\n\n"
-        finally:
-            # Always close the generator — releases sockets / file
-            # handles / OpenClaw subprocess pipes that handle_streaming
-            # may be holding. Without this, a partial consumption (early
-            # break, exception, timeout) leaves resources dangling until
-            # the GC eventually collects.
-            if gen is not None:
+            else:
                 try:
-                    gen.close()
-                except Exception:
-                    pass
+                    while True:
+                        # Each next(gen) runs in a worker thread so the chunk
+                        # producer (which can block on httpx / Ollama) doesn't
+                        # freeze the event loop.
+                        #
+                        # Hard cap per chunk — if the producer hangs for any
+                        # reason (Ollama wedged, network dropping packets,
+                        # OpenClaw subprocess stuck) we'd otherwise park this
+                        # executor thread forever and starve the pool. After
+                        # _CHUNK_TIMEOUT_S we surface a graceful error chunk
+                        # and bail. Sized for cold cloud-LLM latency + a
+                        # safety margin.
+                        try:
+                            chunk = await asyncio.wait_for(
+                                loop.run_in_executor(None, next, gen, _STREAM_SENTINEL),
+                                timeout=_CHUNK_TIMEOUT_S,
+                            )
+                        except asyncio.TimeoutError:
+                            err = "(reply timed out — falling back to local on next turn)"
+                            collected.append(err)
+                            yield b"data: " + json.dumps({"chunk": err}).encode() + b"\n\n"
+                            break
+                        if chunk is _STREAM_SENTINEL:
+                            break
+                        if not first_chunk_seen:
+                            first_chunk_seen = True
+                            await publish_face_state(request, "speak")
+                        collected.append(chunk)
+                        yield b"data: " + json.dumps({"chunk": chunk}).encode() + b"\n\n"
+                        # Bail fast if the browser tab went away. Without
+                        # this we'd keep pulling chunks out of the generator
+                        # (each blocking an executor thread) for an audience
+                        # of nobody — exactly the pattern that filled the
+                        # default thread pool in Phase 4's soak.
+                        if await request.is_disconnected():
+                            break
+                except Exception as exc:
+                    err = safe_error_message(exc, where="chat.stream")
+                    collected.append(err)
+                    yield b"data: " + json.dumps({"chunk": err}).encode() + b"\n\n"
+            finally:
+                # Always close the generator — releases sockets / file
+                # handles / OpenClaw subprocess pipes that handle_streaming
+                # may be holding. Without this, a partial consumption (early
+                # break, exception, timeout) leaves resources dangling until
+                # the GC eventually collects.
+                if gen is not None:
+                    try:
+                        gen.close()
+                    except Exception:
+                        pass
 
-        elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+            elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
 
-        # 3. Record the assembled reply in session history with metadata
-        #    pulled from the audit log (router.handle_streaming wrote the
-        #    audit entry for us with the right source label).
-        last = session.audit.get_recent(n=1) if session.audit else []
-        handler = last[0]["source"] if last else "llm"
-        skill = last[0]["skill"] if last else ""
-        reply_text = "".join(collected)
-        session.history.append(ChatMessage(
-            role="lumi", text=reply_text,
-            handler=handler, skill=skill, elapsed_ms=elapsed_ms,
-        ))
+            # 3. Record the assembled reply in session history with metadata
+            #    pulled from the audit log (router.handle_streaming wrote the
+            #    audit entry for us with the right source label).
+            last = session.audit.get_recent(n=1) if session.audit else []
+            handler = last[0]["source"] if last else "llm"
+            skill = last[0]["skill"] if last else ""
+            reply_text = "".join(collected)
+            session.history.append(ChatMessage(
+                role="lumi", text=reply_text,
+                handler=handler, skill=skill, elapsed_ms=elapsed_ms,
+            ))
 
-        # 3b. Persist the exchange to long-term memory if enabled.
-        # ConversationManager already stores LLM-path turns from inside
-        # stream_chat(), but native/openclaw paths never reach that code
-        # — they're handled by the router/bridge directly. Storing here
-        # covers those too, so "what did we talk about earlier?" works
-        # regardless of how we answered. Skip native skills since
-        # those are mostly utility (timer / volume / mode) and not
-        # worth recall.
-        if session.memory is not None and reply_text and handler in {"llm", "openclaw", "tool"}:
-            try:
-                session.memory.store_turn(msg, reply_text)  # type: ignore[attr-defined]
-            except Exception as exc:
-                log.warning("chat.memory_store_failed", error=str(exc))
+            # 3b. Persist the exchange to long-term memory if enabled.
+            # ConversationManager already stores LLM-path turns from inside
+            # stream_chat(), but native/openclaw paths never reach that code
+            # — they're handled by the router/bridge directly. Storing here
+            # covers those too, so "what did we talk about earlier?" works
+            # regardless of how we answered. Skip native skills since
+            # those are mostly utility (timer / volume / mode) and not
+            # worth recall.
+            if session.memory is not None and reply_text and handler in {"llm", "openclaw", "tool"}:
+                try:
+                    session.memory.store_turn(msg, reply_text)  # type: ignore[attr-defined]
+                except Exception as exc:
+                    log.warning("chat.memory_store_failed", error=str(exc))
 
-        # 4. Cloud-failure one-shot notice — same logic as /chat/send.
-        if session.router._bridge is not None:                # noqa: SLF001
-            notice = session.router._bridge.cloud_failure_notice()  # noqa: SLF001
-            if notice:
-                session.history.append(ChatMessage(role="context", text=f"⚠ {notice}"))
-                yield (
-                    b"event: notice\ndata: "
-                    + json.dumps({"text": f"⚠ {notice}"}).encode()
-                    + b"\n\n"
-                )
+            # 4. Cloud-failure one-shot notice — same logic as /chat/send.
+            if session.router._bridge is not None:                # noqa: SLF001
+                notice = session.router._bridge.cloud_failure_notice()  # noqa: SLF001
+                if notice:
+                    session.history.append(ChatMessage(role="context", text=f"⚠ {notice}"))
+                    yield (
+                        b"event: notice\ndata: "
+                        + json.dumps({"text": f"⚠ {notice}"}).encode()
+                        + b"\n\n"
+                    )
 
-        # 5. Terminal "done" so the client knows to finalise the bubble.
-        meta = {"handler": handler, "skill": skill, "elapsed_ms": elapsed_ms}
-        yield b"event: done\ndata: " + json.dumps(meta).encode() + b"\n\n"
-
-        # 6. Face back to IDLE for the device display.
-        await publish_face_state(request, "idle")
+            # 5. Terminal "done" so the client knows to finalise the bubble.
+            meta = {"handler": handler, "skill": skill, "elapsed_ms": elapsed_ms}
+            yield b"event: done\ndata: " + json.dumps(meta).encode() + b"\n\n"
+        finally:
+            # 6. Face back to IDLE for the device display — guaranteed,
+            # see the comment above this try block.
+            await publish_face_state(request, "idle")
 
     return StreamingResponse(
         stream(),

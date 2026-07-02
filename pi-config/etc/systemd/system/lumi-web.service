@@ -10,6 +10,15 @@ ExecStart=/home/lumi/.local/bin/uv run lumi web --port 80
 Restart=on-failure
 RestartSec=3
 AmbientCapabilities=CAP_NET_BIND_SERVICE
+# The kiosk holds a permanent, long-lived SSE connection to
+# /device-display/events that never closes voluntarily. Without a short
+# TimeoutStopSec, `systemctl restart` waits for systemd's 90s default
+# before force-killing — verified repeatedly (2026-07-02): every deploy
+# restart during a session hung for exactly 90s ("Failed with result
+# 'timeout'") before systemd's own Restart=on-failure kicked in. 5s is
+# plenty for a normal graceful exit; the kiosk's EventSource reconnects
+# automatically once the new process is up.
+TimeoutStopSec=5
 
 [Install]
 WantedBy=multi-user.target

@@ -313,3 +313,97 @@ def test_chat_stream_publishes_face_states_to_device_display(client: TestClient,
     assert "speak" in seen, f"speak state missing: {seen}"
     # idle must be the LAST state — turn-complete returns the face to rest.
     assert seen[-1] == "idle", f"last state should be idle: {seen}"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_publishes_idle_even_when_cancelled_before_first_chunk(
+    tmp_path, monkeypatch,
+) -> None:
+    """Regression test for a real bug found on the Pi (2026-07-02): if the
+    client disconnects — or the whole worker is killed, e.g. a service
+    restart — while still waiting for the FIRST chunk, Starlette cancels
+    the streaming generator at that await point via GeneratorExit/
+    CancelledError. Both are BaseException, not Exception, so they are
+    NOT caught by chat.py's `except Exception` blocks. Without an outer
+    try/finally spanning the whole function, execution jumps straight
+    past the idle-publish, leaving the device-display stuck showing
+    "Thinking…" until some unrelated future turn happens to complete —
+    which is exactly what was observed live."""
+    from unittest.mock import MagicMock
+
+    from starlette.requests import Request
+
+    from lumi.ui.web.app import create_app
+    from lumi.ui.web.routes import chat as chat_mod
+
+    app = create_app(tmp_path)
+
+    fake_router = MagicMock()
+
+    def _blocking_gen(_transcript: str):
+        # handle_streaming is a sync generator function in production,
+        # run via loop.run_in_executor — a real OS thread. Cancelling the
+        # asyncio-level task does NOT stop an already-running executor
+        # thread (a genuine asyncio limitation), so aclose() will block
+        # until this sleep actually returns. Keep it short (not the ~8s+
+        # a real OpenClaw miss takes) so the test resolves quickly while
+        # still exercising the exact mechanism: a slow sync generator,
+        # cancelled while the app is waiting on its first item.
+        import time as _time
+
+        def gen():
+            _time.sleep(0.3)
+            yield "unreachable"  # pragma: no cover
+
+        return gen()
+
+    fake_router.handle_streaming.side_effect = _blocking_gen
+    fake_router._bridge = None
+
+    real_builder = chat_mod._get_or_build_session
+    patched = {"done": False}
+
+    def _patched(req):
+        sess = real_builder(req)
+        if not patched["done"]:
+            sess.router = fake_router
+            sess.conversation = MagicMock()
+            sess.history = []
+            patched["done"] = True
+        return sess
+
+    monkeypatch.setattr(chat_mod, "_get_or_build_session", _patched)
+
+    from lumi.ui.web import device_bus as bus_mod
+
+    seen: list[str] = []
+    orig_publish = bus_mod.DeviceBus.publish
+
+    async def _record(self, snapshot):
+        if "state" in snapshot:
+            seen.append(snapshot["state"])
+        await orig_publish(self, snapshot)
+
+    monkeypatch.setattr(bus_mod.DeviceBus, "publish", _record)
+
+    scope = {"type": "http", "method": "POST", "path": "/chat/stream", "app": app, "headers": []}
+    request = Request(scope)
+
+    response = await chat_mod.chat_stream(request, message="hi")
+
+    # Start consuming — this reaches "think" (published synchronously
+    # before any chunk is awaited) and then blocks inside the executor
+    # call waiting for the (never-arriving) first chunk from the router.
+    task = asyncio.ensure_future(response.body_iterator.__anext__())
+    await asyncio.sleep(0.2)
+    assert not task.done(), "expected the stream to still be blocked on the first chunk"
+
+    # Simulate what Starlette does when the client disconnects mid-request:
+    # cancel the in-flight __anext__() — this delivers CancelledError into
+    # the async generator's currently-suspended await point, the same
+    # place a real client disconnect would land.
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert seen == ["think", "idle"], f"expected think then idle, got: {seen}"
