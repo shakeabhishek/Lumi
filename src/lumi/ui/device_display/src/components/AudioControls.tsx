@@ -60,19 +60,25 @@ export function AudioControls({ micMuted, volume, brightness }: AudioControlsPro
   );
 }
 
-function CollapsibleSlider({ 
-  type, 
-  initialValue, 
-  onChange 
-}: { 
-  type: 'volume' | 'brightness', 
+// While dragging, commit to hardware at most this often — live enough to
+// feel real-time, throttled enough not to fire a POST (and an amixer
+// subprocess, for the volume slider) on every single pointermove event.
+const DRAG_COMMIT_THROTTLE_MS = 80;
+
+function CollapsibleSlider({
+  type,
+  initialValue,
+  onChange
+}: {
+  type: 'volume' | 'brightness',
   initialValue: number,
-  onChange: (v: number) => void 
+  onChange: (v: number) => void
 }) {
   const [value, setValue] = useState(initialValue);
   const [expanded, setExpanded] = useState(false);
   const draggingRef = useRef(false);
   const collapseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastCommitRef = useRef(0);
 
   useEffect(() => {
     if (!draggingRef.current) setValue(initialValue);
@@ -108,8 +114,13 @@ function CollapsibleSlider({
       <div 
         className="cursor-pointer p-2 -m-2" 
         onClick={() => {
-          setExpanded(true);
-          startCollapseTimer();
+          if (expanded) {
+            setExpanded(false);
+            clearCollapseTimer();
+          } else {
+            setExpanded(true);
+            startCollapseTimer();
+          }
         }}
       >
         <Icon size={28} className="text-white/70" />
@@ -128,16 +139,26 @@ function CollapsibleSlider({
               (e.target as HTMLElement).setPointerCapture(e.pointerId);
               draggingRef.current = true;
               clearCollapseTimer();
-              setValue(valFromPointer(e));
+              const v = valFromPointer(e);
+              setValue(v);
+              onChange(v);
+              lastCommitRef.current = performance.now();
             }}
             onPointerMove={(e) => {
-              if (e.buttons === 1) setValue(valFromPointer(e));
+              if (e.buttons !== 1) return;
+              const v = valFromPointer(e);
+              setValue(v);
+              const now = performance.now();
+              if (now - lastCommitRef.current >= DRAG_COMMIT_THROTTLE_MS) {
+                lastCommitRef.current = now;
+                onChange(v);
+              }
             }}
             onPointerUp={(e) => {
               (e.target as HTMLElement).releasePointerCapture(e.pointerId);
               const final = valFromPointer(e);
               setValue(final);
-              onChange(final);
+              onChange(final); // always commit the exact final position
               draggingRef.current = false;
               startCollapseTimer();
             }}
