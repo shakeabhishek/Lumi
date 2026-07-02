@@ -36,13 +36,13 @@ export function AudioControls({ micMuted, volume, brightness }: AudioControlsPro
         whileTap={{ scale: 0.95 }}
         onClick={toggleMicMuted}
         aria-label={localMuted ? 'Unmute microphone' : 'Mute microphone'}
-        className={`w-16 h-16 rounded-full flex items-center justify-center transition-colors backdrop-blur-md border shadow-xl ${
+        className={`w-20 h-20 rounded-full flex items-center justify-center transition-colors backdrop-blur-md border shadow-xl shrink-0 ${
           localMuted
             ? 'bg-red-500/20 border-red-500/50 text-red-200'
             : 'bg-white/10 border-white/20 text-white hover:bg-white/20'
         }`}
       >
-        {localMuted ? <MicOff size={28} /> : <Mic size={28} />}
+        {localMuted ? <MicOff size={36} /> : <Mic size={36} />}
       </motion.button>
 
       <CollapsibleSlider
@@ -88,7 +88,7 @@ function CollapsibleSlider({
     if (collapseTimeoutRef.current) clearTimeout(collapseTimeoutRef.current);
     collapseTimeoutRef.current = setTimeout(() => {
       setExpanded(false);
-    }, 2000);
+    }, 4000);
   };
 
   const clearCollapseTimer = () => {
@@ -107,8 +107,8 @@ function CollapsibleSlider({
 
   return (
     <motion.div
-      className="flex flex-col items-center bg-white/5 border border-white/10 backdrop-blur-md rounded-full shadow-xl"
-      animate={{ padding: expanded ? '16px' : '16px' }}
+      className="w-20 flex flex-col items-center bg-white/5 border border-white/10 backdrop-blur-md rounded-[40px] shadow-xl shrink-0"
+      animate={{ padding: expanded ? '22px 0' : '22px 0' }}
       initial={false}
     >
       <div 
@@ -123,17 +123,17 @@ function CollapsibleSlider({
           }
         }}
       >
-        <Icon size={28} className="text-white/70" />
+        <Icon size={36} className="text-white/70" />
       </div>
 
       <AnimatePresence>
         {expanded && (
           <motion.div
             initial={{ height: 0, opacity: 0, marginTop: 0 }}
-            animate={{ height: 128, opacity: 1, marginTop: 16 }}
+            animate={{ height: 160, opacity: 1, marginTop: 16 }}
             exit={{ height: 0, opacity: 0, marginTop: 0 }}
             transition={{ type: 'spring', bounce: 0.2, duration: 0.4 }}
-            className="w-10 flex justify-center relative cursor-pointer"
+            className="w-12 flex justify-center relative cursor-pointer shrink-0"
             style={{ touchAction: 'none' }}
             onPointerDown={(e) => {
               (e.target as HTMLElement).setPointerCapture(e.pointerId);

@@ -58,25 +58,25 @@ export function RightPanel({ weather }: RightPanelProps) {
       
       {/* Top Section: Settings, Notifications, Wifi */}
       <div className="flex gap-4 w-full justify-end items-center">
-        <div className="h-12 px-5 rounded-full bg-white/10 border border-white/10 backdrop-blur-md flex items-center justify-center gap-3 text-white/70 shadow-sm">
-          <Wifi size={20} />
-          <span className="font-medium text-sm tracking-wide">TheKrustyKrab</span>
+        <div className="h-20 px-8 rounded-full bg-white/10 border border-white/10 backdrop-blur-md flex items-center justify-center gap-4 text-white/70 shadow-sm shrink-0">
+          <Wifi size={36} />
+          <span className="font-medium text-lg tracking-wide">TheKrustyKrab</span>
         </div>
         <motion.button 
           whileHover={{ scale: 1.1 }}
           whileTap={{ scale: 0.9 }}
-          className="w-12 h-12 shrink-0 rounded-full bg-white/10 border border-white/10 backdrop-blur-md flex items-center justify-center text-white/70 hover:bg-white/20 hover:text-white transition-colors relative"
+          className="w-20 h-20 shrink-0 rounded-full bg-white/10 border border-white/10 backdrop-blur-md flex items-center justify-center text-white/70 hover:bg-white/20 hover:text-white transition-colors relative"
         >
-          <Bell size={24} />
+          <Bell size={36} />
           {/* Notification Dot */}
-          <div className="absolute top-3 right-3 w-2 h-2 bg-pink-500 rounded-full" />
+          <div className="absolute top-4 right-4 w-3 h-3 bg-pink-500 rounded-full" />
         </motion.button>
         <motion.button 
           whileHover={{ scale: 1.1 }}
           whileTap={{ scale: 0.9 }}
-          className="w-12 h-12 shrink-0 rounded-full bg-white/10 border border-white/10 backdrop-blur-md flex items-center justify-center text-white/70 hover:bg-white/20 hover:text-white transition-colors"
+          className="w-20 h-20 shrink-0 rounded-full bg-white/10 border border-white/10 backdrop-blur-md flex items-center justify-center text-white/70 hover:bg-white/20 hover:text-white transition-colors"
         >
-          <Settings size={24} />
+          <Settings size={36} />
         </motion.button>
       </div>
 

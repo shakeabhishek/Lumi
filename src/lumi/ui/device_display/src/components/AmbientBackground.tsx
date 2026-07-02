@@ -28,16 +28,16 @@ export function AmbientBackground() {
   }
 
   return (
-    <div className="absolute inset-0 overflow-hidden pointer-events-none -z-10 bg-[#050505]">
+    <div className="absolute inset-0 overflow-hidden pointer-events-none z-0 bg-[#050505]">
       <motion.div
-        className="absolute -inset-[50%] opacity-50 filter blur-[120px]"
+        className="absolute -inset-[10%] opacity-70 filter blur-[90px]"
         animate={{
           background: [
-            `radial-gradient(circle at 0% 0%, ${palette.color1}, transparent 50%), radial-gradient(circle at 100% 100%, ${palette.color3}, transparent 50%), radial-gradient(circle at 100% 0%, ${palette.color2}, transparent 50%)`,
-            `radial-gradient(circle at 100% 0%, ${palette.color1}, transparent 50%), radial-gradient(circle at 0% 100%, ${palette.color3}, transparent 50%), radial-gradient(circle at 0% 0%, ${palette.color2}, transparent 50%)`,
-            `radial-gradient(circle at 100% 100%, ${palette.color1}, transparent 50%), radial-gradient(circle at 0% 0%, ${palette.color3}, transparent 50%), radial-gradient(circle at 0% 100%, ${palette.color2}, transparent 50%)`,
-            `radial-gradient(circle at 0% 100%, ${palette.color1}, transparent 50%), radial-gradient(circle at 100% 0%, ${palette.color3}, transparent 50%), radial-gradient(circle at 100% 100%, ${palette.color2}, transparent 50%)`,
-            `radial-gradient(circle at 0% 0%, ${palette.color1}, transparent 50%), radial-gradient(circle at 100% 100%, ${palette.color3}, transparent 50%), radial-gradient(circle at 100% 0%, ${palette.color2}, transparent 50%)`,
+            `radial-gradient(circle at 0% 0%, ${palette.color1}, transparent 80%), radial-gradient(circle at 100% 100%, ${palette.color3}, transparent 80%), radial-gradient(circle at 100% 0%, ${palette.color2}, transparent 80%)`,
+            `radial-gradient(circle at 100% 0%, ${palette.color1}, transparent 80%), radial-gradient(circle at 0% 100%, ${palette.color3}, transparent 80%), radial-gradient(circle at 0% 0%, ${palette.color2}, transparent 80%)`,
+            `radial-gradient(circle at 100% 100%, ${palette.color1}, transparent 80%), radial-gradient(circle at 0% 0%, ${palette.color3}, transparent 80%), radial-gradient(circle at 0% 100%, ${palette.color2}, transparent 80%)`,
+            `radial-gradient(circle at 0% 100%, ${palette.color1}, transparent 80%), radial-gradient(circle at 100% 0%, ${palette.color3}, transparent 80%), radial-gradient(circle at 100% 100%, ${palette.color2}, transparent 80%)`,
+            `radial-gradient(circle at 0% 0%, ${palette.color1}, transparent 80%), radial-gradient(circle at 100% 100%, ${palette.color3}, transparent 80%), radial-gradient(circle at 100% 0%, ${palette.color2}, transparent 80%)`,
           ]
         }}
         transition={{
