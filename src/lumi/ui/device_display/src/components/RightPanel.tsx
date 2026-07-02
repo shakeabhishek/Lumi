@@ -6,11 +6,12 @@ import {
   Lightbulb, 
   Camera, 
   Timer,
-  Cloud,
+  Wifi,
   Sun,
-  CloudRain
+  Cloud,
+  CloudRain,
+  CloudSnow
 } from 'lucide-react';
-
 import type { WeatherSnapshot } from '../state';
 
 interface RightPanelProps {
@@ -41,25 +42,30 @@ export function RightPanel({ weather }: RightPanelProps) {
     });
   };
 
-  // Parse weather string to pick an icon (super simple heuristic)
-  const getWeatherIcon = (w: WeatherSnapshot['condition']) => {
-    switch (w) {
-      case 'sunny': return <Sun size={32} className="text-yellow-400" />;
-      case 'rainy': return <CloudRain size={32} className="text-blue-400" />;
-      case 'snowy': return <CloudRain size={32} className="text-blue-200" />;
-      default: return <Cloud size={32} className="text-white/70" />;
+  const getWeatherIcon = (condition?: WeatherSnapshot['condition']) => {
+    switch (condition) {
+      case 'sunny':       return <Sun className="w-6 h-6 text-yellow-400" />;
+      case 'clear-night': return <Sun className="w-6 h-6 text-indigo-200" />; // using sun as fallback for clear
+      case 'cloudy':      return <Cloud className="w-6 h-6 text-gray-300" />;
+      case 'rainy':       return <CloudRain className="w-6 h-6 text-blue-400" />;
+      case 'snowy':       return <CloudSnow className="w-6 h-6 text-cyan-200" />;
+      default:            return <Cloud className="w-6 h-6 text-white/30" />;
     }
   };
 
   return (
-    <div className="absolute right-8 top-0 bottom-0 py-8 flex flex-col items-end justify-between z-20">
+    <div className="absolute right-0 top-0 bottom-0 w-80 p-8 flex flex-col items-end justify-between z-20">
       
-      {/* Top Section: Settings & Notifications */}
-      <div className="flex gap-4">
+      {/* Top Section: Settings, Notifications, Wifi */}
+      <div className="flex gap-4 w-full justify-end items-center">
+        <div className="h-12 px-5 rounded-full bg-white/10 border border-white/10 backdrop-blur-md flex items-center justify-center gap-3 text-white/70 shadow-sm">
+          <Wifi size={20} />
+          <span className="font-medium text-sm tracking-wide">TheKrustyKrab</span>
+        </div>
         <motion.button 
           whileHover={{ scale: 1.1 }}
           whileTap={{ scale: 0.9 }}
-          className="w-12 h-12 rounded-full bg-white/5 border border-white/10 backdrop-blur-md flex items-center justify-center text-white/70 hover:bg-white/10 hover:text-white transition-colors relative"
+          className="w-12 h-12 shrink-0 rounded-full bg-white/10 border border-white/10 backdrop-blur-md flex items-center justify-center text-white/70 hover:bg-white/20 hover:text-white transition-colors relative"
         >
           <Bell size={24} />
           {/* Notification Dot */}
@@ -68,27 +74,27 @@ export function RightPanel({ weather }: RightPanelProps) {
         <motion.button 
           whileHover={{ scale: 1.1 }}
           whileTap={{ scale: 0.9 }}
-          className="w-12 h-12 rounded-full bg-white/5 border border-white/10 backdrop-blur-md flex items-center justify-center text-white/70 hover:bg-white/10 hover:text-white transition-colors"
+          className="w-12 h-12 shrink-0 rounded-full bg-white/10 border border-white/10 backdrop-blur-md flex items-center justify-center text-white/70 hover:bg-white/20 hover:text-white transition-colors"
         >
           <Settings size={24} />
         </motion.button>
       </div>
 
+      <div className="flex-1" />
+
       {/* Middle Section: Massive Clock & Weather */}
-      <div className="flex flex-col items-end text-right mt-12">
+      <div className="flex flex-col items-end text-right">
         <h1 className="text-8xl font-light text-white tracking-tighter drop-shadow-lg mb-2">
           {formatTime(time).replace(/ AM| PM/, '')}
         </h1>
         <div className="flex items-center gap-4 text-white/80 font-medium text-2xl tracking-wide">
           <span>{formatDate(time)}</span>
         </div>
-        
-        {/* Weather Sub-widget */}
         {weather && (
           <div className="flex items-center gap-3 mt-6 bg-white/5 px-6 py-3 rounded-3xl border border-white/10 backdrop-blur-md shadow-xl">
             {getWeatherIcon(weather.condition)}
             <span className="text-2xl font-light text-white">
-              {weather.tempC}°C {weather.condition}
+              {Math.round(weather.tempC)}°C <span className="capitalize">{weather.condition}</span>
             </span>
           </div>
         )}
@@ -97,9 +103,9 @@ export function RightPanel({ weather }: RightPanelProps) {
       <div className="flex-1" />
 
       {/* Bottom Section: OpenClaw Skills / Action Buttons */}
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-4 w-full">
         <h3 className="text-white/40 text-sm font-medium tracking-widest uppercase text-right mb-2 pr-2">Quick Actions</h3>
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-4 w-full items-end">
           <ActionButton icon={<Lightbulb size={24} />} label="Room Lights" active />
           <ActionButton icon={<Camera size={24} />} label="Vision Mode" />
           <ActionButton icon={<Timer size={24} />} label="Set Timer" />

@@ -39,8 +39,7 @@ import psutil  # type: ignore[import-not-found]
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
-from ....hardware import audio_mixer
-
+from ....hardware import audio_mixer, display_backlight
 from ...face.idle_scenes import _BUNDLED_DIR_FOR, _SPRITES_DIR
 
 router = APIRouter()
@@ -214,6 +213,34 @@ async def set_audio_mute(request: Request, muted: Annotated[str, Form()]) -> dic
     return snapshot
 
 
+def _system_snapshot() -> dict:
+    """Real current hardware state for the on-screen brightness slider —
+    read fresh each time, same reasoning as _audio_snapshot()."""
+    return {"brightness": display_backlight.get_brightness()}
+
+
+# ── System controls (display brightness) ────────────────────────────────────
+#
+# Real hardware, not an app-level flag — see hardware/display_backlight.py.
+# Same CSRF-bypass and publish-then-broadcast pattern as the audio routes
+# above.
+
+
+@router.get("/system")
+async def get_system() -> dict:
+    return _system_snapshot()
+
+
+@router.post("/system/brightness")
+async def set_system_brightness(request: Request, brightness: Annotated[int, Form()]) -> dict:
+    from .. import device_bus as _bus_mod  # noqa: PLC0415
+
+    display_backlight.set_brightness(brightness)
+    snapshot = _system_snapshot()
+    await _bus_mod.get_bus(request.app).publish(snapshot)
+    return snapshot
+
+
 def _status_text_for(face_state: str) -> str:
     return {
         "idle":   "Connected to cloud",
@@ -261,6 +288,7 @@ async def device_display_events(request: Request) -> StreamingResponse:
             "cpuPct": round(psutil.cpu_percent(interval=None)),
             **_settings_snapshot(request),
             **_audio_snapshot(),
+            **_system_snapshot(),
         })
 
     async def stream():

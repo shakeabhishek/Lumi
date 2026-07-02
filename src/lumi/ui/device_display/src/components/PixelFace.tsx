@@ -45,19 +45,24 @@ export function PixelFace({ state }: { state: FaceState }) {
     state === 'speak' ? { duration: 0.5, repeat: Infinity } : { duration: 0.3 };
 
   return (
-    <div className="relative w-56 h-56 grid grid-cols-8 grid-rows-8 gap-1 p-4">
+    <div className="relative w-80 h-80 grid grid-cols-8 grid-rows-8 gap-2 p-6">
+      {/* Left Eye */}
       <motion.div
-        className="col-start-2 row-start-3 col-span-2 row-span-2 bg-gray-200/95 rounded-md shadow-sm"
+        className="col-start-2 row-start-3 col-span-2 row-span-2 bg-white/90 rounded-3xl shadow-sm z-10"
         animate={eyeAnim}
         transition={eyeTransition}
       />
+
+      {/* Right Eye */}
       <motion.div
-        className="col-start-5 row-start-3 col-span-2 row-span-2 bg-gray-200/95 rounded-md shadow-sm"
+        className="col-start-6 row-start-3 col-span-2 row-span-2 bg-white/90 rounded-3xl shadow-sm z-10"
         animate={eyeAnim}
         transition={eyeTransition}
       />
+
+      {/* Mouth */}
       <motion.div
-        className="col-start-2 row-start-6 col-span-5 row-span-1 bg-gray-200/95 rounded-full shadow-sm"
+        className="col-start-3 row-start-6 col-span-4 row-span-1 bg-white/90 rounded-full shadow-sm z-10"
         animate={mouthAnim}
         transition={mouthTransition}
       />

@@ -218,6 +218,29 @@ def test_set_audio_mute_publishes_to_bus(client: TestClient) -> None:
     assert "micMuted" in latest
 
 
+def test_get_system_returns_current_brightness(client: TestClient) -> None:
+    """On a laptop with no backlight device, display_backlight no-ops to
+    a sensible default rather than erroring."""
+    r = client.get("/device-display/system")
+    assert r.status_code == 200
+    assert "brightness" in r.json()
+
+
+def test_set_system_brightness_publishes_to_bus(client: TestClient) -> None:
+    """POST /device-display/system/brightness is CSRF-bypassed like the
+    audio routes — same trust model, a physical touch on the local
+    screen — and must reach the DeviceBus."""
+    r = client.post("/device-display/system/brightness", data={"brightness": "60"})
+    assert r.status_code == 200
+    assert "brightness" in r.json()
+
+    bus = client.app.state.device_bus
+    assert bus is not None
+    latest = bus.latest()
+    assert latest is not None
+    assert "brightness" in latest
+
+
 def test_sprite_endpoint_serves_bundled_pack(client: TestClient) -> None:
     """The /device-display/sprite/<pack>/<file> route mirrors the
     pygame loader's bundled→user fallback so the React app can pull
