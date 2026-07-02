@@ -26,10 +26,18 @@ agree.
 | Repo path | Deployed to |
 |---|---|
 | `etc/systemd/system/*.service` | `/etc/systemd/system/` |
+| `etc/udev/rules.d/*.rules` | `/etc/udev/rules.d/` |
 | `usr/local/bin/goodix-touch-rebind.sh` | `/usr/local/bin/goodix-touch-rebind.sh` |
 | `home/lumi/kiosk.sh` | `/home/lumi/kiosk.sh` |
 
 Deploy a change to any of these the same way as everything else in
 `AGENTS.md`: `rsync` the specific file to its target path, then
 `sudo systemctl daemon-reload` (only needed for `.service` file edits) and
-restart the affected service.
+restart the affected service. For `udev` rules specifically:
+`sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=input --action=change`,
+then restart `lumi-display` so `cage`/Chromium reopen the input device
+through the updated `libinput` config.
+
+**Gotcha:** `udev` silently ignores rule files that don't end in `.rules` —
+naming one `.conf` by habit means it's parsed by nothing and you'll spend a
+while wondering why `udevadm test` shows no effect.

@@ -1,0 +1,14 @@
+# Touch Display 2's gt911 touch controller reports raw coordinates in the
+# panel's native (unrotated) orientation. The kiosk rotates the display
+# 90 deg clockwise (wlr-randr --transform 90 in kiosk.sh), so touch
+# coordinates must be remapped to match, or taps land on the wrong spot.
+# Matrix per libinput docs for a 90deg clockwise rotation.
+#
+# IMPORTANT: file extension must be .rules, not .conf — udev silently
+# ignores non-.rules files in /etc/udev/rules.d/ (this cost a debugging
+# round the first time).
+#
+# IMPORTANT: if kiosk.sh's `wlr-randr --transform` value ever changes,
+# this matrix must change to match (another coupled-config pair, like
+# lumi-web's --port and kiosk.sh's --app URL — see AGENTS.md).
+SUBSYSTEM=="input", ENV{ID_INPUT_TOUCHSCREEN}=="1", ENV{LIBINPUT_CALIBRATION_MATRIX}="0 -1 1 1 0 0"

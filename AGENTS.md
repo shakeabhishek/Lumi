@@ -140,6 +140,21 @@ recovery path.
   on the Goodix device does NOT mean cage/Chromium visually warps a cursor
   to touch position — verify actual click-through into the app via
   Chromium's own input handling, not by looking for cursor movement.
+- **Taps land on the wrong spot after rotating the display**: `kiosk.sh`
+  rotates the output 90° clockwise (`wlr-randr --transform 90`), but the
+  Goodix touch controller still reports raw coordinates in the panel's
+  *native, unrotated* orientation. Nothing remaps them automatically, so a
+  visible tap lands on the wrong DOM element underneath. Fixed via a
+  `libinput` calibration matrix in
+  `pi-config/etc/udev/rules.d/99-lumi-touch-rotation.rules`
+  (`LIBINPUT_CALIBRATION_MATRIX="0 -1 1 1 0 0"`, the standard matrix for a
+  90° clockwise rotation). **This matrix is coupled to `kiosk.sh`'s
+  `--transform` value** — if that rotation ever changes, this matrix must
+  change with it (0° / 90° / 180° / 270° each have their own matrix; look
+  them up, don't guess). After editing the rule: `udevadm control
+  --reload-rules && udevadm trigger --subsystem-match=input --action=change`,
+  then restart `lumi-display`. Remember: `udev` only reads files ending in
+  `.rules`, not `.conf` — a wrong extension is silently ignored.
 - **`lumi.local` failing in Chrome but IP working**: Chrome auto-upgrades
   bare hostname navigation (no explicit port) to HTTPS first; `.local` has
   no TLS cert so it fails/hangs. Type `http://lumi.local/` explicitly, or
