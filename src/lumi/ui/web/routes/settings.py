@@ -54,20 +54,20 @@ def _render(request: Request, template: str, **ctx: object) -> HTMLResponse:
 # it inside the settings router).
 _SETTINGS_SECTIONS = [
     # Who Lumi is.
-    ("personality", "✨", "Personality",  "System prompt + the name Lumi answers to.",     "Identity"),
-    ("modes",       "🧭", "Modes",        "Switch between General / Developer / Focus / Dictation.", "Identity"),
-    ("voice",       "🎙", "Voice",        "Pick the TTS voice + manage your enrolled speaker profile.", "Identity"),
+    ("personality", "Personality",  "System prompt + the name Lumi answers to.",     "Identity"),
+    ("modes",       "Modes",        "Switch between General / Developer / Focus / Dictation.", "Identity"),
+    ("voice",       "Voice",        "Pick the TTS voice + manage your enrolled speaker profile.", "Identity"),
 
     # How Lumi looks.
-    ("face",        "💗", "Face",         "Pixel / vector / terminal / sprite — and the background palette.", "Appearance"),
+    ("face",        "Face",         "Pixel / vector / terminal / sprite — and the background palette.", "Appearance"),
 
     # What Lumi knows about you.
-    ("memory",      "🧠", "Memory",       "Browse what Lumi has learned about you. Toggle on/off here.", "Memory & data"),
-    ("data",        "🛡", "Privacy & permissions",  "Toggle clipboard, active-window, camera, WiFi access. Export or factory-reset.", "Memory & data"),
-    ("/audit-log/", "📜", "Audit log",    "Every skill invocation, cloud escalation, and direct LLM turn — filter by source.", "Memory & data"),
+    ("memory",      "Memory",       "Browse what Lumi has learned about you. Toggle on/off here.", "Memory & data"),
+    ("data",        "Privacy & permissions",  "Toggle clipboard, active-window, camera, WiFi access. Export or factory-reset.", "Memory & data"),
+    ("/audit-log/", "Audit log",    "Every skill invocation, cloud escalation, and direct LLM turn — filter by source.", "Memory & data"),
 
     # Where Lumi reaches.
-    ("cloud",       "☁️", "Cloud LLM",    "Configure a cloud provider key for smart routing.",     "Connections"),
+    ("cloud",       "Cloud LLM",    "Configure a cloud provider key for smart routing.",     "Connections"),
 ]
 
 
@@ -82,13 +82,12 @@ async def settings_hub(request: Request) -> HTMLResponse:
     settings = load_settings(request.app.state.data_dir)
     # Group by section while preserving order.
     groups: dict[str, list[dict[str, str]]] = {}
-    for path, icon, label, desc, group in _SETTINGS_SECTIONS:
+    for path, label, desc, group in _SETTINGS_SECTIONS:
         # Leading "/" → absolute (lets the hub surface non-/settings
         # pages like /audit-log under a Settings group).
         href = path if path.startswith("/") else f"/settings/{path}"
         groups.setdefault(group, []).append({
             "path": href,
-            "icon": icon,
             "label": label,
             "desc": desc,
         })
@@ -517,7 +516,7 @@ async def cloud_get(request: Request) -> HTMLResponse:
     return _render(
         request, "settings/cloud.html",
         key_mask=secrets.mask(existing),
-        secrets_available=secrets.is_available(),
+        secret_backend=secrets.backend_kind(),
     )
 
 

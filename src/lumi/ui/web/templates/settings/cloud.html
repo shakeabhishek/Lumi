@@ -3,29 +3,13 @@
 {% block content %}
 <h1>Cloud LLM fallback</h1>
 <p>
-  {{ settings.lumi_name }}'s V1 LLM is local-only (Ollama on this laptop,
-  Hailo on the Pi). In V2, when the local model can't answer a question
-  confidently, {{ settings.lumi_name }} will escalate to a cloud model
-  you configure here. Stored locally in <code>user_settings.json</code>;
-  never transmitted anywhere except to the provider you choose.
+  {{ settings.lumi_name }}'s local model runs on-device (Ollama, on the Pi's
+  CPU) as the private/offline floor. When it can't answer a question
+  confidently, {{ settings.lumi_name }} escalates to the cloud model you
+  configure here. Provider/model choice is stored locally in
+  <code>user_settings.json</code>; the API key itself is stored separately
+  (see below) and never transmitted anywhere except to the provider you choose.
 </p>
-
-<div class="msg info">
-  <strong>V1 status:</strong> these fields are saved but not yet used. Cloud
-  routing ships with V2 alongside intelligent escalation. Configure here now
-  so it works the moment V2 lands.
-</div>
-
-{% if not secrets_available %}
-<div class="msg err">
-  <strong>OS keychain unreachable.</strong> The <code>keyring</code> package or a
-  system credential store (macOS Keychain / Linux Secret Service / Windows Credential
-  Manager) isn't available, so {{ settings.lumi_name }} can't store an API key
-  securely on this machine. Install with <code>uv pip install -e '.[secrets]'</code>
-  and reload. <em>For your safety, API keys submitted while this banner is showing
-  will not be saved.</em>
-</div>
-{% endif %}
 
 <div class="card">
   <form method="POST" action="/settings/cloud">
@@ -40,7 +24,7 @@
       </select>
       <div class="form-hint">
         Lumi tries the local model first. Picks the cloud only when it judges
-        the local response inadequate (V2 logic — see CLAUDE.md).
+        the local response inadequate — see "Enable smart cloud routing" below.
       </div>
     </div>
 
@@ -51,8 +35,15 @@
              placeholder="{{ 'enter to update — current: ' ~ key_mask if settings.cloud_llm_api_key_set else 'sk-ant-… / sk-… / AIza…' }}"
              autocomplete="off">
       <div class="form-hint">
-        Stored in your OS keychain ({{ "macOS Keychain" if request.app.state.platform == "darwin" else "secret service" }}),
-        not in any file on disk. The value is never displayed back to the UI —
+        {% if secret_backend == "keychain" %}
+        Stored in your OS keychain ({{ "macOS Keychain" if request.app.state.platform == "darwin" else "Linux Secret Service" }}),
+        not in any file on disk.
+        {% else %}
+        No OS keychain is available on this device, so it's stored in a
+        <code>0600</code>-permission file in Lumi's private data directory —
+        readable only by the account Lumi runs as.
+        {% endif %}
+        The value is never displayed back to the UI —
         only the masked indicator {{ "(currently " ~ key_mask ~ ")" if settings.cloud_llm_api_key_set else "" }} is shown.
         Leave this field blank to keep the existing key; click <em>clear</em> to remove it.
       </div>
@@ -107,7 +98,7 @@
      was too easy to mis-tap; recovering means pasting the key again, which
      the user may not have ready. Require typing the literal word "clear". #}
   <form method="POST" action="/settings/cloud" id="clearKeyForm" style="display:none;margin-top:1rem;padding:1rem;border:1px solid var(--iris-danger,#c44);border-radius:.5rem;background:rgba(196,68,68,0.06)">
-    <strong>Remove the stored API key from the OS keychain?</strong>
+    <strong>Remove the stored API key?</strong>
     <p style="color:var(--muted);font-size:.9rem;margin:.4rem 0;">
       You'll need to paste the key again to re-enable cloud mode. Type
       <code>clear</code> below to confirm.
@@ -131,7 +122,7 @@
 </div>
 
 <div class="card">
-  <h2>What gets sent to the cloud (when V2 ships)</h2>
+  <h2>What gets sent to the cloud</h2>
   <ul style="margin-left:1.25rem;color:var(--muted);font-size:.92rem">
     <li>Your transcript for that single turn</li>
     <li>The system prompt for your current mode</li>

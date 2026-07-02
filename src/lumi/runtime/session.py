@@ -31,9 +31,24 @@ def build_cloud_bridge(
     user: UserSettings,
     *,
     openclaw_enabled: bool,
-    timeout: float = 30.0,
+    timeout: float = 5.0,
 ) -> CloudBundle:
     """Return (bridge, pseudonymizer, runtime_mode) for the given user.
+
+    `timeout` bounds worst-case latency, not just OpenClaw's success
+    window. Verified against the real OpenClaw 2026.04.20 CLI (2026-07-02):
+    its own `--timeout` flag is NOT honored — a value of 30 here produced
+    an observed ~40s stall (our subprocess timeout was `timeout + 10`,
+    also since reduced to `timeout + 3` — see openclaw_bridge.py) on
+    EVERY message that OpenClaw's agent doesn't handle, including plain
+    conversation, since SkillRouter tries the bridge unconditionally
+    before falling back to the direct LLM/RoutedBackend path. 5s (+3s
+    grace = 8s worst case, then ~1-2s for the direct Gemini fallback)
+    gives OpenClaw's agent a real shot at fast tool calls while keeping
+    total turn latency tolerable when it can't help. Lower this further
+    only if OpenClaw's CLI ever starts honoring its own
+    timeout flag, or raise it if you find genuine skill invocations
+    getting cut off short.
 
     Modes:
       "openclaw_cloud" — user has set a cloud provider AND key. Bridge

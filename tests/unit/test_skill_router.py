@@ -116,6 +116,66 @@ class TestOpenClawRouting:
         assert len(llm.received_messages) == 1
 
 
+class TestOpenClawCloudModeGating:
+    """openclaw_cloud mode shells out to a slow CLI subprocess (~seconds
+    even on a miss), so SkillRouter pre-filters whether it's worth trying.
+    ollama mode is a cheap direct HTTP call and must always be tried,
+    unchanged from before this gate existed."""
+
+    def _make_gated_router(
+        self, runtime_mode: str, bridge_response: str | None = "skill response",
+    ) -> tuple[SkillRouter, MagicMock]:
+        llm = MockLLMBackend(response="llm response")
+        conversation = ConversationManager(llm)
+        bridge = MagicMock()
+        bridge.runtime_mode = runtime_mode
+        bridge.send.return_value = bridge_response
+        router = SkillRouter(conversation=conversation, tts=MagicMock(), bridge=bridge)
+        router._native = []  # type: ignore[assignment]
+        return router, bridge
+
+    def test_openclaw_cloud_skips_bridge_for_plain_conversation(self) -> None:
+        router, bridge = self._make_gated_router("openclaw_cloud")
+
+        result = router.handle("tell me a joke")
+
+        bridge.send.assert_not_called()
+        assert result == "llm response"
+
+    def test_openclaw_cloud_tries_bridge_for_skill_shaped_message(self) -> None:
+        router, bridge = self._make_gated_router("openclaw_cloud")
+
+        result = router.handle("what's the weather like today?")
+
+        bridge.send.assert_called_once()
+        assert result == "skill response"
+
+    def test_openclaw_cloud_skips_bridge_for_explicit_cloud_prefix(self) -> None:
+        """The "cloud:" prefix is RoutedBackend's own explicit-escalation
+        marker (see llm/routed_backend.py) — it's never meant for OpenClaw,
+        so trying the bridge for it is always wasted latency."""
+        router, bridge = self._make_gated_router("openclaw_cloud")
+
+        router.handle("cloud: what model are you?")
+
+        bridge.send.assert_not_called()
+
+    def test_ollama_mode_always_tries_bridge_regardless_of_content(self) -> None:
+        router, bridge = self._make_gated_router("ollama")
+
+        router.handle("tell me a joke")
+
+        bridge.send.assert_called_once()
+
+    def test_streaming_variant_has_the_same_gate(self) -> None:
+        router, bridge = self._make_gated_router("openclaw_cloud")
+
+        result = "".join(router.handle_streaming("tell me a joke"))
+
+        bridge.send.assert_not_called()
+        assert result.strip() == "llm response"
+
+
 class TestLLMFallback:
     def test_llm_receives_transcript(self) -> None:
         router, llm = _make_router(include_bridge=False)

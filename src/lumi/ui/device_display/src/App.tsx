@@ -8,6 +8,7 @@ import { SpriteSceneFace } from './components/SpriteSceneFace';
 import { SoundVisualizer } from './components/SoundVisualizer';
 import { AudioControls } from './components/AudioControls';
 import { RightPanel } from './components/RightPanel';
+import { AmbientBackground } from './components/AmbientBackground';
 import { useDeviceState, type FaceStyle, type FaceState } from './state';
 
 export function App() {
@@ -31,9 +32,10 @@ export function App() {
 
   return (
     <div
-      className="h-full w-full flex flex-col items-center justify-center p-4 relative overflow-hidden"
+      className="h-full w-full flex flex-col items-center justify-center p-4 relative overflow-hidden bg-[#0a0a0a]"
       data-theme={device.theme ?? 'default'}
     >
+      <AmbientBackground />
       {state === 'speak' && style !== 'terminal' && <SoundVisualizer />}
       <AudioControls micMuted={device.micMuted} volume={device.volume} brightness={device.brightness} />
       

@@ -641,7 +641,14 @@ class OpenClawBridge:
                  "--message", masked_text,
                  "--json",
                  "--timeout", str(int(self._timeout))],
-                capture_output=True, text=True, timeout=self._timeout + 10,
+                # +3, not the wider buffer this used to carry: verified against
+                # the real OpenClaw 2026.04.20 CLI (2026-07-02) that its own
+                # `--timeout` flag above is NOT honored — the process runs
+                # until *this* subprocess timeout hard-kills it, regardless of
+                # what we pass. A big grace buffer here used to just add dead
+                # seconds to every miss; +3 is only slack for the process to
+                # flush output and exit after being killed.
+                capture_output=True, text=True, timeout=self._timeout + 3,
             )
             if proc.returncode != 0:
                 self._record_cloud_failure("nonzero", proc.stderr[:200] or proc.stdout[:200])

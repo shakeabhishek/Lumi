@@ -1,12 +1,18 @@
 import { useState, useEffect } from 'react';
-import { motion } from 'motion/react';
 
 export function AmbientBackground() {
   const [hour, setHour] = useState(new Date().getHours());
+  const [step, setStep] = useState(0);
 
   useEffect(() => {
     const tick = setInterval(() => setHour(new Date().getHours()), 60000); // Check every minute
     return () => clearInterval(tick);
+  }, []);
+
+  useEffect(() => {
+    // Crossfade to the next gradient configuration every 6 seconds
+    const animationTick = setInterval(() => setStep(s => (s + 1) % 4), 6000);
+    return () => clearInterval(animationTick);
   }, []);
 
   // Determine color palette based on hour of day
@@ -27,25 +33,25 @@ export function AmbientBackground() {
     palette = { color1: '#9a3412', color2: '#a21caf', color3: '#86198f' }; // orange-800, fuchsia-700, fuchsia-800
   }
 
+  const gradients = [
+    `radial-gradient(circle at 0% 0%, ${palette.color1}, transparent 80%), radial-gradient(circle at 100% 100%, ${palette.color3}, transparent 80%), radial-gradient(circle at 100% 0%, ${palette.color2}, transparent 80%)`,
+    `radial-gradient(circle at 100% 0%, ${palette.color1}, transparent 80%), radial-gradient(circle at 0% 100%, ${palette.color3}, transparent 80%), radial-gradient(circle at 0% 0%, ${palette.color2}, transparent 80%)`,
+    `radial-gradient(circle at 100% 100%, ${palette.color1}, transparent 80%), radial-gradient(circle at 0% 0%, ${palette.color3}, transparent 80%), radial-gradient(circle at 0% 100%, ${palette.color2}, transparent 80%)`,
+    `radial-gradient(circle at 0% 100%, ${palette.color1}, transparent 80%), radial-gradient(circle at 100% 0%, ${palette.color3}, transparent 80%), radial-gradient(circle at 100% 100%, ${palette.color2}, transparent 80%)`,
+  ];
+
   return (
-    <div className="absolute inset-0 overflow-hidden pointer-events-none z-0 bg-[#050505]">
-      <motion.div
-        className="absolute -inset-[10%] opacity-70 filter blur-[90px]"
-        animate={{
-          background: [
-            `radial-gradient(circle at 0% 0%, ${palette.color1}, transparent 80%), radial-gradient(circle at 100% 100%, ${palette.color3}, transparent 80%), radial-gradient(circle at 100% 0%, ${palette.color2}, transparent 80%)`,
-            `radial-gradient(circle at 100% 0%, ${palette.color1}, transparent 80%), radial-gradient(circle at 0% 100%, ${palette.color3}, transparent 80%), radial-gradient(circle at 0% 0%, ${palette.color2}, transparent 80%)`,
-            `radial-gradient(circle at 100% 100%, ${palette.color1}, transparent 80%), radial-gradient(circle at 0% 0%, ${palette.color3}, transparent 80%), radial-gradient(circle at 0% 100%, ${palette.color2}, transparent 80%)`,
-            `radial-gradient(circle at 0% 100%, ${palette.color1}, transparent 80%), radial-gradient(circle at 100% 0%, ${palette.color3}, transparent 80%), radial-gradient(circle at 100% 100%, ${palette.color2}, transparent 80%)`,
-            `radial-gradient(circle at 0% 0%, ${palette.color1}, transparent 80%), radial-gradient(circle at 100% 100%, ${palette.color3}, transparent 80%), radial-gradient(circle at 100% 0%, ${palette.color2}, transparent 80%)`,
-          ]
-        }}
-        transition={{
-          duration: 30,
-          repeat: Infinity,
-          ease: "linear"
-        }}
-      />
+    <div className="absolute inset-0 overflow-hidden pointer-events-none z-0 bg-[#0a0a0a]">
+      {gradients.map((grad, i) => (
+        <div
+          key={i}
+          className="absolute -inset-[10%] filter blur-[40px] transition-opacity duration-[5000ms] ease-in-out"
+          style={{
+            background: grad,
+            opacity: i === step ? 0.7 : 0,
+          }}
+        />
+      ))}
     </div>
   );
 }

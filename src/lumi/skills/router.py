@@ -10,10 +10,12 @@ Every dispatch is recorded in AuditLog when one is provided.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from pathlib import Path
 
 from ..audio.tts import TTS
+from ..llm.routed_backend import _EXPLICIT_CLOUD_PREFIX
 from ..log import get_logger
 from ..runtime.conversation import ConversationManager
 from .audit_log import AuditLog
@@ -30,6 +32,42 @@ from .native.volume_skill import VolumeSkill
 from .openclaw_bridge import OpenClawBridge
 
 log = get_logger(__name__)
+
+# Heuristic gate on whether to even TRY the OpenClaw bridge (step 2 below).
+# Verified 2026-07-02: in "openclaw_cloud" runtime_mode, trying the bridge
+# means shelling out to the `openclaw agent` CLI, which costs several real
+# seconds even on a miss (its own --timeout flag isn't honored — see
+# runtime/session.py). Trying it unconditionally for every message,
+# including plain conversation, made ordinary chat feel broken. This
+# approximates "does the message plausibly need one of the enabled
+# OpenClaw skills" — keep it in sync with the enabled_skills set
+# (weather, timer, unit_converter, wikipedia_lookup, file_search) rather
+# than trying to be exhaustive; a false negative here just means an
+# unusual phrasing falls through to the direct LLM instead of a skill,
+# not a hard failure. wikipedia_lookup deliberately requires "wikipedia"/
+# "look up" as an anchor, not bare "who is"/"what is" — those are answered
+# directly and correctly by the LLM without needing the skill (see
+# CLAUDE.md's wikipedia_lookup decision-log entry).
+_LIKELY_SKILL_TRIGGERS = re.compile(
+    r"\b("
+    r"weather|forecast|temperature|raining|snowing|humid|degrees\s+(?:out|outside)|"
+    r"timer|countdown|alarm|"
+    r"convert|conversion|kilomet|\bmiles?\b|kilogram|pounds?|celsius|fahrenheit|"
+    r"liters?|gallons?|centimet|\binch(?:es)?\b|\bfeet\b|\bmeters?\b|ounces?|grams?|"
+    r"wikipedia|look\s+up|"
+    r"find\s+(?:a\s+|the\s+)?file|search\s+(?:for\s+)?(?:a\s+|the\s+)?file|sandbox\s+director"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _worth_trying_openclaw(transcript: str) -> bool:
+    """False for plain conversation and explicit cloud: escalation — both
+    skip straight to the direct LLM instead of paying the bridge's latency
+    for a call that's virtually certain to miss."""
+    if _EXPLICIT_CLOUD_PREFIX.match(transcript):
+        return False
+    return bool(_LIKELY_SKILL_TRIGGERS.search(transcript))
 
 
 def _skill_name(skill: NativeSkill) -> str:
@@ -104,7 +142,14 @@ class SkillRouter:
                     return result.text
 
         # 2. OpenClaw
-        if self._bridge is not None:
+        # In "ollama" mode this is a cheap direct HTTP call to the already-
+        # running local Ollama server — always worth trying. In
+        # "openclaw_cloud" mode it's a slow CLI subprocess (see
+        # _worth_trying_openclaw's docstring) — gate it so plain
+        # conversation doesn't pay that tax on every single turn.
+        if self._bridge is not None and (
+            self._bridge.runtime_mode != "openclaw_cloud" or _worth_trying_openclaw(transcript)
+        ):
             response = self._bridge.send(transcript)
             if response:
                 log.info("router.openclaw")
@@ -135,8 +180,12 @@ class SkillRouter:
                     yield result.text
                     return
 
-        # 2. OpenClaw — synchronous, yield whole response
-        if self._bridge is not None:
+        # 2. OpenClaw — synchronous, yield whole response. See handle()'s
+        # comment: only gated in "openclaw_cloud" mode, where the bridge
+        # is a slow CLI subprocess rather than a cheap direct HTTP call.
+        if self._bridge is not None and (
+            self._bridge.runtime_mode != "openclaw_cloud" or _worth_trying_openclaw(transcript)
+        ):
             response = self._bridge.send(transcript)
             if response:
                 log.info("router.openclaw")
