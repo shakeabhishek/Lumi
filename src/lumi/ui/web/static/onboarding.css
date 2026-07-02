@@ -4,33 +4,35 @@
  */
 
 :root {
-  --iris-cream:     #FAFAFD;   /* page canvas (gradient overlay handles colors) */
-  --iris-paper:     #FFFFFF;   /* elevated card surface */
-  --iris-ink:       #1A1D3A;   /* deep navy text */
-  --iris-ink-soft:  #3A3F5C;
-  --iris-mute:      #6B7AA1;   /* cool gray secondary */
-  --iris-mute-soft: #A7B0C7;
-  --iris-line:      rgba(26, 29, 58, 0.08);
-  --iris-line-soft: rgba(26, 29, 58, 0.05);
-  --iris-accent:    #FF4D8F;   /* hot pink primary */
-  --iris-accent-deep:#E63E7B;
-  --iris-accent-soft:#FFE0EC;
-  --iris-pink:      #FF4D8F;
-  --iris-purple:    #A78BFA;
+  --iris-cream:     #E3E9E5;   
+  --iris-paper:     rgba(255, 255, 255, 0.08);
+  --iris-ink:       #F8FAFC;
+  --iris-ink-soft:  rgba(255, 255, 255, 0.7);
+  --iris-mute:      rgba(255, 255, 255, 0.5);
+  --iris-mute-soft: rgba(255, 255, 255, 0.3);
+  --iris-line:      rgba(16, 185, 129, 0.2);
+  --iris-line-soft: rgba(16, 185, 129, 0.1);
+  --iris-accent:    #10B981;
+  --iris-accent-deep:#059669;
+  --iris-accent-soft:rgba(16, 185, 129, 0.15);
+  --iris-pink:      #10B981;
+  --iris-purple:    #059669;
   --iris-green:     #34D399;
-  --iris-soft-pink: #FFF0F6;
-  --iris-soft-blue: #F0F4FF;
+  --iris-soft-pink: rgba(16, 185, 129, 0.05);
+  --iris-soft-blue: rgba(16, 185, 129, 0.05);
 
-  --grad-accent:    linear-gradient(135deg, #FF4D8F 0%, #A78BFA 100%);
-  --grad-page:      linear-gradient(135deg, #F0F4FF 0%, #FFF0F6 50%, #F0F4FF 100%);
+  --grad-accent:    linear-gradient(135deg, #059669 0%, #047857 100%);
+  --grad-page:      url('/static/lumi-background.png');
 }
 
 /* ── Page shell ────────────────────────────────────────────── */
 body.onboarding {
   background: var(--grad-page);
+  background-size: cover;
+  background-position: center;
   background-attachment: fixed;
   color: var(--iris-ink);
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 15px;
   line-height: 1.55;
   letter-spacing: -0.005em;
@@ -40,13 +42,13 @@ body.onboarding {
 
 body.onboarding .mono,
 body.onboarding code {
-  font-family: 'Geist Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+  font-family: 'Space Grotesk', ui-monospace, monospace;
 }
 
 /* Headings: warm bookish serif */
 body.onboarding .ob-h1,
 body.onboarding h1.ob-h1 {
-  font-family: 'Crimson Pro', 'Georgia', serif;
+  font-family: 'Outfit', sans-serif;
 }
 
 /* ── Top bar (wordmark + progress) ─────────────────────────── */
@@ -57,7 +59,7 @@ body.onboarding h1.ob-h1 {
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--iris-line-soft);
-  background: rgba(255, 255, 255, 0.55);
+  background: rgba(0, 0, 0, 0.4);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 }
@@ -98,7 +100,7 @@ body.onboarding h1.ob-h1 {
   gap: 14px;
 }
 .ob-progress__num {
-  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-family: 'Space Grotesk', ui-monospace, monospace;
   font-size: 11px;
   color: var(--iris-mute);
   letter-spacing: 0.04em;
@@ -128,6 +130,9 @@ body.onboarding h1.ob-h1 {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.6) 0%, rgba(0, 0, 0, 0.1) 30%, rgba(4, 30, 20, 0.8) 70%, rgba(2, 15, 10, 0.95) 100%);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 .ob-body {
   flex: 1;
@@ -144,7 +149,7 @@ body.onboarding h1.ob-h1 {
 .ob-inner--wider { max-width: 920px; }
 
 .ob-eyebrow {
-  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-family: 'Space Grotesk', ui-monospace, monospace;
   font-size: 11px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -209,12 +214,12 @@ body.onboarding h1.ob-h1 {
   background: var(--grad-accent);
   color: #fff;
   box-shadow: 0 1px 0 rgba(255,255,255,0.30) inset,
-              0 12px 26px -10px rgba(255, 77, 143, 0.55);
+              0 12px 26px -10px rgba(16, 185, 129, 0.55);
 }
 .ob-btn--primary:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 0 1px 0 rgba(255,255,255,0.30) inset,
-              0 16px 32px -10px rgba(255, 77, 143, 0.65);
+              0 16px 32px -10px rgba(16, 185, 129, 0.65);
 }
 .ob-btn--secondary {
   background: transparent;
@@ -248,6 +253,10 @@ body.onboarding h1.ob-h1 {
 /* ── Cards ─────────────────────────────────────────────────── */
 .ob-card {
   background: var(--iris-paper);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--iris-line);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
   border-radius: 18px;
   padding: 22px;
   box-shadow:
@@ -262,7 +271,7 @@ body.onboarding h1.ob-h1 {
 .ob-card--selected {
   box-shadow:
     inset 0 0 0 2px var(--iris-accent),
-    0 14px 32px -16px rgba(255, 77, 143, 0.45);
+    0 14px 32px -16px rgba(16, 185, 129, 0.45);
 }
 label.ob-card { cursor: pointer; }
 .ob-card input[type="radio"],
@@ -279,7 +288,7 @@ label.ob-card { cursor: pointer; }
 .ob-pick:has(input:checked) .ob-card {
   box-shadow:
     inset 0 0 0 2px var(--iris-accent),
-    0 14px 32px -16px rgba(255, 77, 143, 0.45);
+    0 14px 32px -16px rgba(16, 185, 129, 0.45);
 }
 
 /* ── Inputs ────────────────────────────────────────────────── */
@@ -302,7 +311,7 @@ label.ob-card { cursor: pointer; }
 .ob-input:focus { box-shadow: inset 0 0 0 1.5px var(--iris-ink); }
 
 .ob-field-label {
-  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-family: 'Space Grotesk', ui-monospace, monospace;
   font-size: 10px;
   color: var(--iris-mute);
   letter-spacing: 0.1em;
@@ -357,7 +366,7 @@ label.ob-card { cursor: pointer; }
   width: 520px;
   height: 520px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(255, 77, 143, 0.18) 0%, rgba(167, 139, 250, 0.12) 45%, transparent 70%);
+  background: radial-gradient(circle, rgba(16, 185, 129, 0.18) 0%, rgba(4, 120, 87, 0.12) 45%, transparent 70%);
   filter: blur(28px);
   top: 12%;
   pointer-events: none;
@@ -377,7 +386,7 @@ label.ob-card { cursor: pointer; }
   50%      { transform: translate(20px, -24px); }
 }
 .ob-status-line {
-  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-family: 'Space Grotesk', ui-monospace, monospace;
   font-size: 11px;
   color: var(--iris-mute);
   letter-spacing: 0.12em;
@@ -407,16 +416,16 @@ label.ob-card { cursor: pointer; }
 .ob-face--vector   { background: var(--iris-soft-blue); }
 .ob-face--terminal {
   background: #061a0c;
-  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-family: 'Space Grotesk', ui-monospace, monospace;
   color: #34D399;
   box-shadow: inset 0 0 28px rgba(52, 211, 153, 0.18);
 }
 
 /* ── Pixel heart (THE face — ported from design bundle PixelFace.tsx) ── */
 .ob-pixel-heart {
-  --ob-heart-color: var(--iris-pink);
+  --ob-heart-color: #F8FAFC;
   display: block;
-  filter: drop-shadow(0 4px 16px rgba(255, 77, 143, 0.35));
+  filter: drop-shadow(0 4px 16px rgba(248, 250, 252, 0.25));
   animation: ob-heart-float 3s ease-in-out infinite;
 }
 .ob-pixel-heart__g {
@@ -463,7 +472,7 @@ label.ob-card { cursor: pointer; }
   transform: rotate(-6deg);
 }
 .ob-face__vector-emoji {
-  filter: drop-shadow(0 6px 14px rgba(255, 77, 143, 0.25));
+  filter: drop-shadow(0 6px 14px rgba(16, 185, 129, 0.25));
   animation: ob-heart-float 3s ease-in-out infinite;
 }
 /* Vector face preview — cycle through 4 Twemoji state faces */
@@ -479,7 +488,7 @@ label.ob-card { cursor: pointer; }
   width: 110px;
   height: 110px;
   opacity: 0;
-  filter: drop-shadow(0 6px 14px rgba(255, 77, 143, 0.25));
+  filter: drop-shadow(0 6px 14px rgba(16, 185, 129, 0.25));
   animation: ob-vector-cycle 10s ease-in-out infinite;
 }
 .ob-vector-states img:nth-child(1) { animation-delay: 0s;    }
@@ -544,7 +553,7 @@ label.ob-card { cursor: pointer; }
   margin-left: 12px;
   color: #fff;
   font-size: 10px;
-  box-shadow: 0 4px 10px -2px rgba(255, 77, 143, 0.5);
+  box-shadow: 0 4px 10px -2px rgba(16, 185, 129, 0.5);
 }
 
 /* ── Name grid (step 3) ────────────────────────────────────── */
@@ -570,7 +579,7 @@ label.ob-card { cursor: pointer; }
   letter-spacing: -0.015em;
 }
 .ob-name-card .wake {
-  font-family: 'Geist Mono', monospace;
+  font-family: 'Space Grotesk', ui-monospace, monospace;
   font-size: 10px;
   color: var(--iris-mute);
   margin-top: 6px;
@@ -637,9 +646,9 @@ label.ob-card { cursor: pointer; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 14px 36px -10px rgba(255, 77, 143, 0.55);
+  box-shadow: 0 14px 36px -10px rgba(16, 185, 129, 0.55);
 }
-.ob-mic__ring { border-color: rgba(255, 77, 143, 0.6); }
+.ob-mic__ring { border-color: rgba(16, 185, 129, 0.6); }
 .ob-mic__core svg { color: #fff; }
 
 /* ── Voice cards (step 5) ──────────────────────────────────── */
@@ -651,7 +660,7 @@ label.ob-card { cursor: pointer; }
 }
 .ob-voice-card { padding: 26px; min-height: 220px; display: flex; flex-direction: column; }
 .ob-voice-card .tag {
-  font-family: 'Geist Mono', monospace;
+  font-family: 'Space Grotesk', ui-monospace, monospace;
   font-size: 10px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -692,7 +701,7 @@ label.ob-card { cursor: pointer; }
   letter-spacing: -0.015em;
 }
 .ob-face-meta .ext {
-  font-family: 'Geist Mono', monospace;
+  font-family: 'Space Grotesk', ui-monospace, monospace;
   font-size: 10px;
   color: var(--iris-mute);
   letter-spacing: 0.06em;
@@ -755,7 +764,7 @@ label.ob-card { cursor: pointer; }
   appearance: none;
   list-style: none;
   cursor: pointer;
-  font-family: 'Geist Mono', monospace;
+  font-family: 'Space Grotesk', ui-monospace, monospace;
   font-size: 10.5px;
   color: var(--iris-accent);
   letter-spacing: 0.04em;
@@ -771,7 +780,7 @@ label.ob-card { cursor: pointer; }
   padding: 10px 12px;
   background: rgba(42, 37, 64, 0.04);
   border-radius: 8px;
-  font-family: 'Geist Mono', monospace;
+  font-family: 'Space Grotesk', ui-monospace, monospace;
   font-size: 11.5px;
   color: var(--iris-ink-soft);
   line-height: 1.5;
@@ -827,9 +836,9 @@ label.ob-card { cursor: pointer; }
   border-top-left-radius: 6px;
   background: linear-gradient(135deg, #FFF0F6 0%, #FFFFFF 70%);
   box-shadow:
-    inset 0 0 0 1px rgba(255, 77, 143, 0.20),
-    0 10px 32px -10px rgba(255, 77, 143, 0.22);
-  font-family: 'Crimson Pro', 'Georgia', serif;
+    inset 0 0 0 1px rgba(16, 185, 129, 0.20),
+    0 10px 32px -10px rgba(16, 185, 129, 0.22);
+  font-family: 'Outfit', sans-serif;
   font-size: 22px;
   font-weight: 500;
   color: var(--iris-ink);

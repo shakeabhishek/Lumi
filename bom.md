@@ -143,6 +143,24 @@ the tradeoff for the compact HAT over the XVF3800's hardware AEC — accepted fo
 **Driver note:** install via Seeed's *new* Pi 5 wiki guide (the old v1 script can corrupt
 the desktop); V2.0's TLV320AIC3104 codec is the version that adds Pi 5 support.
 
+**✅ WORKING SETUP (2026-07-01, Pi 5 / kernel 6.18):** used the **device-tree-overlay route** (no
+fragile out-of-tree module): `git clone Seeed-Studio/seeed-linux-dtoverlays`, `dtc`-compile
+`respeaker-2mic-v2_0-overlay.dts` → `/boot/firmware/overlays/`; in `config.txt` add
+`dtparam=i2c_arm=on`, `dtparam=i2s=on`, `dtoverlay=respeaker-2mic-v2_0`; put `i2c-dev` in
+`/etc/modules`. Result: ALSA card **`seeed2micvoicec`** (card 0, mic capture + speaker playback),
+codec at I2C `0x18`, mainline `snd-soc-tlv320aic3x` driver binds. **Speaker output = HPLOUT/HPROUT**
+(the overlay's "Headphone Jack"). **Mixer: enable DAC→HP only — do NOT turn on the `*PGA Bypass` /
+`*Mic2*` analog routes** (they create a mic→speaker feedback squeal); `sudo alsactl store` to persist.
+
+**⚠️ CRITICAL — ReSpeaker + touchscreen coexistence (2026-07-01):** two *separate* conflicts had to be
+solved to run the HAT and the Touch Display 2 together on the Pi 5:
+1. **Power** — the display needs 5V on the GPIO header, which the HAT occupies → **SmartiPi Display Power
+   Kit** (powers display over USB-C). *(installed)*
+2. **I2C bus-sharing** — the Goodix **gt911 touch is on `i2c@80000` (bus 11 = `i2c_csi_dsi1`), which rides
+   GPIO 0/1 (ID_SD/ID_SC) — the same pins as the HAT's ID EEPROM.** The firmware's HAT-EEPROM probe
+   clobbers the gt911 → touch fails with `-121`. **FIX: add `force_eeprom_read=0` to `config.txt`** (safe,
+   since we load the ReSpeaker overlay manually). With both fixes, **touch AND audio work simultaneously.**
+
 ---
 
 ## Camera
