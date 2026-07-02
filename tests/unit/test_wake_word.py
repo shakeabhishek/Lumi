@@ -7,9 +7,10 @@ fire/cooldown/threshold logic on synthetic predictions.
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -27,6 +28,14 @@ def test_push_to_talk_eof_raises_keyboard_interrupt(monkeypatch) -> None:
     monkeypatch.setattr("builtins.input", _eof)
     with pytest.raises(KeyboardInterrupt):
         PushToTalkWake().wait_for_wake()
+
+
+def test_push_to_talk_stop_is_a_safe_noop() -> None:
+    """_voice_loop calls wake.stop() unconditionally after every wake fire
+    (to free the mic for recording, see OpenWakeWordWake.stop()) —
+    PushToTalkWake never holds an exclusive stream, so this must not
+    raise (the WakeSource ABC provides this default)."""
+    PushToTalkWake().stop()  # must not raise
 
 
 # ── OpenWakeWord — controlled simulation ───────────────────────────────────
@@ -102,6 +111,49 @@ def test_stop_closes_stream() -> None:
     w.stop()
     fake_stream.stop.assert_called_once()
     fake_stream.close.assert_called_once()
+
+
+def test_stop_clears_thread_so_ensure_started_rebuilds() -> None:
+    """Regression test for a real bug found on the Pi (2026-07-02):
+    OpenWakeWordWake's own capture stream stayed open forever, so when
+    _voice_loop's mic.record() then tried to open ITS OWN stream on the
+    same ReSpeaker device, ALSA rejected it ("Device unavailable") every
+    single time the wake word fired. Fix: stop() must reset _thread to
+    None so the NEXT wait_for_wake()'s _ensure_started() actually rebuilds
+    the stream (freeing the device in between) instead of no-op'ing on
+    its `if self._thread is not None: return` guard."""
+    w, fake_model, _ = _make_wake_with_synthetic_predictions([0.1])
+    w._thread = MagicMock()  # pretend already running
+    w.stop()
+    assert w._thread is None
+
+
+def test_stop_preserves_loaded_model_to_avoid_reload_cost() -> None:
+    """stop()/restart happens once per voice-loop turn — must not force a
+    full openwakeword model reload (onnxruntime session init) every turn."""
+    w, fake_model, _ = _make_wake_with_synthetic_predictions([0.1])
+    w._oww = fake_model
+    w.stop()
+    assert w._oww is fake_model
+
+
+def test_load_model_calls_bare_constructor() -> None:
+    """Regression lock for the openwakeword 0.4.0 compatibility fix.
+
+    The old call — Model(wakeword_models=[...], inference_framework="onnx")
+    — raises TypeError against the real 0.4.0 API (verified on the Pi,
+    2026-07-02): those kwargs were removed. _load_model() must call Model()
+    with no arguments; _listen() already picks the configured model name out
+    of the returned scores dict regardless of how many models loaded."""
+    fake_model_cls = MagicMock()
+    fake_module = MagicMock()
+    fake_module.Model = fake_model_cls
+
+    with patch.dict(sys.modules, {"openwakeword": MagicMock(), "openwakeword.model": fake_module}):
+        w = OpenWakeWordWake(model="hey_jarvis")
+        w._load_model()
+
+    fake_model_cls.assert_called_once_with()
 
 
 def test_wait_for_wake_blocks_until_event() -> None:

@@ -65,6 +65,35 @@ async def post_face_state(
     return {"ok": True, "state": state}
 
 
+@router.post("/caption")
+async def post_caption(
+    request: Request,
+    speaker: Annotated[str, Form()],
+    text: Annotated[str, Form()],
+    final: Annotated[str, Form()] = "false",
+) -> dict[str, object]:
+    """Publish a live-caption update (transcript or streaming reply) to
+    /device-display/events subscribers. Body: speaker=user|lumi, text=...,
+    final=true|false. Same trust model as /state — same-device,
+    fire-and-forget push from the voice loop's separate OS process."""
+    if speaker not in ("user", "lumi"):
+        raise HTTPException(status_code=400, detail="speaker must be 'user' or 'lumi'")
+    from .device_display import publish_caption  # noqa: PLC0415
+
+    is_final = final.lower() in ("true", "1", "on")
+    await publish_caption(request, speaker=speaker, text=text, final=is_final)
+    return {"ok": True, "speaker": speaker, "final": is_final}
+
+
+@router.post("/caption/clear")
+async def post_caption_clear(request: Request) -> dict[str, object]:
+    """Clear the caption bubble — called when the voice loop returns to IDLE."""
+    from .device_display import publish_caption_clear  # noqa: PLC0415
+
+    await publish_caption_clear(request)
+    return {"ok": True}
+
+
 # ── Location typeahead ──────────────────────────────────────────────────────
 
 

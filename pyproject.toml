@@ -55,11 +55,11 @@ host = ["pynput>=1.7", "psutil>=5.9"]
 secrets = ["keyring>=25"]
 # Speaker verification
 voice = ["resemblyzer>=0.1.1"]
-# Wake-word detection: openwakeword has no py3.12 wheel as of writing, so the
-# wake extra is intentionally NOT registered here. To enable continuous wake
-# listening on the laptop, install manually:
-#   uv pip install --python 3.11 openwakeword
-# Lumi's WAKE_WORD strategy lazy-imports openwakeword; it falls back gracefully.
+# Wake-word detection. Verified 2026-07-02: openwakeword>=0.4.0 installs
+# cleanly on ARM64/Python 3.12 (Pi 5) with prebuilt wheels for all deps —
+# the earlier "no py3.12 wheel" note was stale. Lumi's WAKE_WORD strategy
+# lazy-imports openwakeword so it stays optional for PUSH_TO_TALK-only use.
+wake = ["openwakeword>=0.4.0"]
 
 [project.scripts]
 lumi = "lumi.main:app"

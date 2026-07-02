@@ -1,0 +1,16 @@
+[Unit]
+Description=Lumi voice loop (wake word -> STT -> LLM -> TTS)
+After=network-online.target lumi-web.service ollama.service
+Wants=network-online.target
+Requires=lumi-web.service
+
+[Service]
+User=lumi
+WorkingDirectory=/home/lumi/lumi
+Environment=HOME=/home/lumi
+ExecStart=/home/lumi/.local/bin/uv run lumi run
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

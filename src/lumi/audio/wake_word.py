@@ -8,11 +8,12 @@ Two sources, picked by config:
 The interface (`WakeSource.wait_for_wake`) is what the runtime depends on, so
 swapping detectors is a one-class change.
 
-A note on names: openwakeword ships pre-trained models for "alexa",
-"hey_jarvis", "hey_mycroft", "hey_rhasspy". "Hey Lumi" isn't pre-trained, so
-laptop dev uses one of those as a proxy. On the Pi we'll either train a
-custom Lumi model (openwakeword has a notebook) or swap to Porcupine, which
-generates custom wake words from the web UI.
+A note on names: openwakeword 0.4.0 ships 5 pre-trained models by default —
+"alexa", "hey_mycroft", "hey_jarvis", "timer", "weather" (verified directly,
+2026-07-02). "Hey Lumi" isn't pre-trained, so we use "hey_jarvis" as a proxy
+until either a custom Lumi model is trained (openwakeword has a notebook for
+this) or we swap to Porcupine, which generates custom wake words from a web
+UI.
 """
 
 from __future__ import annotations
@@ -29,6 +30,16 @@ class WakeSource(ABC):
     @abstractmethod
     def wait_for_wake(self) -> None:
         """Block until Lumi should wake up and start listening."""
+
+    def stop(self) -> None:
+        """Release any exclusive resources (e.g. a mic stream) the wake
+        source is holding. Default no-op — most sources (PushToTalkWake)
+        don't hold anything exclusive. OpenWakeWordWake overrides this to
+        free the ALSA capture device so the voice loop's own recording
+        stream can open right after wake fires (see its call site in
+        _voice_loop — without this, mic.record() failed with "Device
+        unavailable" because the wake listener's stream was still open,
+        found live on the Pi 2026-07-02)."""
 
 
 class PushToTalkWake(WakeSource):
@@ -81,6 +92,11 @@ class OpenWakeWordWake(WakeSource):
         self._event.clear()
 
     def stop(self) -> None:
+        """Close the capture stream and let the background thread exit,
+        freeing the ALSA device. Deliberately does NOT discard the loaded
+        model (`self._oww`) — `_ensure_started()` reuses it on the next
+        `wait_for_wake()` call so a stop/restart cycle (once per voice-loop
+        turn) doesn't pay openwakeword's model-load cost every time."""
         self._stop.set()
         if self._stream is not None:
             try:
@@ -89,13 +105,16 @@ class OpenWakeWordWake(WakeSource):
             except Exception:
                 pass
         self._stream = None
+        self._thread = None  # lets _ensure_started() rebuild on next wait
 
     # ── internals ───────────────────────────────────────────────────────────
 
     def _ensure_started(self) -> None:
         if self._thread is not None:
             return
-        self._oww = self._load_model()
+        self._stop.clear()  # undo a prior stop() so the new thread's loop runs
+        if self._oww is None:
+            self._oww = self._load_model()
         self._open_stream()
         self._thread = threading.Thread(target=self._listen, daemon=True)
         self._thread.start()
@@ -104,7 +123,15 @@ class OpenWakeWordWake(WakeSource):
     def _load_model(self) -> object:
         from openwakeword.model import Model  # noqa: PLC0415
 
-        return Model(wakeword_models=[self._model_name], inference_framework="onnx")
+        # Bare constructor, deliberately no kwargs: `wakeword_models=` /
+        # `inference_framework=` were removed in openwakeword 0.4.0 (verified
+        # directly against the installed version, 2026-07-02 — passing them
+        # raises `TypeError: AudioFeatures.__init__() got an unexpected
+        # keyword argument 'inference_framework'`). Model() bare loads all 5
+        # default pretrained models; _listen() below already picks just
+        # `self._model_name` out of the returned scores dict, so loading the
+        # others too costs a little idle CPU but changes nothing behaviorally.
+        return Model()
 
     def _open_stream(self) -> None:
         import sounddevice as sd  # noqa: PLC0415

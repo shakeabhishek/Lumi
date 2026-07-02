@@ -266,6 +266,29 @@ async def publish_face_state(request: Request, face_state: str) -> None:
     await _bus_mod.get_bus(request.app).publish(snapshot)
 
 
+# ── Live captions (voice loop → device display) ─────────────────────────────
+#
+# Separate channel from face-state on purpose — StateMachine stays a bare
+# enum (see runtime/state_machine.py), captions carry actual text. Cumulative
+# text per push (not deltas), matching every other DeviceBus field: needs no
+# client-side accumulation and self-heals if a fire-and-forget POST is
+# dropped (device_display_client.py's push executor is lossy by design).
+
+
+async def publish_caption(request: Request, *, speaker: str, text: str, final: bool) -> None:
+    from .. import device_bus as _bus_mod  # noqa: PLC0415
+
+    await _bus_mod.get_bus(request.app).publish({
+        "caption": {"speaker": speaker, "text": text, "final": final},
+    })
+
+
+async def publish_caption_clear(request: Request) -> None:
+    from .. import device_bus as _bus_mod  # noqa: PLC0415
+
+    await _bus_mod.get_bus(request.app).publish({"caption": None})
+
+
 @router.get("/events")
 async def device_display_events(request: Request) -> StreamingResponse:
     """SSE feed. Each connection subscribes to the broadcaster, gets the

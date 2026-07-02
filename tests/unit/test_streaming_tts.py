@@ -58,6 +58,60 @@ def test_multiple_chunks_assembled() -> None:
     calls = [c.args[0] for c in tts.speak.call_args_list]
     full = " ".join(calls)
     assert "Hello world." in full
+
+
+# ── on_sentence caption hook ─────────────────────────────────────────────
+
+
+def test_on_sentence_called_with_one_sentence_at_a_time() -> None:
+    """The voice loop's live-caption feature hooks this callback. It must
+    receive ONE sentence at a time, not the cumulative reply so far — an
+    earlier cumulative design made a multi-sentence caption grow to fill
+    the whole screen instead of reading like live captions (found in real
+    use, 2026-07-02; see device_display.py's publish_caption)."""
+    tts = MagicMock()
+    seen: list[tuple[str, bool]] = []
+    speak_streaming(
+        tts, _chunks("First sentence. ", "Second sentence."),
+        on_sentence=lambda text, is_last: seen.append((text, is_last)),
+    )
+    assert seen == [("First sentence.", False), ("Second sentence.", True)]
+
+
+def test_on_sentence_marks_final_when_stream_ends_on_boundary() -> None:
+    """Edge case: if the token stream ends exactly on a sentence boundary,
+    `buf` is empty afterward — on_sentence must still fire once more with
+    is_last=True (re-using the last sentence's text) so the caller gets a
+    definitive "turn complete" signal rather than silently never seeing
+    is_last=True at all."""
+    tts = MagicMock()
+    seen: list[tuple[str, bool]] = []
+    speak_streaming(
+        tts, _chunks("Only one sentence. "),
+        on_sentence=lambda text, is_last: seen.append((text, is_last)),
+    )
+    assert seen == [("Only one sentence.", False), ("Only one sentence.", True)]
+
+
+def test_on_sentence_not_called_when_omitted() -> None:
+    """Default None — existing non-caption callers are unaffected."""
+    tts = MagicMock()
+    # Should not raise even though no on_sentence is passed.
+    speak_streaming(tts, _chunks("Hello world."))
+    tts.speak.assert_called_once_with("Hello world.")
+
+
+def test_on_sentence_does_not_change_tts_behavior() -> None:
+    """Regression guard: the caption hook must not alter what's actually
+    spoken — tts.speak() calls stay exactly as before."""
+    tts = MagicMock()
+    speak_streaming(
+        tts, _chunks("Hel", "lo wor", "ld. Next ", "one."),
+        on_sentence=lambda _t, _f: None,
+    )
+    calls = [c.args[0] for c in tts.speak.call_args_list]
+    full = " ".join(calls)
+    assert "Hello world." in full
     assert "Next one." in full
 
 

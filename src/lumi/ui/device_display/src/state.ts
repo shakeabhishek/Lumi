@@ -13,7 +13,8 @@
  *     "statusText": "Connected to cloud",
  *     "spritePack": "cat",
  *     "weather": { "tempC": 22, "condition": "sunny" } | null,
- *     "cpuPct": 45 }
+ *     "cpuPct": 45,
+ *     "caption": { "speaker": "user"|"lumi", "text": "...", "final": true } | null }
  */
 
 import { useEffect, useState } from 'react';
@@ -30,6 +31,12 @@ export interface WeatherSnapshot {
   location?: string;
 }
 
+export interface Caption {
+  speaker: 'user' | 'lumi';
+  text: string;
+  final: boolean;
+}
+
 export interface DeviceState {
   connected: boolean;
   state: FaceState;
@@ -44,6 +51,7 @@ export interface DeviceState {
   volume: number;
   micMuted: boolean;
   brightness: number;
+  caption: Caption | null;
 }
 
 const INITIAL: DeviceState = {
@@ -59,6 +67,7 @@ const INITIAL: DeviceState = {
   volume: 50,
   micMuted: false,
   brightness: 80,
+  caption: null,
 };
 
 export function useDeviceState(): DeviceState {

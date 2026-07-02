@@ -14,7 +14,7 @@ from __future__ import annotations
 import platform
 import shutil
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Protocol
 
@@ -104,11 +104,22 @@ class PiperTTS:
         piper.wait()
 
 
-def speak_streaming(tts: TTS, chunks: Iterator[str]) -> None:  # noqa: F811
+def speak_streaming(
+    tts: TTS, chunks: Iterator[str], *, on_sentence: Callable[[str, bool], None] | None = None,
+) -> None:  # noqa: F811
     """Buffer an LLM token stream into sentences and speak each as it completes.
 
     Runs TTS in a background thread so audio plays while the LLM continues
     generating the next sentence — significantly reduces perceived latency.
+
+    `on_sentence`, if given, is called once per sentence boundary — the same
+    moment it's queued for TTS — with `(sentence_text, is_last_sentence)`.
+    Deliberately just the ONE sentence, not the cumulative reply so far: an
+    earlier cumulative design made the voice loop's live caption grow to
+    contain the entire reply, which for a multi-sentence answer ate up the
+    whole screen instead of reading like live captions (found in real use,
+    2026-07-02). `is_last_sentence=True` on the final call lets the caller
+    mark that turn's caption as complete without a separate full-text push.
     """
     import queue  # noqa: PLC0415
     import re  # noqa: PLC0415
@@ -127,6 +138,7 @@ def speak_streaming(tts: TTS, chunks: Iterator[str]) -> None:  # noqa: F811
     t.start()
 
     buf = ""
+    last_sentence = ""
     for chunk in chunks:
         buf += chunk
         # Split on sentence-ending punctuation followed by whitespace
@@ -135,10 +147,23 @@ def speak_streaming(tts: TTS, chunks: Iterator[str]) -> None:  # noqa: F811
             clean = part.strip()
             if clean:
                 q.put(clean)
+                last_sentence = clean
+                if on_sentence is not None:
+                    on_sentence(clean, False)
         buf = parts[-1]
 
     if buf.strip():
-        q.put(buf.strip())
+        clean = buf.strip()
+        q.put(clean)
+        last_sentence = clean
+        if on_sentence is not None:
+            on_sentence(clean, True)
+    elif on_sentence is not None and last_sentence:
+        # Stream ended exactly on a sentence boundary — the last real
+        # sentence already fired with is_last_sentence=False above.
+        # Re-fire the SAME text marked final so the caller still gets a
+        # definitive "this turn's caption is complete" signal.
+        on_sentence(last_sentence, True)
     q.put(None)
     t.join()
 

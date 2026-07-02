@@ -27,6 +27,7 @@ from .host_helper.send_to_lumi import consume_pending, format_hint
 from .llm import make_llm_backend
 from .log import configure_logging, get_logger
 from .runtime.conversation import ConversationManager
+from .runtime.device_display_client import clear_caption, push_caption
 from .runtime.device_display_client import state_callback as _device_display_callback
 from .runtime.errors import safe_error_message
 from .runtime.memory import MemoryStore
@@ -109,9 +110,19 @@ def _voice_loop(
         llm=cfg.llm_backend.value,
     )
 
+    caption_base = f"http://127.0.0.1:{cfg.web_port}"
+
     while True:
         sm.transition(LumiState.IDLE)
+        clear_caption(base_url=caption_base)
         wake.wait_for_wake()
+        # Release the wake source's own mic stream (if any) before we open
+        # our own for recording — on real hardware (ReSpeaker), the ALSA
+        # device can't be opened twice at once. Without this, mic.record()
+        # below failed with "Device unavailable" every single time the wake
+        # word fired (found live on the Pi, 2026-07-02). No-op for wake
+        # sources that don't hold a stream (e.g. PushToTalkWake).
+        wake.stop()
 
         timer = PipelineTimer()
 
@@ -145,6 +156,8 @@ def _voice_loop(
             continue
 
         typer.echo(f"You:  {text}")
+        # Whisper doesn't stream — the transcript is complete in one shot.
+        push_caption("user", text, final=True, base_url=caption_base)
 
         window_ctx = _get_active_window_context(cfg)
         if window_ctx:
@@ -170,6 +183,8 @@ def _voice_loop(
             first = next(iter(chunks), None)
             if first is None:
                 reply_text = "Sorry, I didn't get a response."
+                sm.transition(LumiState.SPEAK)
+                push_caption("lumi", reply_text, final=True, base_url=caption_base)
                 tts.speak(reply_text)
             else:
                 timer.mark("router_ms")
@@ -189,9 +204,15 @@ def _voice_loop(
                         typer.echo(chunk, nl=False)
                         yield chunk
 
+                def _push_reply_caption(sentence: str, is_last: bool) -> None:
+                    # One sentence at a time, not the growing reply — a
+                    # cumulative caption ate up the whole screen on long,
+                    # multi-sentence replies (found in real use, 2026-07-02).
+                    push_caption("lumi", sentence, final=is_last, base_url=caption_base)
+
                 # --- Failure mode: TTS crash ---
                 try:
-                    speak_streaming(tts, _collecting_chunks())
+                    speak_streaming(tts, _collecting_chunks(), on_sentence=_push_reply_caption)
                 except Exception as exc:
                     log.warning("tts.error", error=str(exc))
                 reply_text = "".join(collected)
@@ -200,6 +221,7 @@ def _voice_loop(
             reply_text = safe_error_message(exc, where="voice.router")
             typer.echo(f"Lumi: {reply_text}")
             sm.transition(LumiState.SPEAK)
+            push_caption("lumi", reply_text, final=True, base_url=caption_base)
             try:
                 tts.speak(reply_text)
             except Exception:
@@ -251,7 +273,16 @@ def run(
         compute_type=cfg.whisper_compute,
         cache_dir=cfg.models_dir,
     )
-    llm = make_llm_backend(cfg)
+
+    from .ui.web.persistence import load_settings as _load_user  # noqa: PLC0415
+
+    # Loaded before make_llm_backend (not just before build_cloud_bridge)
+    # so the voice loop gets the SAME RoutedBackend cloud escalation chat.py
+    # gets — passing user_settings=None here previously meant voice queries
+    # never reached Gemini even with cloud routing enabled; only OpenClaw
+    # skills did, via build_cloud_bridge below.
+    _user = _load_user(cfg.data_dir)
+    llm = make_llm_backend(cfg, user_settings=_user)
 
     memory: MemoryStore | None = None
     if cfg.memory_enabled and MemoryStore.is_available():
@@ -260,9 +291,7 @@ def run(
     audit_log = AuditLog(cfg.data_dir)
 
     from .runtime.session import build_cloud_bridge  # noqa: PLC0415
-    from .ui.web.persistence import load_settings as _load_user  # noqa: PLC0415
 
-    _user = _load_user(cfg.data_dir)
     bridge, pseudo, _mode = build_cloud_bridge(
         _user, openclaw_enabled=cfg.openclaw_enabled,
     )

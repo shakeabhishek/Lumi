@@ -72,3 +72,41 @@ def state_callback(base_url: str = "http://127.0.0.1:8080") -> Callable[[LumiSta
     def _on_change(state: LumiState) -> None:
         push_state(state, base_url=base_url)
     return _on_change
+
+
+# ── Live captions ─────────────────────────────────────────────────────────
+#
+# Separate from push_state/state_callback on purpose — captions carry text,
+# StateMachine stays a bare enum (see runtime/state_machine.py). Routed
+# through the SAME single-thread _executor as push_state so caption pushes
+# can't reorder relative to state-transition pushes from the same turn.
+
+
+def push_caption(
+    speaker: str, text: str, final: bool, base_url: str = "http://127.0.0.1:8080",
+) -> None:
+    """Schedule a fire-and-forget caption POST. Returns immediately."""
+    _executor.submit(_send_caption, speaker, text, final, base_url)
+
+
+def _send_caption(speaker: str, text: str, final: bool, base_url: str) -> None:
+    try:
+        httpx.post(
+            f"{base_url.rstrip('/')}/api/caption",
+            data={"speaker": speaker, "text": text, "final": str(final)},
+            timeout=1.5,
+        )
+    except (httpx.HTTPError, httpx.TimeoutException):
+        pass  # silent drop, same philosophy as _send() — a caption is not worth retrying
+
+
+def clear_caption(base_url: str = "http://127.0.0.1:8080") -> None:
+    """Schedule a fire-and-forget caption-clear POST. Returns immediately."""
+    _executor.submit(_send_clear_caption, base_url)
+
+
+def _send_clear_caption(base_url: str) -> None:
+    try:
+        httpx.post(f"{base_url.rstrip('/')}/api/caption/clear", timeout=1.5)
+    except (httpx.HTTPError, httpx.TimeoutException):
+        pass

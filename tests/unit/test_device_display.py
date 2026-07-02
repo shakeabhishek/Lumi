@@ -107,6 +107,54 @@ def test_api_state_rejects_invalid_state(client: TestClient) -> None:
     assert "idle" in r.text and "speak" in r.text
 
 
+def test_api_caption_publishes_to_bus(client: TestClient) -> None:
+    """POST /api/caption is CSRF-bypassed like /api/state — same trust
+    model, the voice loop is a separate OS process with no cookie."""
+    r = client.post("/api/caption", data={"speaker": "user", "text": "hello", "final": "true"})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "speaker": "user", "final": True}
+
+    bus = client.app.state.device_bus
+    assert bus is not None
+    latest = bus.latest()
+    assert latest is not None
+    assert latest["caption"] == {"speaker": "user", "text": "hello", "final": True}
+
+
+def test_api_caption_rejects_invalid_speaker(client: TestClient) -> None:
+    r = client.post("/api/caption", data={"speaker": "bogus", "text": "hi"})
+    assert r.status_code == 400
+
+
+def test_api_caption_defaults_final_false(client: TestClient) -> None:
+    r = client.post("/api/caption", data={"speaker": "lumi", "text": "hi"})
+    assert r.status_code == 200
+    assert r.json()["final"] is False
+    bus = client.app.state.device_bus
+    assert bus.latest()["caption"]["final"] is False
+
+
+def test_api_caption_clear_publishes_none(client: TestClient) -> None:
+    # Seed a caption first so we can confirm clearing actually changes it.
+    client.post("/api/caption", data={"speaker": "user", "text": "hi", "final": "true"})
+    r = client.post("/api/caption/clear")
+    assert r.status_code == 200
+    bus = client.app.state.device_bus
+    assert bus.latest()["caption"] is None
+
+
+def test_caption_merges_without_clobbering_other_bus_keys(client: TestClient) -> None:
+    """DeviceBus.publish() merges partial updates — a caption push must not
+    erase the face-state fields a prior /api/state push set, and vice versa."""
+    client.post("/api/state", data={"state": "listen"})
+    client.post("/api/caption", data={"speaker": "user", "text": "hi", "final": "true"})
+
+    bus = client.app.state.device_bus
+    latest = bus.latest()
+    assert latest["state"] == "listen"
+    assert latest["caption"] == {"speaker": "user", "text": "hi", "final": True}
+
+
 @pytest.mark.asyncio
 async def test_bus_seeded_via_publish_face_state(tmp_path) -> None:
     """The contract we care about: after publish_face_state() fires for

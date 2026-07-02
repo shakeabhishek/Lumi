@@ -9,6 +9,7 @@ import { SoundVisualizer } from './components/SoundVisualizer';
 import { AudioControls } from './components/AudioControls';
 import { RightPanel } from './components/RightPanel';
 import { AmbientBackground } from './components/AmbientBackground';
+import { CaptionBubble } from './components/CaptionBubble';
 import { useDeviceState, type FaceStyle, type FaceState } from './state';
 
 export function App() {
@@ -38,7 +39,8 @@ export function App() {
       <AmbientBackground />
       {state === 'speak' && style !== 'terminal' && <SoundVisualizer />}
       <AudioControls micMuted={device.micMuted} volume={device.volume} brightness={device.brightness} />
-      
+      <CaptionBubble caption={device.caption} />
+
       {/* Center Face (Perfectly Centered) */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
         <AnimatePresence mode="wait">

@@ -867,6 +867,9 @@ secrets = [
 voice = [
     { name = "resemblyzer" },
 ]
+wake = [
+    { name = "openwakeword" },
+]
 web = [
     { name = "fastapi" },
     { name = "jinja2" },
@@ -887,6 +890,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "ollama", specifier = ">=0.3" },
     { name = "onnxruntime", specifier = ">=1.17" },
+    { name = "openwakeword", marker = "extra == 'wake'", specifier = ">=0.4.0" },
     { name = "piper-tts", marker = "platform_machine != 'arm64' or sys_platform != 'darwin'", specifier = ">=1.2" },
     { name = "psutil", marker = "extra == 'host'", specifier = ">=5.9" },
     { name = "pydantic", specifier = ">=2.7" },
@@ -905,7 +909,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", marker = "extra == 'web'", specifier = ">=0.30" },
 ]
-provides-extras = ["dev", "memory", "web", "host", "secrets", "voice"]
+provides-extras = ["dev", "memory", "web", "host", "secrets", "voice", "wake"]
 
 [[package]]
 name = "markdown-it-py"
@@ -1350,6 +1354,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5a/30/5f26df29509eccd86b99b481ac9ffa39da49ba9577cc69071c552ae30447/opentelemetry_semantic_conventions-0.64b0.tar.gz", hash = "sha256:72f76fb2d1582d9d033dd1fcd84532e961e6ff3d90d24ba6fabc72975a83864c", size = 148340, upload-time = "2026-06-24T15:20:09.267Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f2/ca/23ba87a221b574a7c5a99d48849d80bfe8b047624681357e2b002e566187/opentelemetry_semantic_conventions-0.64b0-py3-none-any.whl", hash = "sha256:ea77e85e354b8f604ddbe5f3d9135216f982fa4d77e5859ac30f6d8a50505aa6", size = 203713, upload-time = "2026-06-24T15:19:53.339Z" },
+]
+
+[[package]]
+name = "openwakeword"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "onnxruntime" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/16/40/2afdab3146f08fa51ca74eba6f44ce4f26bd2bd88e255f34b42b0f495ef0/openwakeword-0.4.0.tar.gz", hash = "sha256:58714db20d9fdc6a089e4ef714c98807519ba00822bd32e156ad4f2a00ec9d23", size = 9289877, upload-time = "2023-04-22T22:07:31.767Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/18/0f/6b22ebf0808363d0c71f7e5d0880b1c13c6a2cdcae2dc2cb8adfbdbcc278/openwakeword-0.4.0-py3-none-any.whl", hash = "sha256:2c353f49a35d384507403efde3db439353d8281a52d08a0e42a5b493e5145075", size = 9285483, upload-time = "2023-04-22T22:07:28.766Z" },
 ]
 
 [[package]]
