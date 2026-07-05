@@ -13,6 +13,7 @@ Subcommands:
 
 from __future__ import annotations
 
+import concurrent.futures
 import sys
 
 import typer
@@ -75,6 +76,31 @@ def _get_active_window_context(cfg: Settings) -> str:
         return str(w) if w else ""
     except Exception:
         return ""
+
+
+# Safety-net timeouts for the two blocking steps in a voice-loop turn that
+# have no bound of their own (unlike recording, which is always exactly
+# cfg.audio_record_duration_s). Mirrors chat.py's _CHUNK_TIMEOUT_S pattern
+# for the same reason: a stuck LLM call or a stuck TTS/playback call would
+# otherwise freeze the whole voice loop forever with nothing to recover it —
+# exactly what happened with the Piper/aplay hang found on the Pi
+# (2026-07-05, since fixed at the root, but this is the general safety net
+# so a *different* future hang can't do the same thing).
+_THINK_TIMEOUT_S = 45.0  # first LLM/skill chunk — sized for a cold cloud round-trip
+_SPEAK_TIMEOUT_S = 90.0  # remaining LLM stream + TTS synthesis + playback, whole turn
+
+
+def _run_with_timeout(fn, *args, timeout: float, **kwargs):
+    """Run fn(*args, **kwargs) in a background thread; raise TimeoutError if
+    it doesn't finish in time. Python can't force-kill a thread, so a timed-
+    out call keeps running in the background — but the caller gets control
+    back immediately and can recover instead of hanging forever."""
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(fn, *args, **kwargs)
+    try:
+        return future.result(timeout=timeout)
+    finally:
+        pool.shutdown(wait=False)
 
 
 def _voice_loop(
@@ -179,8 +205,18 @@ def _voice_loop(
         # --- Streaming LLM → TTS ---
         try:
             chunks = router.handle_streaming(text)
-            # Collect first chunk to detect errors early before TTS starts
-            first = next(iter(chunks), None)
+            # Collect first chunk to detect errors early before TTS starts.
+            # Timeout-guarded: an LLM/skill call that never returns would
+            # otherwise freeze the whole voice loop forever (see
+            # _THINK_TIMEOUT_S). A TimeoutError here falls through to the
+            # `except Exception` below like any other router failure.
+            try:
+                first = _run_with_timeout(
+                    next, iter(chunks), None, timeout=_THINK_TIMEOUT_S,
+                )
+            except concurrent.futures.TimeoutError:
+                log.warning("router.think_timeout", timeout_s=_THINK_TIMEOUT_S)
+                raise
             if first is None:
                 reply_text = "Sorry, I didn't get a response."
                 sm.transition(LumiState.SPEAK)
@@ -210,9 +246,17 @@ def _voice_loop(
                     # multi-sentence replies (found in real use, 2026-07-02).
                     push_caption("lumi", sentence, final=is_last, base_url=caption_base)
 
-                # --- Failure mode: TTS crash ---
+                # --- Failure mode: TTS crash (or a hang — timeout-guarded,
+                # see _SPEAK_TIMEOUT_S; this is what would have caught the
+                # Piper/aplay hang found on the Pi 2026-07-05 even without
+                # knowing its root cause) ---
                 try:
-                    speak_streaming(tts, _collecting_chunks(), on_sentence=_push_reply_caption)
+                    _run_with_timeout(
+                        speak_streaming, tts, _collecting_chunks(),
+                        on_sentence=_push_reply_caption, timeout=_SPEAK_TIMEOUT_S,
+                    )
+                except concurrent.futures.TimeoutError:
+                    log.warning("tts.speak_timeout", timeout_s=_SPEAK_TIMEOUT_S)
                 except Exception as exc:
                     log.warning("tts.error", error=str(exc))
                 reply_text = "".join(collected)
