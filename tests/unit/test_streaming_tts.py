@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from unittest.mock import MagicMock
 
 from lumi.audio.tts import speak_streaming
@@ -78,19 +79,74 @@ def test_on_sentence_called_with_one_sentence_at_a_time() -> None:
     assert seen == [("First sentence.", False), ("Second sentence.", True)]
 
 
+def test_on_sentence_fires_when_spoken_not_when_parsed() -> None:
+    """Regression test for a real bug found on the Pi (2026-07-05): a
+    single incoming chunk can contain SEVERAL complete sentences at once
+    (routine after RoutedBackend's cloud-first flip — cloud streams
+    arrive in much bigger pieces than local token-by-token streaming
+    did). The old code fired on_sentence the moment each sentence was
+    PARSED off the chunk, all in a tight loop in the main thread — while
+    the background worker thread was still speaking through them one at
+    a time. Visually this looked like "only the last caption ever
+    appears," even though every sentence really was queued: all the
+    caption updates landed within milliseconds of each other while the
+    actual audio was still seconds behind.
+
+    Fix: on_sentence now fires from INSIDE the worker thread, right
+    before tts.speak() is called for that sentence — so caption timing
+    tracks audio timing. This test feeds THREE sentences in one chunk
+    (worst case for the old bug) and makes tts.speak() artificially slow,
+    then asserts each on_sentence call is paced by the PRECEDING speak()
+    call actually finishing — not fired in a burst up front.
+    """
+    speak_started_at: list[float] = []
+    on_sentence_at: list[float] = []
+
+    def slow_speak(_text: str) -> None:
+        speak_started_at.append(time.monotonic())
+        time.sleep(0.05)
+
+    tts = MagicMock()
+    tts.speak.side_effect = slow_speak
+
+    def record_on_sentence(_text: str, _is_last: bool) -> None:
+        on_sentence_at.append(time.monotonic())
+
+    speak_streaming(
+        tts,
+        _chunks("First sentence. Second sentence. Third sentence."),
+        on_sentence=record_on_sentence,
+    )
+
+    assert len(on_sentence_at) == 3
+    assert len(speak_started_at) == 3
+    # Each on_sentence call must land at or after that SAME sentence's
+    # speak() call starts (paced with real timing), not all clustered at
+    # the very start before any speak() has even begun.
+    for i in range(3):
+        assert on_sentence_at[i] >= speak_started_at[i] - 0.01
+    # The gap between the first and last caption update should reflect
+    # the real speaking delay (2 * 0.05s between 3 sentences), not be
+    # near-instant like a parse-time burst would produce.
+    assert on_sentence_at[-1] - on_sentence_at[0] >= 0.08
+
+
 def test_on_sentence_marks_final_when_stream_ends_on_boundary() -> None:
     """Edge case: if the token stream ends exactly on a sentence boundary,
-    `buf` is empty afterward — on_sentence must still fire once more with
-    is_last=True (re-using the last sentence's text) so the caller gets a
-    definitive "turn complete" signal rather than silently never seeing
-    is_last=True at all."""
+    `buf` is empty afterward. The one-item-lookahead design holds the
+    sentence back (undecided whether it's last) until it either sees a
+    following sentence or the stream ends — here the stream ends first,
+    so it fires exactly once, correctly marked final. (An earlier design
+    queued it as non-final immediately, then had to re-fire the same
+    text a second time to signal completion — this is the fix for that:
+    one accurate call instead of two, one of them wrong.)"""
     tts = MagicMock()
     seen: list[tuple[str, bool]] = []
     speak_streaming(
         tts, _chunks("Only one sentence. "),
         on_sentence=lambda text, is_last: seen.append((text, is_last)),
     )
-    assert seen == [("Only one sentence.", False), ("Only one sentence.", True)]
+    assert seen == [("Only one sentence.", True)]
 
 
 def test_on_sentence_not_called_when_omitted() -> None:

@@ -99,8 +99,12 @@ def test_name_property(voice_dir: Path) -> None:
 
 def test_boost_loudness_raises_quiet_speech_to_target_rms() -> None:
     """Regression test for the real "very low volume" bug: quiet speech
-    (like Piper's typical ~0.15 RMS output) must be boosted toward the
-    target RMS, not left as-is."""
+    (like Piper's typical ~0.15 RMS output) must be boosted meaningfully
+    louder, toward (not necessarily hitting exactly) the target RMS —
+    tanh's soft saturation compresses the result somewhat below the
+    pre-saturation target for signals with a lot of energy near the
+    target level, by design (trades hitting an exact number for avoiding
+    harsh hard-clip distortion)."""
     rng = np.random.default_rng(42)
     quiet_speech = (rng.standard_normal(22050).astype(np.float32) * 0.05).clip(-0.3, 0.3)
     quiet_speech = quiet_speech.astype(np.float32)
@@ -109,18 +113,29 @@ def test_boost_loudness_raises_quiet_speech_to_target_rms() -> None:
     boosted = PiperTTS._boost_loudness(quiet_speech)
     boosted_rms = np.sqrt(np.mean(boosted**2))
 
-    assert boosted_rms > original_rms
-    assert boosted_rms == pytest.approx(PiperTTS._TARGET_RMS, rel=0.05)
+    assert boosted_rms > original_rms * 2, "boost should be substantial, not marginal"
+    assert boosted_rms < 1.0
 
 
 def test_boost_loudness_caps_overflowing_peaks() -> None:
     """A signal already near full scale must not exceed [-1, 1] after
-    boosting — peaks get clipped, not allowed to overflow (which would
-    wrap/distort catastrophically rather than just compress)."""
+    boosting — tanh's soft saturation keeps peaks within range (rounding
+    them over smoothly) rather than letting them overflow, which would
+    wrap/distort catastrophically."""
     samples = np.array([1.0, -1.0, 0.5, -0.5], dtype=np.float32)
     boosted = PiperTTS._boost_loudness(samples)
     assert boosted.max() <= 1.0
     assert boosted.min() >= -1.0
+
+
+def test_boost_loudness_is_gentle_on_quiet_samples() -> None:
+    """tanh(x) ≈ x for small x — quiet samples should pass through close
+    to their gain-scaled value, not get flattened the way a hard
+    limiter/compressor with a low threshold would."""
+    quiet = np.array([0.01, -0.01], dtype=np.float32)
+    boosted = PiperTTS._boost_loudness(quiet)
+    expected_linear = quiet * (PiperTTS._TARGET_RMS / 0.01)  # naive gain, no saturation
+    np.testing.assert_allclose(boosted, np.tanh(expected_linear), atol=1e-6)
 
 
 def test_boost_loudness_leaves_silence_untouched() -> None:
@@ -145,6 +160,7 @@ def test_speak_applies_loudness_boost_before_playback(voice_dir: Path) -> None:
         tts = PiperTTS("test-voice", voice_dir)
         tts.speak("quiet")
 
+    original_rms = np.sqrt(np.mean((quiet_int16.astype(np.float32) / 32768.0) ** 2))
     played_samples = mock_play.call_args[0][0]
     played_rms = np.sqrt(np.mean(played_samples**2))
-    assert played_rms == pytest.approx(PiperTTS._TARGET_RMS, rel=0.05)
+    assert played_rms > original_rms * 10, "quiet speech should be boosted substantially"

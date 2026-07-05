@@ -79,7 +79,7 @@ class PiperTTS:
     """
 
     _SAMPLE_RATE = 22050
-    _TARGET_RMS = 0.35
+    _TARGET_RMS = 0.55
 
     def __init__(self, voice: str, voice_dir: Path, output_device: str | None = None) -> None:
         self._voice = voice
@@ -93,20 +93,29 @@ class PiperTTS:
 
     @classmethod
     def _boost_loudness(cls, samples: "np.ndarray") -> "np.ndarray":
-        """Boost quiet speech up to a target average loudness, capping any
-        peaks that overflow.
+        """Boost quiet speech up to a target average loudness, softly
+        saturating any peaks that overflow instead of hard-clipping them.
 
         Found on the Pi (2026-07-05): even at 100% hardware volume, Piper's
         speech sounded "very low" — measured its peak amplitude was already
         at full scale (1.0) but RMS (average loudness) only ~0.15, vs. a
-        test tone's ~0.64. Normal for speech (quiet vowels, loud consonant
-        peaks — high dynamic range) but it means hardware gain alone can't
-        help further: the peaks are already maxed, so more gain just clips
-        them without raising perceived loudness. A uniform gain to hit a
-        target RMS, then hard-clipping the (relatively brief, transient)
-        peaks that overflow, is standard TTS/broadcast loudness
-        normalization — trades a little peak distortion for meaningfully
-        louder speech overall.
+        test tone's ~0.64 (which the user confirmed was clearly audible at
+        max volume). Normal for speech (quiet vowels, loud consonant peaks
+        — high dynamic range) but it means hardware gain alone can't help
+        further: the peaks are already maxed, so more gain just clips them
+        without raising perceived loudness.
+
+        First pass used a hard np.clip at a more conservative target
+        (0.35) and still sounded "very low" — 0.35 RMS is meaningfully
+        quieter than the tone's 0.64 that was confirmed audible. Raised
+        the target to 0.55 (closer to that confirmed-audible level) and
+        switched from a hard clip to tanh-based soft saturation: at this
+        more aggressive gain, a lot of peaks now exceed [-1, 1], and a
+        hard clip on that many samples would sound noticeably crunchy/
+        distorted. tanh rounds over the loudest peaks smoothly (like
+        analog tape saturation) instead of slamming them flat, while
+        barely touching quiet samples (tanh(x) ≈ x for small x) — louder
+        overall with less harshness than a hard clip at the same gain.
         """
         import numpy as np  # noqa: PLC0415
 
@@ -114,7 +123,7 @@ class PiperTTS:
         if rms < 1e-6:
             return samples
         gain = cls._TARGET_RMS / rms
-        return np.clip(samples * gain, -1.0, 1.0).astype(np.float32)
+        return np.tanh(samples * gain).astype(np.float32)
 
     def speak(self, text: str) -> None:
         if not text:
@@ -153,33 +162,53 @@ def speak_streaming(
     Runs TTS in a background thread so audio plays while the LLM continues
     generating the next sentence — significantly reduces perceived latency.
 
-    `on_sentence`, if given, is called once per sentence boundary — the same
-    moment it's queued for TTS — with `(sentence_text, is_last_sentence)`.
+    `on_sentence`, if given, is called once per sentence — the SAME MOMENT
+    the worker thread is about to speak it, not the moment it's parsed off
+    the incoming chunk stream — with `(sentence_text, is_last_sentence)`.
+    This distinction matters: cloud LLM chunks routinely contain several
+    complete sentences at once (found in real use, 2026-07-05, after the
+    RoutedBackend cloud-first flip), so if the callback fired at parse
+    time, all of that chunk's captions would fire in a burst milliseconds
+    apart while the worker thread is still speaking through them one at a
+    time — visually indistinguishable from "only the last one ever
+    appeared," even though every sentence really was queued. Firing from
+    the worker keeps captions in lockstep with what's actually audible.
+
     Deliberately just the ONE sentence, not the cumulative reply so far: an
     earlier cumulative design made the voice loop's live caption grow to
     contain the entire reply, which for a multi-sentence answer ate up the
     whole screen instead of reading like live captions (found in real use,
     2026-07-02). `is_last_sentence=True` on the final call lets the caller
     mark that turn's caption as complete without a separate full-text push.
+
+    Determining "is this the last sentence" also can't happen at parse
+    time — more chunks (and more sentences) might still be coming. Each
+    sentence is held back one slot (`pending`) until the FOLLOWING
+    sentence is parsed (confirming the held one wasn't last) or the
+    stream ends (confirming it was) — a one-item lookahead, not a
+    cumulative buffer.
     """
     import queue  # noqa: PLC0415
     import re  # noqa: PLC0415
     import threading  # noqa: PLC0415
 
-    q: queue.Queue[str | None] = queue.Queue()
+    q: queue.Queue[tuple[str, bool] | None] = queue.Queue()
 
     def _worker() -> None:
         while True:
-            sentence = q.get()
-            if sentence is None:
+            item = q.get()
+            if item is None:
                 break
+            sentence, is_last = item
+            if on_sentence is not None:
+                on_sentence(sentence, is_last)
             tts.speak(sentence)
 
     t = threading.Thread(target=_worker, daemon=True)
     t.start()
 
     buf = ""
-    last_sentence = ""
+    pending: str | None = None
     for chunk in chunks:
         buf += chunk
         # Split on sentence-ending punctuation followed by whitespace
@@ -187,24 +216,21 @@ def speak_streaming(
         for part in parts[:-1]:
             clean = part.strip()
             if clean:
-                q.put(clean)
-                last_sentence = clean
-                if on_sentence is not None:
-                    on_sentence(clean, False)
+                if pending is not None:
+                    q.put((pending, False))
+                pending = clean
         buf = parts[-1]
 
     if buf.strip():
-        clean = buf.strip()
-        q.put(clean)
-        last_sentence = clean
-        if on_sentence is not None:
-            on_sentence(clean, True)
-    elif on_sentence is not None and last_sentence:
-        # Stream ended exactly on a sentence boundary — the last real
-        # sentence already fired with is_last_sentence=False above.
-        # Re-fire the SAME text marked final so the caller still gets a
-        # definitive "this turn's caption is complete" signal.
-        on_sentence(last_sentence, True)
+        # A trailing, punctuation-less remainder is the true final piece —
+        # whatever was pending (if anything) is confirmed NOT last.
+        if pending is not None:
+            q.put((pending, False))
+        q.put((buf.strip(), True))
+    elif pending is not None:
+        # Stream ended exactly on a sentence boundary — the held-back
+        # sentence IS the final one after all.
+        q.put((pending, True))
     q.put(None)
     t.join()
 
