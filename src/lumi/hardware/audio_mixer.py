@@ -12,6 +12,11 @@ Two separate knobs, deliberately not conflated:
   not just an app-level flag. This matches the smart-speaker convention
   the on-screen mic button's icon implies (a mic-mute, not a speaker
   mute), and holds true even before a voice loop consumes the mic.
+  PGA's mute switch alone is NOT sufficient, though — "AGC" (Automatic
+  Gain Control) actively fights it, cranking gain against near-silence
+  regardless of PGA's mute state (found live on the Pi, 2026-07-05;
+  see set_mic_muted/_disable_agc). Every mute call also force-disables
+  AGC for this reason.
 
 Card is addressed by name ("seeed2micvoicec"), not a numeric index, since
 card ordering can shift (e.g. relative to the HDMI audio outputs) but the
@@ -32,6 +37,7 @@ log = get_logger(__name__)
 _CARD = "seeed2micvoicec"
 _SPEAKER_CONTROL = "HP"
 _MIC_CONTROL = "PGA"
+_AGC_CONTROL = "AGC"
 
 
 def _amixer(*args: str) -> str | None:
@@ -80,5 +86,30 @@ def set_mic_muted(muted: bool) -> bool:
     amixer rejects `mute`/`unmute` on it ("Invalid command!"); the
     correct keywords for a capture switch are `nocap` (mute) / `cap`
     (unmute), confirmed against the real card.
+
+    Also force-disables AGC (see _disable_agc's docstring) on every
+    call, muted or not — found live on the Pi (2026-07-05) that PGA's
+    own mute switch alone did NOT silence the capture stream; AGC kept
+    fighting it. Redundant with the one-time fix applied at deploy time
+    (`alsactl store`), but cheap insurance against AGC getting
+    re-enabled by some other path (a factory reset, a driver reload).
     """
+    _disable_agc()
     return _amixer("sset", _MIC_CONTROL, "nocap" if muted else "cap") is not None
+
+
+def _disable_agc() -> None:
+    """AGC (Automatic Gain Control) actively fights PGA's own mute and
+    gain settings — found live on the Pi (2026-07-05): muting PGA alone
+    left the capture stream receiving heavily saturated "audio" (33% of
+    samples above 0.9 amplitude, sustained through multi-second clips),
+    because AGC kept cranking gain trying to hit its own target level
+    against near-silence, regardless of PGA's mute state. Confirmed:
+    disabling AGC together with PGA's mute produced true silence
+    (peak=0.0, rms=0.0 measured directly). AGC fighting the manually-
+    tuned PGA gain level is also a plausible contributor to the mic
+    pickup/STT quality issues seen earlier in the same session, even
+    when NOT muted — so this is called unconditionally, not gated on
+    the mute state itself.
+    """
+    _amixer("sset", _AGC_CONTROL, "off")

@@ -96,6 +96,28 @@ def test_set_mic_muted_targets_pga_control() -> None:
         assert args == ["amixer", "-c", "seeed2micvoicec", "sset", "PGA", "cap"]
 
 
+def test_set_mic_muted_also_disables_agc() -> None:
+    """Regression test for a real bug found on the Pi (2026-07-05): PGA's
+    own mute switch alone did NOT silence the capture stream — AGC
+    (Automatic Gain Control) kept cranking gain trying to hit its target
+    level against near-silence, regardless of PGA's mute state. Directly
+    measured: muting PGA alone still left the capture stream at 33% of
+    samples above 0.9 amplitude; disabling AGC together with PGA's mute
+    produced true silence (peak=0.0, rms=0.0). set_mic_muted() must
+    disable AGC on every call, whether muting or unmuting — it's cheap
+    insurance against AGC being re-enabled by some other path, not
+    conditional on the mute direction."""
+    with patch("subprocess.run", return_value=_fake_run(0)) as mock_run:
+        audio_mixer.set_mic_muted(True)
+        all_calls = [c.args[0] for c in mock_run.call_args_list]
+        assert ["amixer", "-c", "seeed2micvoicec", "sset", "AGC", "off"] in all_calls
+
+        mock_run.reset_mock()
+        audio_mixer.set_mic_muted(False)
+        all_calls = [c.args[0] for c in mock_run.call_args_list]
+        assert ["amixer", "-c", "seeed2micvoicec", "sset", "AGC", "off"] in all_calls
+
+
 def test_amixer_timeout_returns_none() -> None:
     with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="amixer", timeout=3)):
         assert audio_mixer.set_volume(50) is False
