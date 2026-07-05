@@ -1,20 +1,26 @@
-"""Tests for RoutedBackend — local-first LLM with cloud escalation.
+"""Tests for RoutedBackend — cloud-first LLM with a local fallback.
+
+Flipped 2026-07-05 from local-first-with-escalation: the old design ran
+local to completion FIRST, only trying cloud if the local reply looked
+evasive — meaning an escalated turn paid local generation time PLUS
+cloud generation time, the worst-case latency. Cloud-first tries cloud
+first for every turn (when configured); local only serves the reply if
+cloud is unavailable or empty.
 
 Coverage focus:
   * No cloud client → behaves exactly like the local backend
-  * Local reply trips low-confidence → cloud is called
-  * Local reply is fine → cloud is NOT called (we don't waste API spend)
+  * Cloud available and streams → cloud serves the turn, local not called
+  * Cloud unavailable/raises before any chunk → clean fallback to local
+  * Cloud returns nothing at all → falls back to local
+  * Cloud fails PARTWAY through (after some chunks) → stream stops, no
+    local splice (would look like two answers stitched together)
   * Memory-retrieval prelude is stripped before cloud send
-  * Explicit "cloud: ..." prefix forces cloud regardless of local quality
-  * Cloud failure falls back to the local reply (never serve nothing)
   * `last_route` accurately reports which path served the turn
 """
 
 from __future__ import annotations
 
-from typing import Iterator
-
-import pytest
+from collections.abc import Iterator
 
 from lumi.llm.ollama_backend import LLMBackend, Message
 from lumi.llm.routed_backend import RoutedBackend
@@ -35,26 +41,39 @@ class _FakeLocal(LLMBackend):
 
     def chat(self, messages: list[Message]) -> Iterator[str]:
         self.calls.append([dict(m) for m in messages])
-        for ch in self._reply:
-            yield ch
+        yield from self._reply
 
 
 class _FakeCloud:
-    """Stub CloudLLMClient — records calls and returns a configured reply
-    (or raises if `error` is set)."""
+    """Stub CloudLLMClient — records calls and streams a configured
+    sequence of chunks. `error_after` raises mid-stream after that many
+    chunks (None = never); `fail_immediately` raises before yielding
+    anything at all."""
 
     label = "gemini"
 
-    def __init__(self, reply: str = "from cloud", error: Exception | None = None) -> None:
-        self._reply = reply
-        self._error = error
+    def __init__(
+        self,
+        chunks: list[str] | None = None,
+        fail_immediately: Exception | None = None,
+        error_after: int | None = None,
+    ) -> None:
+        self._chunks = chunks if chunks is not None else ["from cloud"]
+        self._fail_immediately = fail_immediately
+        self._error_after = error_after
         self.calls: list[list[Message]] = []
 
     def complete(self, messages: list[Message]) -> str:
-        if self._error:
-            raise self._error
+        return "".join(self._chunks)
+
+    def complete_streaming(self, messages: list[Message]) -> Iterator[str]:
         self.calls.append([dict(m) for m in messages])
-        return self._reply
+        if self._fail_immediately:
+            raise self._fail_immediately
+        for i, chunk in enumerate(self._chunks):
+            if self._error_after is not None and i >= self._error_after:
+                raise RuntimeError("stream dropped mid-turn")
+            yield chunk
 
 
 def _hello_msgs(user_text: str = "hi") -> list[Message]:
@@ -78,38 +97,77 @@ def test_no_cloud_passes_through_local() -> None:
     assert routed.last_route == "local"
 
 
-# ── Low-confidence escalation ──────────────────────────────────────────────
+# ── Cloud-first happy path ──────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("local_reply", [
-    "I don't know.",
-    "I'm not sure.",
-    "I cannot help with that.",
-    "Yes.",                          # too short → low confidence
-    "As an AI language model, I cannot…",
-])
-def test_low_confidence_escalates_to_cloud(local_reply: str) -> None:
-    local = _FakeLocal(local_reply)
-    cloud = _FakeCloud("Detailed cloud answer.")
+def test_cloud_serves_the_turn_when_available() -> None:
+    """Cloud is tried first and wins — local is never even called,
+    unlike the old escalation design."""
+    local = _FakeLocal("local should not be used")
+    cloud = _FakeCloud(chunks=["Detailed ", "cloud ", "answer."])
     routed = RoutedBackend(local=local, cloud=cloud)
 
     chunks = list(routed.chat(_hello_msgs()))
     assert "".join(chunks) == "Detailed cloud answer."
     assert routed.last_route == "cloud:gemini"
+    assert local.calls == [], "local was called despite cloud succeeding"
     assert len(cloud.calls) == 1
 
 
-def test_confident_local_does_not_call_cloud() -> None:
-    """If the local model gave a good answer, we don't burn cloud
-    API spend re-asking. Important — defaults to local."""
-    local = _FakeLocal("Paris is the capital of France. It has been the seat of government since the Middle Ages.")
-    cloud = _FakeCloud("you should never see this")
+def test_cloud_streams_chunk_by_chunk() -> None:
+    """Chunks arrive incrementally from the caller's perspective, not
+    buffered into one blob — this is the whole point of the flip."""
+    local = _FakeLocal("unused")
+    cloud = _FakeCloud(chunks=["a", "b", "c"])
     routed = RoutedBackend(local=local, cloud=cloud)
 
-    chunks = list(routed.chat(_hello_msgs("what's the capital of france")))
-    assert "Paris" in "".join(chunks)
-    assert cloud.calls == [], "cloud was called despite a confident local reply"
+    chunks = list(routed.chat(_hello_msgs()))
+    assert chunks == ["a", "b", "c"]
+
+
+# ── Cloud unavailable before any output → clean fallback ──────────────────
+
+
+def test_cloud_exception_before_first_chunk_falls_back_to_local() -> None:
+    """Cloud raises immediately (network down, bad key) — nothing has
+    been shown to the caller yet, so falling back to local is clean."""
+    local = _FakeLocal("local saves the day")
+    cloud = _FakeCloud(fail_immediately=RuntimeError("network is dead"))
+    routed = RoutedBackend(local=local, cloud=cloud)
+
+    chunks = list(routed.chat(_hello_msgs()))
+    assert "".join(chunks) == "local saves the day"
     assert routed.last_route == "local"
+
+
+def test_cloud_empty_stream_falls_back_to_local() -> None:
+    """Cloud streams nothing at all (empty candidates, content filter,
+    quota exhausted) — falls back to local rather than showing nothing."""
+    local = _FakeLocal("local saves the day")
+    cloud = _FakeCloud(chunks=[])
+    routed = RoutedBackend(local=local, cloud=cloud)
+
+    chunks = list(routed.chat(_hello_msgs()))
+    assert "".join(chunks) == "local saves the day"
+    assert routed.last_route == "local"
+
+
+# ── Cloud fails PARTWAY through → stop, don't splice local ────────────────
+
+
+def test_cloud_failure_mid_stream_stops_without_local_splice() -> None:
+    """Once some cloud chunks have already reached the caller, we can't
+    un-yield them — appending a full local reply afterward would look
+    like two answers stitched together. The stream should just stop."""
+    local = _FakeLocal("this must NOT appear in the output")
+    cloud = _FakeCloud(chunks=["Partial ", "reply", " before drop"], error_after=2)
+    routed = RoutedBackend(local=local, cloud=cloud)
+
+    chunks = list(routed.chat(_hello_msgs()))
+    assert "".join(chunks) == "Partial reply"
+    assert "must NOT appear" not in "".join(chunks)
+    assert routed.last_route == "cloud:gemini"
+    assert local.calls == [], "local was spliced in after a partial cloud stream"
 
 
 # ── Memory prelude scrubbing ───────────────────────────────────────────────
@@ -121,8 +179,8 @@ def test_memory_prelude_stripped_from_cloud_call() -> None:
     SNIPPETS" header. That message must NOT reach the cloud — only
     the live turn + system prompt do. (Live untrusted context like
     clipboard hints stays because it's from THIS turn.)"""
-    local = _FakeLocal("I don't know.")
-    cloud = _FakeCloud("from cloud, no memory needed")
+    local = _FakeLocal("unused")
+    cloud = _FakeCloud(chunks=["from cloud, no memory needed"])
     routed = RoutedBackend(local=local, cloud=cloud)
 
     msgs: list[Message] = [
@@ -144,49 +202,3 @@ def test_memory_prelude_stripped_from_cloud_call() -> None:
     assert any("USER-PROVIDED CONTEXT" in c for c in contents), \
         "live context hint was wrongly stripped"
     assert any("what did I take yesterday" in c for c in contents)
-
-
-# ── Explicit opt-in ────────────────────────────────────────────────────────
-
-
-def test_cloud_prefix_forces_cloud_even_on_confident_local() -> None:
-    """The user can override the heuristic by typing "cloud: ..." —
-    skips the local round-trip entirely and goes straight to cloud."""
-    local = _FakeLocal("local has plenty to say here, no need to escalate.")
-    cloud = _FakeCloud("from cloud per explicit request")
-    routed = RoutedBackend(local=local, cloud=cloud)
-
-    chunks = list(routed.chat(_hello_msgs("cloud: who painted the night watch")))
-    assert "".join(chunks) == "from cloud per explicit request"
-    assert routed.last_route == "cloud:gemini"
-    # Local was NOT called — explicit-cloud is a fast path.
-    assert local.calls == [], "local was called despite explicit cloud opt-in"
-
-
-# ── Cloud failure → fall back ──────────────────────────────────────────────
-
-
-def test_cloud_failure_falls_back_to_local_reply() -> None:
-    """If cloud throws, RoutedBackend serves the local reply rather
-    than nothing. The user is never stranded with zero output just
-    because the network blipped."""
-    local = _FakeLocal("I don't know.")
-    cloud = _FakeCloud(error=RuntimeError("network is dead"))
-    routed = RoutedBackend(local=local, cloud=cloud)
-
-    chunks = list(routed.chat(_hello_msgs()))
-    assert "".join(chunks) == "I don't know."
-    assert routed.last_route == "local"
-
-
-def test_cloud_returns_empty_falls_back_to_local() -> None:
-    """If cloud returns a blank string (rare but possible — API
-    quota exhausted, content filter, etc.) we keep local rather
-    than show the user nothing."""
-    local = _FakeLocal("I don't know.")
-    cloud = _FakeCloud(reply="")
-    routed = RoutedBackend(local=local, cloud=cloud)
-
-    chunks = list(routed.chat(_hello_msgs()))
-    assert "".join(chunks) == "I don't know."
-    assert routed.last_route == "local"

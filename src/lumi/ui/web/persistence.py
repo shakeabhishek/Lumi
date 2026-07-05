@@ -95,11 +95,13 @@ class UserSettings(BaseModel):
     display_theme: str = "default"
 
     # Cloud routing — when True (and a cloud_llm_provider + key are
-    # configured), RoutedBackend re-asks the cloud LLM whenever the
-    # local model emits a low-confidence reply ("I don't know" /
-    # short / boilerplate). See llm/routed_backend.py for the gating
-    # signals. Off by default — opt-in because every escalated turn
-    # is a network round-trip and a cloud-API spend.
+    # configured), RoutedBackend tries the cloud LLM FIRST for every
+    # turn (flipped 2026-07-05 from the original design, where local
+    # ran first and cloud was only a fallback for evasive-looking
+    # replies) — local only serves the turn if cloud is unavailable
+    # or empty. See llm/routed_backend.py. Off by default — opt-in
+    # because every turn is now a network round-trip and cloud-API
+    # spend, not just occasional escalations.
     cloud_routing_enabled: bool = False
 
     # Conversation mode

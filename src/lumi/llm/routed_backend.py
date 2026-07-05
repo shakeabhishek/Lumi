@@ -1,12 +1,28 @@
-"""RoutedBackend — local-first LLM with cloud escalation on low confidence.
+"""RoutedBackend — cloud-first LLM with a local fallback.
 
 Wraps a local `LLMBackend` (Ollama/Hailo/Mock) and an optional cloud
-client. The local backend always runs first. If its reply trips a
-low-confidence signal — short, "I don't know"–style, or matches an
-explicit user marker — RoutedBackend discards the local reply and
-re-asks the cloud LLM with the same messages, then yields the cloud
-reply instead. If cloud is unavailable or also fails, the local
-reply is returned as the safest fallback.
+client. When cloud is configured, it is tried FIRST for every turn —
+local only serves the reply if cloud is unavailable (no network, no
+key, request fails) or returns nothing. If no cloud client is
+configured at all, RoutedBackend is a transparent passthrough to
+local.
+
+Flipped 2026-07-05 from the original local-first-with-escalation
+design (local always ran to completion, THEN cloud was tried only if
+the local reply looked evasive). That meant an escalated turn paid
+local generation time PLUS cloud generation time — the worst-case
+latency, not the best. Cloud-first trades "occasional cloud API
+spend" for "responsive replies on the model that's actually fast and
+capable," which is the tradeoff the user explicitly asked for.
+
+Streaming: cloud is tried via `complete_streaming()` and its FIRST
+chunk is peeked before committing — if that first chunk never arrives
+(cloud down, key missing, immediate error), nothing has been shown to
+the caller yet, so falling back to local is clean. If cloud fails
+PARTWAY through (after some chunks were already yielded), we can't
+un-yield what's already been shown — splicing in a full local reply
+at that point would look like two answers stitched together, so we
+just stop and log rather than fabricate a coherent recovery.
 
 Privacy invariant (mirrored from CLAUDE.md V2 roadmap):
 
@@ -38,47 +54,15 @@ from .ollama_backend import LLMBackend, Message
 log = get_logger(__name__)
 
 
-# ── Confidence detection ─────────────────────────────────────────────────────
-
-
-# Phrases the local model emits when it doesn't have a good answer.
-# Match anywhere in the reply, case-insensitive. Designed to catch
-# qwen2.5/llama-style boilerplate without false-positive on real
-# answers that happen to contain "know" or "sure".
-_LOW_CONFIDENCE_MARKERS = re.compile(
-    r"(?:^|\b)("
-    r"i\s+don't\s+know|i\s+do\s+not\s+know|"
-    r"i'?m\s+not\s+sure|i\s+am\s+not\s+sure|"
-    r"can'?t\s+help|cannot\s+help|"
-    r"no\s+idea|"
-    r"unable\s+to\s+(?:help|answer|provide)|"
-    r"i\s+don't\s+have\s+(?:enough\s+)?(?:information|context|access)|"
-    r"as\s+an\s+ai\s+language\s+model"
-    r")(?:$|\b)",
-    re.IGNORECASE,
-)
-
-# Anything shorter than this from the local model is treated as
-# evasive (one-word "Yes." / "No." / "OK." replies often signal the
-# model gave up rather than answering). Keep low — real short
-# answers like "12" to "what's 7+5" should NOT escalate, so 12 chars
-# is a reasonable floor that captures "Yes." but lets "12" pass.
-# Tuned against a small handful of qwen2.5:7b traces.
-_MIN_REPLY_CHARS = 12
-
-# Explicit per-turn opt-in: "cloud: <question>" forces a routed call
-# even if the local model would have answered confidently. Useful for
-# A/B testing or when the user wants the cloud's stronger reasoning.
+# Explicit per-turn marker: "cloud: <question>" signals the user wants to
+# bypass skill routing and go straight to the LLM. RoutedBackend itself no
+# longer branches on this (cloud is tried first for every turn regardless,
+# since 2026-07-05's cloud-first flip), but SkillRouter's
+# _worth_trying_openclaw() still uses it to skip the OpenClaw bridge for
+# an explicit escalation — that's a separate concern from RoutedBackend's
+# own local/cloud choice, so the constant stays here as the shared home
+# for "what does the cloud: prefix look like."
 _EXPLICIT_CLOUD_PREFIX = re.compile(r"^\s*cloud:\s*", re.IGNORECASE)
-
-
-def _trips_low_confidence(reply: str) -> bool:
-    """True if the local reply looks evasive / unhelpful."""
-    if not reply or len(reply.strip()) < _MIN_REPLY_CHARS:
-        return True
-    if _LOW_CONFIDENCE_MARKERS.search(reply):
-        return True
-    return False
 
 
 # ── Cloud-safe message filtering ─────────────────────────────────────────────
@@ -111,18 +95,22 @@ class CloudLLMClient:
     Implementations live in cloud_clients.py; this class doc is the
     contract.
 
-    A cloud client takes a messages list (same shape as LLMBackend.chat)
-    and returns the full reply as a string. Synchronous + non-streaming
-    by design — streaming the second pass would tangle with the local
-    pass and double the perceived latency. For a short fallback reply
-    the difference is negligible.
+    A cloud client takes a messages list (same shape as LLMBackend.chat).
+    `complete_streaming` is the primary path (RoutedBackend calls it for
+    every cloud-first turn); `complete` (full reply, non-streaming) is
+    kept for callers that explicitly want a one-shot string.
     """
 
-    def complete(self, messages: list[Message]) -> str:                 # pragma: no cover - protocol
+    def complete(self, messages: list[Message]) -> str:  # pragma: no cover - protocol
+        raise NotImplementedError
+
+    def complete_streaming(
+        self, messages: list[Message],
+    ) -> Iterator[str]:  # pragma: no cover - protocol
         raise NotImplementedError
 
     @property
-    def label(self) -> str:                                             # pragma: no cover - protocol
+    def label(self) -> str:  # pragma: no cover - protocol
         """Returned for audit logging — e.g., 'gemini'."""
         raise NotImplementedError
 
@@ -150,74 +138,48 @@ class RoutedBackend(LLMBackend):
         return self._local.model
 
     def chat(self, messages: list[Message]) -> Iterator[str]:
-        """Yield reply text. Always runs local first; may swap in
-        cloud on low confidence or explicit opt-in.
+        """Yield reply text. Cloud is tried FIRST when configured —
+        local only serves the turn if cloud is unavailable or empty.
 
-        Implemented as a one-shot collect-then-decide for the cloud
-        path: we can't tell whether the local reply is good until
-        it's complete, and streaming both backends in parallel would
-        double API spend / cold-start time. The local path still
-        streams to the caller when the route stays local.
+        The first cloud chunk is peeked before committing: if it never
+        arrives, nothing has reached the caller yet, so falling back
+        to local is clean. If cloud fails partway through (after some
+        chunks were already yielded), we can't un-yield what's been
+        shown — splicing in a full local reply at that point would
+        look like two answers stitched together, so we stop and log
+        rather than fabricate a coherent recovery.
         """
-        explicit_cloud = self._explicit_cloud_opt_in(messages)
-
-        # Fast path — no cloud available or user didn't opt in and
-        # we're not routing: stream local straight through.
-        if self._cloud is None and not explicit_cloud:
+        if self._cloud is None:
             self.last_route = "local"
             yield from self._local.chat(messages)
             return
 
-        # User explicitly asked for cloud — skip the local round-trip.
-        if explicit_cloud and self._cloud is not None:
-            try:
-                cloud_msgs = _strip_memory_prelude(messages)
-                reply = self._cloud.complete(cloud_msgs)
-                self.last_route = f"cloud:{self._cloud.label}"
-                log.info("routed.cloud_explicit", provider=self._cloud.label, chars=len(reply))
-                yield reply
-                return
-            except Exception as exc:
-                log.warning("routed.cloud_failed_explicit", error=str(exc))
-                # Fall through to local — user wanted cloud but it
-                # failed; serving SOMETHING beats serving nothing.
+        cloud_msgs = _strip_memory_prelude(messages)
+        cloud_gen: Iterator[str] | None = None
+        first_chunk: str | None = None
+        try:
+            cloud_gen = self._cloud.complete_streaming(cloud_msgs)
+            first_chunk = next(cloud_gen, None)
+        except Exception as exc:
+            log.warning("routed.cloud_unavailable", error=str(exc), provider=self._cloud.label)
 
-        # Default routing: collect local first, decide.
-        local_reply = "".join(self._local.chat(messages))
-
-        if self._cloud is None or not _trips_low_confidence(local_reply):
+        if not first_chunk:
+            log.info("routed.cloud_empty_or_unavailable_fallback_local")
             self.last_route = "local"
-            log.info("routed.local", chars=len(local_reply))
-            yield local_reply
+            yield from self._local.chat(messages)
             return
 
-        # Low confidence — escalate.
+        self.last_route = f"cloud:{self._cloud.label}"
+        chars = len(first_chunk)
+        yield first_chunk
         try:
-            cloud_msgs = _strip_memory_prelude(messages)
-            cloud_reply = self._cloud.complete(cloud_msgs)
-            if not cloud_reply.strip():
-                # Cloud answered with nothing useful — keep local.
-                self.last_route = "local"
-                log.info("routed.cloud_empty_fallback_local", local_chars=len(local_reply))
-                yield local_reply
-                return
-            self.last_route = f"cloud:{self._cloud.label}"
-            log.info(
-                "routed.cloud_escalated",
-                provider=self._cloud.label,
-                local_chars=len(local_reply),
-                cloud_chars=len(cloud_reply),
-            )
-            yield cloud_reply
+            assert cloud_gen is not None
+            for chunk in cloud_gen:
+                chars += len(chunk)
+                yield chunk
+            log.info("routed.cloud_primary", provider=self._cloud.label, chars=chars)
         except Exception as exc:
-            log.warning("routed.cloud_failed", error=str(exc), provider=self._cloud.label)
-            self.last_route = "local"
-            yield local_reply
-
-    @staticmethod
-    def _explicit_cloud_opt_in(messages: list[Message]) -> bool:
-        """True if the LATEST user turn carries the "cloud:" prefix."""
-        for m in reversed(messages):
-            if m.get("role") == "user":
-                return bool(_EXPLICIT_CLOUD_PREFIX.match(m.get("content", "")))
-        return False
+            log.warning(
+                "routed.cloud_stream_interrupted",
+                error=str(exc), provider=self._cloud.label, chars_sent=chars,
+            )

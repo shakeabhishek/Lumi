@@ -1,12 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Cloud LLM — Lumi{% endblock %}
 {% block content %}
-<h1>Cloud LLM fallback</h1>
+<h1>Cloud LLM routing</h1>
 <p>
   {{ settings.lumi_name }}'s local model runs on-device (Ollama, on the Pi's
-  CPU) as the private/offline floor. When it can't answer a question
-  confidently, {{ settings.lumi_name }} escalates to the cloud model you
-  configure here. Provider/model choice is stored locally in
+  CPU) as the private/offline floor. When cloud routing is on, {{ settings.lumi_name }}
+  tries the cloud model you configure here FIRST, for responsiveness — local
+  only answers if the cloud provider is unreachable or returns nothing.
+  Provider/model choice is stored locally in
   <code>user_settings.json</code>; the API key itself is stored separately
   (see below) and never transmitted anywhere except to the provider you choose.
 </p>
@@ -23,8 +24,8 @@
         <option value="gemini"     {% if settings.cloud_llm_provider == "gemini"    %}selected{% endif %}>Google (Gemini)</option>
       </select>
       <div class="form-hint">
-        Lumi tries the local model first. Picks the cloud only when it judges
-        the local response inadequate — see "Enable smart cloud routing" below.
+        When routing is on (below), this provider is tried FIRST for every
+        turn — local is the fallback, not the default.
       </div>
     </div>
 
@@ -68,17 +69,17 @@
       <label class="inline" style="font-weight:500">
         <input type="checkbox" name="cloud_routing_enabled" value="on"
                {% if settings.cloud_routing_enabled %}checked{% endif %}>
-        Enable smart cloud routing
+        Enable cloud routing
       </label>
       <div class="form-hint">
-        When on, Lumi tries the local model first and only escalates to
-        the cloud provider above when the local reply looks evasive
-        ("I don't know" / very short / boilerplate). Each turn that
-        escalates is logged in the audit log as <code>cloud:{provider}</code>.
+        When on, every conversational turn tries the cloud provider above
+        FIRST, for responsiveness. Local only answers if the cloud call
+        fails or is unreachable (no network, no quota, provider down) —
+        it's the fallback, not the default. Each cloud-served turn is
+        logged in the audit log as <code>cloud:{provider}</code>; a
+        local-fallback turn is logged as <code>local</code>.
         Memory snippets are stripped before any cloud call — only the
         live conversation + system prompt are sent.
-        You can also force a cloud call on any turn by prefixing the
-        message with <code>cloud: …</code>.
       </div>
     </div>
 
@@ -130,7 +131,7 @@
     <li>NOTHING else by default — no memory store contents, no audit log, no clipboard, no enrolled-voice embedding</li>
   </ul>
   <p style="font-size:.88rem">
-    Each escalation is logged in the audit log with the source set to <code>cloud:{{ '{provider}' }}</code> so you can see exactly when the cloud was used.
+    Each cloud-served turn is logged in the audit log with the source set to <code>cloud:{{ '{provider}' }}</code> so you can see exactly when the cloud was used vs. the local fallback.
   </p>
 </div>
 {% endblock %}

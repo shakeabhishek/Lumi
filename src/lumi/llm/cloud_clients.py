@@ -6,8 +6,16 @@ on 2026-05-23. Anthropic + OpenAI are TODO — same shape, different
 HTTP body. Each adapter implements the CloudLLMClient duck-typed
 interface in routed_backend.py:
 
-  complete(messages) -> str       # full reply, non-streaming
-  label              -> str       # short id for audit logging
+  complete(messages)           -> str            # full reply, non-streaming
+  complete_streaming(messages) -> Iterator[str]   # reply chunks, as they arrive
+  label                        -> str             # short id for audit logging
+
+`complete_streaming` was added 2026-07-05 when RoutedBackend flipped
+from local-first-with-cloud-escalation to cloud-first-with-local-
+fallback: cloud is now the common path for every turn, not an
+occasional short fallback, so non-streaming replies would mean a
+multi-second silent wait before anything appears — the opposite of
+the responsiveness the flip was for.
 
 Adapters use httpx directly rather than the official provider SDKs
 because (a) we only need one endpoint per provider and (b) we don't
@@ -18,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -52,7 +61,7 @@ class GeminiClient:
         self._model = model
         self._timeout = timeout
 
-    def complete(self, messages: list[Message]) -> str:
+    def _build_body(self, messages: list[Message]) -> dict[str, Any]:
         # Gemini's content shape: an array of {role, parts: [{text}]}.
         # Roles are "user" / "model"; "system" gets folded into a
         # `systemInstruction` field at the top level.
@@ -73,7 +82,16 @@ class GeminiClient:
         body: dict[str, Any] = {"contents": contents}
         if system_parts:
             body["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_parts)}]}
+        return body
 
+    @staticmethod
+    def _extract_text(candidates: list[dict[str, Any]]) -> str:
+        if not candidates:
+            return ""
+        parts = candidates[0].get("content", {}).get("parts", [])
+        return "".join(p.get("text", "") for p in parts)
+
+    def complete(self, messages: list[Message]) -> str:
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
             f"{self._model}:generateContent"
@@ -81,16 +99,44 @@ class GeminiClient:
         r = httpx.post(
             url,
             params={"key": self._key},
-            json=body,
+            json=self._build_body(messages),
             timeout=self._timeout,
         )
         r.raise_for_status()
         data = r.json()
-        candidates = data.get("candidates", [])
-        if not candidates:
-            return ""
-        parts = candidates[0].get("content", {}).get("parts", [])
-        return "".join(p.get("text", "") for p in parts)
+        return self._extract_text(data.get("candidates", []))
+
+    def complete_streaming(self, messages: list[Message]) -> Iterator[str]:
+        """Yield reply text chunks as Gemini generates them, via the
+        SSE-formatted streamGenerateContent endpoint. Each SSE event is
+        a JSON object with the same candidates[0].content.parts shape
+        as the non-streaming response, but partial."""
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{self._model}:streamGenerateContent"
+        )
+        with httpx.stream(
+            "POST",
+            url,
+            params={"key": self._key, "alt": "sse"},
+            json=self._build_body(messages),
+            timeout=self._timeout,
+        ) as r:
+            r.raise_for_status()
+            for line in r.iter_lines():
+                if not line.startswith("data: "):
+                    continue
+                payload = line[len("data: "):].strip()
+                if not payload or payload == "[DONE]":
+                    continue
+                try:
+                    data = json.loads(payload)
+                except json.JSONDecodeError:
+                    log.warning("gemini.stream_parse_error", line=payload[:200])
+                    continue
+                text = self._extract_text(data.get("candidates", []))
+                if text:
+                    yield text
 
 
 # ── Factory ─────────────────────────────────────────────────────────────────
