@@ -300,7 +300,7 @@ def run(
     # masked before they enter the model's context window. Same invariant
     # as the chat path; same source of truth via build_cloud_bridge().
     conversation = ConversationManager(llm, mode=cfg.mode, memory=memory, pseudonymizer=pseudo)
-    tts = make_tts(cfg.piper_voice, cfg.models_dir / "piper")
+    tts = make_tts(cfg.piper_voice, cfg.models_dir / "piper", output_device=cfg.audio_output_device)
     wake = _make_wake_source(cfg)
     router = SkillRouter(
         conversation=conversation,

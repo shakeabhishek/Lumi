@@ -59,29 +59,36 @@ class PiperTTS:
     """Piper neural TTS via the `piper` CLI.
 
     Voice ONNX + JSON must live at `voice_dir / voice_name.onnx{,.json}`.
-    Piper streams audio to stdout; we pipe it through `aplay`/`afplay` to play.
+    Piper streams raw 22050Hz mono s16 PCM to stdout; played back via
+    `sounddevice` — the SAME library `hardware/audio_io.py` uses for mic
+    capture — rather than piping into a separate `aplay`/`sox`/`ffplay`
+    process.
+
+    This used to shell out to `aplay`. Found on the Pi (2026-07-05, real
+    hardware): after ANY prior sounddevice/PortAudio capture in the same
+    process (i.e. every single turn, since mic.record() always runs
+    first), the next `aplay` invocation failed with "audio open error" —
+    reproduced in isolation with no wake-word code involved, so it's a
+    PortAudio-vs-separate-ALSA-CLI-process conflict over the same
+    hardware, not a wake-word-specific bug. Worse, Piper's own process
+    then hung waiting on the wedged player, freezing the whole voice loop
+    until manually killed. Routing playback through the same PortAudio
+    abstraction as capture avoids the cross-library device-handle fight
+    entirely — and simplifies the code, since the platform-specific
+    aplay/sox/ffplay selection is no longer needed at all.
     """
 
-    def __init__(self, voice: str, voice_dir: Path) -> None:
+    _SAMPLE_RATE = 22050
+
+    def __init__(self, voice: str, voice_dir: Path, output_device: str | None = None) -> None:
         self._voice = voice
         self._voice_dir = voice_dir
         self._model_path = voice_dir / f"{voice}.onnx"
+        self._output_device = output_device
 
     @property
     def name(self) -> str:
         return f"piper:{self._voice}"
-
-    def _player_cmd(self) -> list[str]:
-        # Cheap audio sink that reads raw PCM 22050Hz mono s16 from stdin.
-        if platform.system() == "Darwin":
-            # macOS doesn't ship aplay; use sox if present, else fall back to ffplay.
-            if shutil.which("sox"):
-                return ["sox", "-t", "raw", "-r", "22050", "-e", "signed", "-b", "16",
-                        "-c", "1", "-", "-d"]
-            if shutil.which("ffplay"):
-                return ["ffplay", "-autoexit", "-nodisp", "-f", "s16le",
-                        "-ar", "22050", "-ac", "1", "-"]
-        return ["aplay", "-r", "22050", "-f", "S16_LE", "-t", "raw"]
 
     def speak(self, text: str) -> None:
         if not text:
@@ -91,17 +98,24 @@ class PiperTTS:
                 f"Piper voice not found: {self._model_path}. "
                 "Download from https://github.com/rhasspy/piper/releases."
             )
+        import numpy as np  # noqa: PLC0415
+        import sounddevice as sd  # noqa: PLC0415
+
         piper = subprocess.Popen(
             ["piper", "--model", str(self._model_path), "--output-raw"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
         )
-        player = subprocess.Popen(self._player_cmd(), stdin=piper.stdout)
-        assert piper.stdin is not None
-        piper.stdin.write(text.encode("utf-8"))
-        piper.stdin.close()
-        player.wait()
-        piper.wait()
+        raw_pcm, _stderr = piper.communicate(input=text.encode("utf-8"))
+        if not raw_pcm:
+            return
+        # Piper's --output-raw is signed 16-bit PCM. Normalize to the
+        # [-1, 1] float32 range sounddevice expects — a naive .astype
+        # would reinterpret e.g. 32767 as 32767.0 instead of ~1.0,
+        # producing garbage/clipped audio.
+        samples = np.frombuffer(raw_pcm, dtype=np.int16).astype(np.float32) / 32768.0
+        sd.play(samples, samplerate=self._SAMPLE_RATE, device=self._output_device)
+        sd.wait()
 
 
 def speak_streaming(
@@ -168,12 +182,12 @@ def speak_streaming(
     t.join()
 
 
-def make_tts(piper_voice: str, voice_dir: Path) -> TTS:
+def make_tts(piper_voice: str, voice_dir: Path, output_device: str | None = None) -> TTS:
     """Choose the best available TTS for this machine."""
     piper_onnx = voice_dir / f"{piper_voice}.onnx"
     if shutil.which("piper") and piper_onnx.exists():
         log.info("tts.backend", backend="piper", voice=piper_voice)
-        return PiperTTS(piper_voice, voice_dir)
+        return PiperTTS(piper_voice, voice_dir, output_device=output_device)
     if platform.system() == "Darwin" and shutil.which("say"):
         log.info("tts.backend", backend="mac-say", reason="piper not configured")
         return MacSayTTS()
