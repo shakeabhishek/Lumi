@@ -145,7 +145,19 @@ function CollapsibleSlider({
               lastCommitRef.current = performance.now();
             }}
             onPointerMove={(e) => {
-              if (e.buttons !== 1) return;
+              // Gated on draggingRef (set in onPointerDown, cleared in
+              // onPointerUp), not e.buttons — setPointerCapture above
+              // already scopes every move event to this one active
+              // pointer, so the buttons check was redundant. Found on
+              // the real kiosk touchscreen (2026-07-05): `buttons`
+              // isn't reported reliably for touch-originated pointer
+              // events on this Chromium build, so the old check
+              // silently dropped every move event during a touch-drag
+              // — the slider looked frozen while dragging and only
+              // ever jumped on release (onPointerUp, which doesn't
+              // check buttons), which read as "the volume controls
+              // don't work."
+              if (!draggingRef.current) return;
               const v = valFromPointer(e);
               setValue(v);
               const now = performance.now();
