@@ -79,6 +79,7 @@ class PiperTTS:
     """
 
     _SAMPLE_RATE = 22050
+    _TARGET_RMS = 0.35
 
     def __init__(self, voice: str, voice_dir: Path, output_device: str | None = None) -> None:
         self._voice = voice
@@ -89,6 +90,31 @@ class PiperTTS:
     @property
     def name(self) -> str:
         return f"piper:{self._voice}"
+
+    @classmethod
+    def _boost_loudness(cls, samples: "np.ndarray") -> "np.ndarray":
+        """Boost quiet speech up to a target average loudness, capping any
+        peaks that overflow.
+
+        Found on the Pi (2026-07-05): even at 100% hardware volume, Piper's
+        speech sounded "very low" — measured its peak amplitude was already
+        at full scale (1.0) but RMS (average loudness) only ~0.15, vs. a
+        test tone's ~0.64. Normal for speech (quiet vowels, loud consonant
+        peaks — high dynamic range) but it means hardware gain alone can't
+        help further: the peaks are already maxed, so more gain just clips
+        them without raising perceived loudness. A uniform gain to hit a
+        target RMS, then hard-clipping the (relatively brief, transient)
+        peaks that overflow, is standard TTS/broadcast loudness
+        normalization — trades a little peak distortion for meaningfully
+        louder speech overall.
+        """
+        import numpy as np  # noqa: PLC0415
+
+        rms = float(np.sqrt(np.mean(samples**2)))
+        if rms < 1e-6:
+            return samples
+        gain = cls._TARGET_RMS / rms
+        return np.clip(samples * gain, -1.0, 1.0).astype(np.float32)
 
     def speak(self, text: str) -> None:
         if not text:
@@ -114,6 +140,7 @@ class PiperTTS:
         # would reinterpret e.g. 32767 as 32767.0 instead of ~1.0,
         # producing garbage/clipped audio.
         samples = np.frombuffer(raw_pcm, dtype=np.int16).astype(np.float32) / 32768.0
+        samples = self._boost_loudness(samples)
         sd.play(samples, samplerate=self._SAMPLE_RATE, device=self._output_device)
         sd.wait()
 
