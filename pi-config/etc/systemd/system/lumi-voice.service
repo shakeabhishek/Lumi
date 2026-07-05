@@ -12,6 +12,16 @@ ExecStart=/home/lumi/.local/bin/uv run lumi run
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=5
+# Chromium's kiosk (GPU + renderer processes) routinely consumes 60-70%+
+# CPU on this Pi, directly competing with Piper's synthesis for the same
+# 4 cores — measured Piper's own synthesis time at 4.4s for a single
+# short sentence (2026-07-05), a real contributor to the noticeable gap
+# between the face/caption appearing and audio actually starting. A
+# higher scheduling priority doesn't touch the visuals at all, just asks
+# the kernel to favor the voice loop's CPU time when contended. Set by
+# systemd (running as root) before it drops to User=lumi above, so this
+# works without granting the lumi user CAP_SYS_NICE itself.
+Nice=-10
 
 [Install]
 WantedBy=multi-user.target
