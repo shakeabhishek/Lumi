@@ -3,9 +3,21 @@ backing the device-display's on-screen audio controls.
 
 Two separate knobs, deliberately not conflated:
 
-  Speaker output volume  -> the "HP" (headphone-out) control, which feeds
-  the ReSpeaker's JST speaker via HPLOUT/HPROUT (see bom.md's ReSpeaker
-  driver notes). This is what the on-screen volume slider drives.
+  Speaker output volume  -> the "PCM" (digital playback) control, which
+  spans a real -63.5dB to 0dB range. The on-screen volume slider drives
+  this, NOT "HP" — found live on the Pi (2026-07-06) that "HP" (the
+  headphone-out analog stage) only spans 0dB to +9dB: at its lowest
+  setting, HP still passes the signal at unity gain (0dB), not silence.
+  Dragging the slider across HP's entire range was a barely-audible 9dB
+  swing, which read as "the volume controls don't work" — moving the
+  slider really did change the hardware value (confirmed directly), it
+  just never had enough range to produce an audible difference. PCM's
+  63.5dB span is what actually gives a slider from-near-silent-to-full
+  behavior. HP is left fixed at maximum (see _ensure_hp_maxed) as a
+  constant headroom boost rather than exposed to the user, since
+  stacking two independently-adjustable gain stages for one "volume"
+  concept would be confusing for no benefit — the wide PCM range alone
+  is enough control.
 
   Mic privacy mute       -> the "PGA" (capture gain) control's hardware
   mute switch, which silences audio at the ALSA capture stage itself —
@@ -35,7 +47,8 @@ from ..log import get_logger
 log = get_logger(__name__)
 
 _CARD = "seeed2micvoicec"
-_SPEAKER_CONTROL = "HP"
+_SPEAKER_CONTROL = "PCM"
+_SPEAKER_BOOST_CONTROL = "HP"
 _MIC_CONTROL = "PGA"
 _AGC_CONTROL = "AGC"
 
@@ -69,8 +82,19 @@ def get_volume() -> int:
 
 def set_volume(level: int) -> bool:
     """Set speaker volume, 0-100. Returns False if the card is unavailable."""
+    _ensure_hp_maxed()
     level = max(0, min(100, level))
     return _amixer("sset", _SPEAKER_CONTROL, f"{level}%") is not None
+
+
+def _ensure_hp_maxed() -> None:
+    """HP is a fixed headroom boost (0dB to +9dB), not the user-facing
+    volume control — see the module docstring for why PCM (63.5dB range)
+    is the real "volume" knob instead. Called on every set_volume() as
+    cheap insurance against HP drifting down from something else (e.g.
+    a stray alsactl restore) and silently capping PCM's effective range
+    again, the same way the original HP-as-volume bug did."""
+    _amixer("sset", _SPEAKER_BOOST_CONTROL, "100%")
 
 
 def get_mic_muted() -> bool:

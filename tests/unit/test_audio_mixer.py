@@ -27,9 +27,9 @@ def test_is_available_false_when_amixer_missing() -> None:
 
 def test_get_volume_parses_percent() -> None:
     sget_output = (
-        "Simple mixer control 'HP',0\n"
-        "  Front Left: Playback 5 [56%] [5.00dB] [on]\n"
-        "  Front Right: Playback 5 [56%] [5.00dB] [on]\n"
+        "Simple mixer control 'PCM',0\n"
+        "  Front Left: Playback 71 [56%] [-27.50dB]\n"
+        "  Front Right: Playback 71 [56%] [-27.50dB]\n"
     )
     with patch("subprocess.run", return_value=_fake_run(0, sget_output)):
         assert audio_mixer.get_volume() == 56
@@ -51,11 +51,29 @@ def test_set_volume_clamps_range() -> None:
         assert args[-1] == "0%"
 
 
-def test_set_volume_targets_hp_control_on_named_card() -> None:
+def test_set_volume_targets_pcm_control_on_named_card() -> None:
+    """Regression test for the real "volume controls don't work" bug
+    found on the Pi (2026-07-06): the slider used to target "HP", whose
+    entire range is only 0dB to +9dB — even at its lowest setting, HP
+    still passes signal at unity gain, not silence, so the slider's full
+    travel was a barely-audible 9dB swing. "PCM" spans a real -63.5dB to
+    0dB, confirmed directly on the card — that's the control that
+    actually behaves like a volume knob."""
     with patch("subprocess.run", return_value=_fake_run(0)) as mock_run:
         audio_mixer.set_volume(42)
         args = mock_run.call_args[0][0]
-        assert args == ["amixer", "-c", "seeed2micvoicec", "sset", "HP", "42%"]
+        assert args == ["amixer", "-c", "seeed2micvoicec", "sset", "PCM", "42%"]
+
+
+def test_set_volume_also_maxes_hp_boost() -> None:
+    """HP is left as a fixed +9dB headroom boost, not user-adjustable —
+    set_volume() must keep it maxed on every call as insurance against
+    it drifting down and silently re-capping PCM's effective range,
+    which is exactly the bug this whole fix addresses."""
+    with patch("subprocess.run", return_value=_fake_run(0)) as mock_run:
+        audio_mixer.set_volume(42)
+        all_calls = [c.args[0] for c in mock_run.call_args_list]
+        assert ["amixer", "-c", "seeed2micvoicec", "sset", "HP", "100%"] in all_calls
 
 
 def test_get_mic_muted_true_when_switch_off() -> None:
