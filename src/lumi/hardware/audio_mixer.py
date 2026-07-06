@@ -52,6 +52,19 @@ _SPEAKER_BOOST_CONTROL = "HP"
 _MIC_CONTROL = "PGA"
 _AGC_CONTROL = "AGC"
 
+# PCM's raw dB scale is roughly LINEAR in dB (confirmed directly: 0%→
+# -63.5dB, 50%→-31.5dB, 100%→0dB) — but human hearing perceives loudness
+# roughly logarithmically, so a naive 0-100 slider mapped straight onto
+# that linear-dB range crams nearly all the audible range into the top
+# sliver. Found live on the Pi (2026-07-06): user reported anything
+# below ~90% slider position was inaudible — at PCM's own linear
+# mapping, 90% is only about -6.5dB, meaning this speaker/room's usable
+# dynamic range is much narrower than PCM's full 63.5dB span. Below
+# this floor, the on-screen slider now clamps to it instead of
+# continuing to sweep the practically-silent-anyway remainder of PCM's
+# range — the whole 0-100 slider maps onto PCM's [floor, 100] sub-range.
+_PCM_FLOOR_PERCENT = 75
+
 
 def _amixer(*args: str) -> str | None:
     try:
@@ -71,20 +84,44 @@ def is_available() -> bool:
     return _amixer("scontrols") is not None
 
 
+def _slider_to_pcm_percent(level: int) -> int:
+    """Map the user-facing 0-100 slider onto PCM's [_PCM_FLOOR_PERCENT, 100]
+    sub-range, so the slider's full travel stays within the range that's
+    actually audible on this hardware instead of spending most of its
+    range on PCM settings quiet enough to be inaudible anyway."""
+    level = max(0, min(100, level))
+    span = 100 - _PCM_FLOOR_PERCENT
+    return round(_PCM_FLOOR_PERCENT + span * level / 100)
+
+
+def _pcm_percent_to_slider(pcm_percent: int) -> int:
+    """Inverse of _slider_to_pcm_percent, for reporting the slider's
+    position back from PCM's raw percentage."""
+    span = 100 - _PCM_FLOOR_PERCENT
+    if pcm_percent <= _PCM_FLOOR_PERCENT:
+        return 0
+    return round((pcm_percent - _PCM_FLOOR_PERCENT) * 100 / span)
+
+
 def get_volume() -> int:
-    """Current speaker volume, 0-100. Returns 50 if the card is unavailable."""
+    """Current speaker volume, 0-100 (slider-space, not raw PCM). Returns
+    50 if the card is unavailable."""
     out = _amixer("sget", _SPEAKER_CONTROL)
     if not out:
         return 50
     match = re.search(r"\[(\d{1,3})%\]", out)
-    return int(match.group(1)) if match else 50
+    if not match:
+        return 50
+    return _pcm_percent_to_slider(int(match.group(1)))
 
 
 def set_volume(level: int) -> bool:
-    """Set speaker volume, 0-100. Returns False if the card is unavailable."""
+    """Set speaker volume, 0-100 (slider-space, remapped onto PCM's
+    audible sub-range — see _slider_to_pcm_percent). Returns False if
+    the card is unavailable."""
     _ensure_hp_maxed()
-    level = max(0, min(100, level))
-    return _amixer("sset", _SPEAKER_CONTROL, f"{level}%") is not None
+    pcm_percent = _slider_to_pcm_percent(level)
+    return _amixer("sset", _SPEAKER_CONTROL, f"{pcm_percent}%") is not None
 
 
 def _ensure_hp_maxed() -> None:

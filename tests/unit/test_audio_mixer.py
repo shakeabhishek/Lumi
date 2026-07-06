@@ -26,13 +26,17 @@ def test_is_available_false_when_amixer_missing() -> None:
 
 
 def test_get_volume_parses_percent() -> None:
+    """Raw PCM percentage from amixer must come back through the
+    slider-space remapping (see _pcm_percent_to_slider), not the raw
+    PCM percentage directly — 88% raw PCM (above the audible floor of
+    75%) is slider position 52."""
     sget_output = (
         "Simple mixer control 'PCM',0\n"
-        "  Front Left: Playback 71 [56%] [-27.50dB]\n"
-        "  Front Right: Playback 71 [56%] [-27.50dB]\n"
+        "  Front Left: Playback 111 [88%] [-7.50dB]\n"
+        "  Front Right: Playback 111 [88%] [-7.50dB]\n"
     )
     with patch("subprocess.run", return_value=_fake_run(0, sget_output)):
-        assert audio_mixer.get_volume() == 56
+        assert audio_mixer.get_volume() == 52
 
 
 def test_get_volume_defaults_to_50_when_unavailable() -> None:
@@ -41,6 +45,9 @@ def test_get_volume_defaults_to_50_when_unavailable() -> None:
 
 
 def test_set_volume_clamps_range() -> None:
+    """0-100 slider input clamps before remapping onto PCM's [75, 100]
+    audible sub-range — slider 0 maps to PCM's floor (75%), not raw 0%,
+    since raw 0% (-63.5dB) was found to be inaudible on this hardware."""
     with patch("subprocess.run", return_value=_fake_run(0)) as mock_run:
         audio_mixer.set_volume(150)
         args = mock_run.call_args[0][0]
@@ -48,7 +55,7 @@ def test_set_volume_clamps_range() -> None:
 
         audio_mixer.set_volume(-10)
         args = mock_run.call_args[0][0]
-        assert args[-1] == "0%"
+        assert args[-1] == "75%"
 
 
 def test_set_volume_targets_pcm_control_on_named_card() -> None:
@@ -58,11 +65,46 @@ def test_set_volume_targets_pcm_control_on_named_card() -> None:
     still passes signal at unity gain, not silence, so the slider's full
     travel was a barely-audible 9dB swing. "PCM" spans a real -63.5dB to
     0dB, confirmed directly on the card — that's the control that
-    actually behaves like a volume knob."""
+    actually behaves like a volume knob. Slider position 50 maps to raw
+    PCM 88% (75-floor sub-range, not a direct 1:1 percentage)."""
     with patch("subprocess.run", return_value=_fake_run(0)) as mock_run:
-        audio_mixer.set_volume(42)
+        audio_mixer.set_volume(50)
         args = mock_run.call_args[0][0]
-        assert args == ["amixer", "-c", "seeed2micvoicec", "sset", "PCM", "42%"]
+        assert args == ["amixer", "-c", "seeed2micvoicec", "sset", "PCM", "88%"]
+
+
+def test_slider_to_pcm_percent_stays_within_audible_floor() -> None:
+    """Regression test for the real "anything below 90% is inaudible"
+    bug found on the Pi (2026-07-06): PCM's raw scale is roughly linear
+    in dB, not perceived loudness, so a naive 1:1 slider-to-PCM mapping
+    crammed nearly all the audible range into the last ~10% of slider
+    travel. The slider's full 0-100 range must now map onto PCM's
+    [_PCM_FLOOR_PERCENT, 100] sub-range instead, so even slider position
+    0 stays at the empirically-found audible floor rather than
+    continuing down into PCM's practically-silent territory."""
+    assert audio_mixer._slider_to_pcm_percent(0) == audio_mixer._PCM_FLOOR_PERCENT
+    assert audio_mixer._slider_to_pcm_percent(100) == 100
+    # Monotonic — a higher slider position must never map to a lower
+    # (quieter) PCM percentage.
+    values = [audio_mixer._slider_to_pcm_percent(s) for s in range(0, 101, 10)]
+    assert values == sorted(values)
+
+
+def test_pcm_percent_to_slider_is_inverse_of_slider_to_pcm() -> None:
+    """Approximate, not exact — two independent integer roundings (one
+    per direction) can compound to an off-by-one, which is an
+    acceptable, expected characteristic of a quantized percentage
+    round-trip, not a real bug."""
+    for slider in (0, 25, 50, 75, 100):
+        pcm = audio_mixer._slider_to_pcm_percent(slider)
+        assert abs(audio_mixer._pcm_percent_to_slider(pcm) - slider) <= 2
+
+
+def test_pcm_percent_below_floor_maps_to_slider_zero() -> None:
+    """Raw PCM percentages below the audible floor (e.g. read from a
+    stale/manually-set hardware value) must clamp to slider 0, not go
+    negative."""
+    assert audio_mixer._pcm_percent_to_slider(10) == 0
 
 
 def test_set_volume_also_maxes_hp_boost() -> None:
