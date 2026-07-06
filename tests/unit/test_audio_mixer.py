@@ -107,15 +107,20 @@ def test_pcm_percent_below_floor_maps_to_slider_zero() -> None:
     assert audio_mixer._pcm_percent_to_slider(10) == 0
 
 
-def test_set_volume_also_maxes_hp_boost() -> None:
-    """HP is left as a fixed +9dB headroom boost, not user-adjustable —
-    set_volume() must keep it maxed on every call as insurance against
-    it drifting down and silently re-capping PCM's effective range,
-    which is exactly the bug this whole fix addresses."""
+def test_set_volume_also_maxes_boost_controls() -> None:
+    """HP and HP DAC are left as fixed headroom boosts, not user-
+    adjustable — set_volume() must keep both maxed on every call.
+    Regression test for a real bug found on the Pi (2026-07-06): "HP
+    DAC" was discovered sitting at 55% (-26.5dB) the whole time, a
+    completely separate gain stage nobody had ever touched, silently
+    capping overall loudness regardless of what PCM or HP were set to
+    — exactly the kind of hidden-control bug this maxing sweep guards
+    against for both controls, not just HP."""
     with patch("subprocess.run", return_value=_fake_run(0)) as mock_run:
         audio_mixer.set_volume(42)
         all_calls = [c.args[0] for c in mock_run.call_args_list]
         assert ["amixer", "-c", "seeed2micvoicec", "sset", "HP", "100%"] in all_calls
+        assert ["amixer", "-c", "seeed2micvoicec", "sset", "HP DAC", "100%"] in all_calls
 
 
 def test_get_mic_muted_true_when_switch_off() -> None:

@@ -13,11 +13,18 @@ Two separate knobs, deliberately not conflated:
   slider really did change the hardware value (confirmed directly), it
   just never had enough range to produce an audible difference. PCM's
   63.5dB span is what actually gives a slider from-near-silent-to-full
-  behavior. HP is left fixed at maximum (see _ensure_hp_maxed) as a
-  constant headroom boost rather than exposed to the user, since
+  behavior. HP is left fixed at maximum (see _ensure_boost_controls_maxed)
+  as a constant headroom boost rather than exposed to the user, since
   stacking two independently-adjustable gain stages for one "volume"
   concept would be confusing for no benefit — the wide PCM range alone
   is enough control.
+
+  A THIRD stage, "HP DAC", was found sitting at 55% (-26.5dB) the whole
+  time (2026-07-06) — a completely separate gain control between the
+  DAC and the HP analog stage that had never been touched or maxed,
+  silently capping overall loudness by ~26.5dB regardless of what PCM
+  or HP were set to. This is why "max volume is too low" persisted even
+  with PCM and HP both already at their ceiling. Maxed alongside HP.
 
   Mic privacy mute       -> the "PGA" (capture gain) control's hardware
   mute switch, which silences audio at the ALSA capture stage itself —
@@ -48,7 +55,7 @@ log = get_logger(__name__)
 
 _CARD = "seeed2micvoicec"
 _SPEAKER_CONTROL = "PCM"
-_SPEAKER_BOOST_CONTROL = "HP"
+_SPEAKER_BOOST_CONTROLS = ("HP", "HP DAC")
 _MIC_CONTROL = "PGA"
 _AGC_CONTROL = "AGC"
 
@@ -119,19 +126,23 @@ def set_volume(level: int) -> bool:
     """Set speaker volume, 0-100 (slider-space, remapped onto PCM's
     audible sub-range — see _slider_to_pcm_percent). Returns False if
     the card is unavailable."""
-    _ensure_hp_maxed()
+    _ensure_boost_controls_maxed()
     pcm_percent = _slider_to_pcm_percent(level)
     return _amixer("sset", _SPEAKER_CONTROL, f"{pcm_percent}%") is not None
 
 
-def _ensure_hp_maxed() -> None:
-    """HP is a fixed headroom boost (0dB to +9dB), not the user-facing
-    volume control — see the module docstring for why PCM (63.5dB range)
-    is the real "volume" knob instead. Called on every set_volume() as
-    cheap insurance against HP drifting down from something else (e.g.
-    a stray alsactl restore) and silently capping PCM's effective range
-    again, the same way the original HP-as-volume bug did."""
-    _amixer("sset", _SPEAKER_BOOST_CONTROL, "100%")
+def _ensure_boost_controls_maxed() -> None:
+    """HP and HP DAC are fixed headroom boosts (0dB to +9dB, and 0dB
+    ceiling respectively), not the user-facing volume control — see the
+    module docstring for why PCM (63.5dB range) is the real "volume"
+    knob instead. Called on every set_volume() as cheap insurance
+    against either drifting down from something else (e.g. a stray
+    alsactl restore) and silently capping PCM's effective range again —
+    HP DAC sitting at 55% (-26.5dB) undiscovered was exactly this
+    failure mode, just never previously set at all rather than having
+    drifted."""
+    for control in _SPEAKER_BOOST_CONTROLS:
+        _amixer("sset", control, "100%")
 
 
 def get_mic_muted() -> bool:
