@@ -1,0 +1,27 @@
+[Unit]
+Description=Lumi vision worker (MediaPipe hand-landmark gesture + presence detection)
+After=network-online.target lumi-web.service lumi-vision-capture.service
+Wants=network-online.target
+Requires=lumi-web.service
+Requires=lumi-vision-capture.service
+
+[Service]
+User=lumi
+WorkingDirectory=/home/lumi/lumi/vision-worker
+Environment=HOME=/home/lumi
+Environment=LUMI_DATA_DIR=/home/lumi/lumi/data
+Environment=LUMI_WEB_BASE_URL=http://127.0.0.1:80
+ExecStart=/home/lumi/.local/bin/uv run --project /home/lumi/lumi/vision-worker lumi-vision-worker
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=5
+# MediaPipe/XNNPACK vision competes for the same cores as Piper
+# synthesis and the Chromium kiosk (see lumi-voice.service's Nice=-10
+# for the mirror-image contention on the audio side). Vision is the one
+# subsystem in this stack that can tolerate a missed frame or two
+# without the user noticing — it should yield under contention, not
+# compete with voice or the kiosk.
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

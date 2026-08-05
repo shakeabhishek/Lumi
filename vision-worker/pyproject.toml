@@ -1,0 +1,36 @@
+[project]
+name = "lumi-vision-worker"
+version = "0.1.0"
+description = "Lumi's camera gesture/presence detection worker — a separate process from the main app because MediaPipe requires protobuf 4.x, incompatible with the main app's chromadb (protobuf 7.x)."
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    # Split by platform: mediapipe dropped aarch64 Linux wheels for most
+    # releases after 0.10.18 (confirmed directly against the Pi 5,
+    # 2026-07-06 — 0.10.20/0.10.21/0.10.30+ all have zero
+    # manylinux_*_aarch64 wheels, only x86_64/macOS/Windows). 0.10.18 is
+    # also what the original ad-hoc mpbench fps benchmark used, so
+    # pinning it on the Pi keeps the already-measured 17.2/16.2 fps
+    # numbers comparable. Laptop dev (macOS) isn't affected by that
+    # wheel gap, so it stays on a normal floor constraint.
+    "mediapipe==0.10.18 ; sys_platform == 'linux' and platform_machine == 'aarch64'",
+    "mediapipe>=0.10 ; sys_platform != 'linux' or platform_machine != 'aarch64'",
+    "opencv-python-headless>=4.9",
+    "numpy>=1.26",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+lumi-vision-worker = "lumi_vision_worker.main:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lumi_vision_worker"]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

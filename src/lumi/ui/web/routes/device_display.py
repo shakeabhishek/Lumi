@@ -289,6 +289,32 @@ async def publish_caption_clear(request: Request) -> None:
     await _bus_mod.get_bus(request.app).publish({"caption": None})
 
 
+# ── Gestures + presence (vision-worker → device display) ───────────────────
+#
+# Pushed by the separate vision-worker process (see vision-worker/) over
+# HTTP, same trust model as /api/state — same device, no browser in the
+# loop. No /gesture/clear counterpart like captions have: a gesture is an
+# inherently transient one-shot flash, so the React GestureBadge
+# self-clears client-side via setTimeout instead of waiting for a second
+# server push.
+
+
+async def publish_gesture(request: Request, gesture_type: str) -> None:
+    from .. import device_bus as _bus_mod  # noqa: PLC0415
+
+    await _bus_mod.get_bus(request.app).publish({
+        "gesture": {"type": gesture_type, "ts": time.time()},
+    })
+
+
+async def publish_presence(request: Request, present: bool) -> None:
+    from .. import device_bus as _bus_mod  # noqa: PLC0415
+
+    await _bus_mod.get_bus(request.app).publish({
+        "presence": {"present": present, "ts": time.time()},
+    })
+
+
 @router.get("/events")
 async def device_display_events(request: Request) -> StreamingResponse:
     """SSE feed. Each connection subscribes to the broadcaster, gets the
@@ -309,6 +335,9 @@ async def device_display_events(request: Request) -> StreamingResponse:
             "statusText": _status_text_for("idle"),
             "weather": None,
             "cpuPct": round(psutil.cpu_percent(interval=None)),
+            "gesture": None,
+            "presence": None,
+            "cameraActive": False,
             **_settings_snapshot(request),
             **_audio_snapshot(),
             **_system_snapshot(),

@@ -1,4 +1,4 @@
-"""Gesture vocabulary and detector stub.
+"""Shared gesture vocabulary.
 
 V1 gesture set (from CLAUDE.md):
   WAVE        — wake / greet
@@ -7,16 +7,19 @@ V1 gesture set (from CLAUDE.md):
   THUMBS_DOWN — no / reject
   FIST        — cancel / dismiss
 
-Real implementation in Phase 5 uses MediaPipe Hand Landmarks on the AI HAT+ 2.
-On laptop, MockGestureDetector always returns NONE.
+Detection itself runs out-of-process in vision-worker/ (MediaPipe requires
+protobuf 4.x, incompatible with this project's protobuf 7.x via chromadb)
+— this enum exists so ui/web/routes/context_api.py can validate incoming
+/api/gesture payloads against a single source of truth. vision-worker
+keeps its own local copy (see vision-worker/src/lumi_vision_worker/
+classify.py) since that process can't import this `lumi` package at all;
+the two are kept in sync by convention and validated at the wire boundary
+(a plain string over HTTP), not by sharing a Python type.
 """
 
 from __future__ import annotations
 
 from enum import Enum
-from typing import Protocol
-
-import numpy as np
 
 
 class GestureType(Enum):
@@ -26,41 +29,3 @@ class GestureType(Enum):
     THUMBS_UP = "thumbs_up"
     THUMBS_DOWN = "thumbs_down"
     FIST = "fist"
-
-
-class GestureDetector(Protocol):
-    def detect(self, frame: np.ndarray) -> GestureType:
-        """Infer gesture from a single RGB frame. Returns NONE if no hand visible."""
-        ...
-
-
-class MockGestureDetector:
-    """No-op detector for laptop dev — always returns NONE."""
-
-    def detect(self, frame: np.ndarray) -> GestureType:
-        return GestureType.NONE
-
-
-class MediaPipeGestureDetector:
-    """MediaPipe Hand Landmarks + rule-based classifier on the AI HAT+ 2.
-
-    Stubbed — wired up in Phase 5. Architecture:
-      frame (HxWx3) → MediaPipe hand landmarks (21 keypoints) → classify() → GestureType
-    """
-
-    def __init__(self) -> None:
-        raise NotImplementedError("MediaPipeGestureDetector — implement in Phase 5")
-
-    def detect(self, frame: np.ndarray) -> GestureType:
-        raise NotImplementedError
-
-    @staticmethod
-    def _classify(landmarks: list) -> GestureType:
-        """Rule-based classifier from 21 hand keypoints. Implement in Phase 5."""
-        raise NotImplementedError
-
-
-def make_gesture_detector(mock: bool = True) -> GestureDetector:
-    if mock:
-        return MockGestureDetector()
-    return MediaPipeGestureDetector()

@@ -1,0 +1,25 @@
+[Unit]
+Description=Lumi camera capture shim (system Python — bridges picamera2/libcamera to the mediapipe vision-worker)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=lumi
+WorkingDirectory=/home/lumi/lumi/vision-worker/capture_shim
+Environment=HOME=/home/lumi
+# System Python, deliberately not uv-managed: picamera2/libcamera's
+# compiled bindings are apt-installed and tied to the exact system
+# Python (3.13 on this image) — mediapipe has no wheel for that version
+# on any platform, so the two can't share an interpreter. See
+# vision-worker/capture_shim/README.md for the full story.
+ExecStart=/usr/bin/python3 /home/lumi/lumi/vision-worker/capture_shim/capture_shim.py --data-dir /home/lumi/lumi/data
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=5
+# Same reasoning as lumi-vision.service's Nice=5 — this is the other
+# half of the vision pipeline and should yield to voice/kiosk under
+# CPU contention just as readily.
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

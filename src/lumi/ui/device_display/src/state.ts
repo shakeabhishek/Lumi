@@ -14,7 +14,10 @@
  *     "spritePack": "cat",
  *     "weather": { "tempC": 22, "condition": "sunny" } | null,
  *     "cpuPct": 45,
- *     "caption": { "speaker": "user"|"lumi", "text": "...", "final": true } | null }
+ *     "caption": { "speaker": "user"|"lumi", "text": "...", "final": true } | null,
+ *     "gesture": { "type": "wave"|"open_palm"|"thumbs_up"|"thumbs_down"|"fist", "ts": 123 } | null,
+ *     "presence": { "present": true, "ts": 123 } | null,
+ *     "cameraActive": false }
  */
 
 import { useEffect, useState } from 'react';
@@ -37,6 +40,18 @@ export interface Caption {
   final: boolean;
 }
 
+export type GestureKind = 'wave' | 'open_palm' | 'thumbs_up' | 'thumbs_down' | 'fist';
+
+export interface Gesture {
+  type: GestureKind;
+  ts: number;
+}
+
+export interface Presence {
+  present: boolean;
+  ts: number;
+}
+
 export interface DeviceState {
   connected: boolean;
   state: FaceState;
@@ -52,6 +67,9 @@ export interface DeviceState {
   micMuted: boolean;
   brightness: number;
   caption: Caption | null;
+  gesture: Gesture | null;
+  presence: Presence | null;
+  cameraActive: boolean;
 }
 
 const INITIAL: DeviceState = {
@@ -68,6 +86,9 @@ const INITIAL: DeviceState = {
   micMuted: false,
   brightness: 80,
   caption: null,
+  gesture: null,
+  presence: null,
+  cameraActive: false,
 };
 
 export function useDeviceState(): DeviceState {

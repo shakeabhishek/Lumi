@@ -142,6 +142,18 @@ def test_api_context_bypass_does_not_require_token(client: TestClient) -> None:
     assert r.status_code != 403
 
 
+def test_api_gesture_bypass_does_not_require_token(client: TestClient) -> None:
+    """The vision-worker is a separate OS process with no browser/cookie —
+    /api/gesture is in the bypass list so it can POST without a token."""
+    r = client.post("/api/gesture", data={"type": "wave"})
+    assert r.status_code != 403
+
+
+def test_api_presence_bypass_does_not_require_token(client: TestClient) -> None:
+    r = client.post("/api/presence", data={"present": "true"})
+    assert r.status_code != 403
+
+
 def test_get_requests_are_never_blocked(client: TestClient) -> None:
     """Reading state should never require a CSRF token. Only mutating
     methods are guarded."""

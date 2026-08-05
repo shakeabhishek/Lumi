@@ -9,15 +9,18 @@ import type { FaceState } from '../state';
  * Per the user's explicit decision: keep the bear, present it inside
  * a macOS-style terminal. The bear's expression changes per state;
  * the surrounding status lines change too.
+ *
+ * `sleeping` (2026-07-06, presence-driven, IDLE-only) swaps in a
+ * closed-eyes bear ʕ-ᴥ-ʔ, a SLEEPING status line, and a "Zzz" line.
  */
-export function TerminalFace({ state }: { state: FaceState }) {
+export function TerminalFace({ state, sleeping = false }: { state: FaceState; sleeping?: boolean }) {
   const [cursorOn, setCursorOn] = useState(true);
   useEffect(() => {
     const t = setInterval(() => setCursorOn((v) => !v), 500);
     return () => clearInterval(t);
   }, []);
 
-  const lines = scriptForState(state);
+  const lines = sleeping && state === 'idle' ? SLEEP_LINES : scriptForState(state);
 
   return (
     <div className="w-[420px] max-w-full bg-zinc-950/95 rounded-xl overflow-hidden shadow-2xl ring-1 ring-emerald-500/30">
@@ -65,6 +68,13 @@ export function TerminalFace({ state }: { state: FaceState }) {
     </div>
   );
 }
+
+const SLEEP_LINES: string[] = [
+  '$ lumi --status',
+  '> status: SLEEPING',
+  '> ʕ-ᴥ-ʔ',
+  '> Zzz',
+];
 
 function scriptForState(state: FaceState): string[] {
   // Bear expressions per state — kawaii bear ʕ•ᴥ•ʔ, with hearts when

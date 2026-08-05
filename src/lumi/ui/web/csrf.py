@@ -42,6 +42,8 @@ _BYPASS_PREFIXES: tuple[str, ...] = (
     "/api/context",      # send-to-Lumi daemon — runs locally with no browser
     "/api/state",        # voice loop pushing face-state transitions to the device display
     "/api/caption",      # voice loop pushing live captions — same trust model as /api/state
+    "/api/gesture",      # vision-worker process pushing detected gestures — same trust model
+    "/api/presence",     # vision-worker process pushing presence transitions — same trust model
     "/device-display/audio",  # on-screen mute/volume controls — same device, physical touch
     "/device-display/system",  # on-screen brightness slider — same trust model
     "/static/",          # static assets, no state

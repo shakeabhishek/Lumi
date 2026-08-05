@@ -94,6 +94,36 @@ async def post_caption_clear(request: Request) -> dict[str, object]:
     return {"ok": True}
 
 
+# ── Gestures + presence (vision-worker → display) ───────────────────────────
+#
+# Pushed by the separate vision-worker OS process (see vision-worker/) —
+# MediaPipe needs protobuf 4.x, incompatible with this app's chromadb
+# (protobuf 7.x), so gesture/presence detection can't live in-process.
+# Same trust model as /state and /caption above: same-device, fire-and-
+# forget push, bypassed in CSRF middleware.
+
+
+@router.post("/gesture")
+async def post_gesture(request: Request, type: Annotated[str, Form()]) -> dict[str, object]:
+    from ....vision.gestures import GestureType  # noqa: PLC0415
+    from .device_display import publish_gesture  # noqa: PLC0415
+
+    valid = {g.value for g in GestureType} - {GestureType.NONE.value}
+    if type not in valid:
+        raise HTTPException(status_code=400, detail=f"type must be one of {sorted(valid)}")
+    await publish_gesture(request, type)
+    return {"ok": True, "type": type}
+
+
+@router.post("/presence")
+async def post_presence(request: Request, present: Annotated[str, Form()]) -> dict[str, object]:
+    from .device_display import publish_presence  # noqa: PLC0415
+
+    is_present = present.lower() in ("true", "1", "on")
+    await publish_presence(request, is_present)
+    return {"ok": True, "present": is_present}
+
+
 # ── Location typeahead ──────────────────────────────────────────────────────
 
 

@@ -61,17 +61,6 @@ class AudioOutput(ABC):
         """Block until audio is done playing."""
 
 
-class Camera(ABC):
-    """Vision input."""
-
-    @abstractmethod
-    def capture(self) -> np.ndarray | None:
-        """Return one HxWx3 uint8 RGB frame, or None if the camera is unavailable."""
-
-    @abstractmethod
-    def close(self) -> None: ...
-
-
 class GPIO(Protocol):
     """Minimal GPIO surface — buttons + LEDs. No-op on laptop."""
 

@@ -7,16 +7,25 @@ fire/cooldown/threshold logic on synthetic predictions.
 
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 import threading
 import time
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
-from lumi.audio.wake_word import OpenWakeWordWake, PushToTalkWake
-
+from lumi.audio.wake_word import (
+    CompositeWakeSource,
+    FileTriggerWake,
+    OpenWakeWordWake,
+    PushToTalkWake,
+    WakeSource,
+)
 
 # ── PushToTalk ──────────────────────────────────────────────────────────────
 
@@ -168,3 +177,126 @@ def test_wait_for_wake_blocks_until_event() -> None:
     w._event.clear()
     assert time.monotonic() - t0 < 1.0
     assert not w._event.is_set()
+
+
+# ── FileTriggerWake ─────────────────────────────────────────────────────────
+
+
+def _write_trigger(data_dir, source: str, age_s: float = 0.0) -> None:
+    """Directly write a trigger file, bypassing the vision-worker's own
+    client — this test only cares about FileTriggerWake's consumption
+    side. age_s lets a test simulate an already-stale trigger."""
+    ts = datetime.now(UTC) - timedelta(seconds=age_s)
+    path = data_dir / ".wake_trigger.json"
+    path.write_text(json.dumps({"source": source, "ts": ts.isoformat()}), encoding="utf-8")
+
+
+def test_file_trigger_wake_fires_on_fresh_trigger(tmp_path) -> None:
+    wake = FileTriggerWake(tmp_path, poll_s=0.02)
+    _write_trigger(tmp_path, source="gesture:wave")
+
+    fired = threading.Event()
+
+    def _wait() -> None:
+        wake.wait_for_wake()
+        fired.set()
+
+    t = threading.Thread(target=_wait, daemon=True)
+    t.start()
+    assert fired.wait(timeout=2.0), "wake should have fired on a fresh trigger file"
+    wake.stop()
+
+
+def test_file_trigger_wake_ignores_stale_trigger(tmp_path) -> None:
+    wake = FileTriggerWake(tmp_path, poll_s=0.02)
+    _write_trigger(tmp_path, source="presence", age_s=FileTriggerWake._MAX_TRIGGER_AGE_S + 1.0)
+
+    fired = threading.Event()
+
+    def _wait() -> None:
+        wake.wait_for_wake()
+        fired.set()
+
+    t = threading.Thread(target=_wait, daemon=True)
+    t.start()
+    assert not fired.wait(timeout=0.5), "a stale trigger must not fire wake"
+    wake.stop()
+
+
+def test_file_trigger_wake_consumes_the_file() -> None:
+    """The trigger file must be deleted after being read, whether fresh
+    or stale — otherwise the same trigger could fire repeatedly."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        _write_trigger(data_dir, source="gesture:wave")
+        wake = FileTriggerWake(data_dir, poll_s=0.02)
+        wake._check_once()
+        assert not (data_dir / ".wake_trigger.json").exists()
+
+
+def test_file_trigger_wake_no_file_does_not_fire(tmp_path) -> None:
+    wake = FileTriggerWake(tmp_path, poll_s=0.02)
+    wake._check_once()
+    assert not wake._event.is_set()
+
+
+def test_file_trigger_wake_stop_allows_rebuild(tmp_path) -> None:
+    wake = FileTriggerWake(tmp_path)
+    wake._thread = MagicMock()  # pretend already running
+    wake.stop()
+    assert wake._thread is None
+
+
+# ── CompositeWakeSource ──────────────────────────────────────────────────────
+
+
+class _FakeWakeSource(WakeSource):
+    """Fires immediately if `fires` is True, otherwise blocks forever
+    until stop() is called."""
+
+    def __init__(self, fires: bool) -> None:
+        self._fires = fires
+        self._stopped = threading.Event()
+        self.stop_called = False
+
+    def wait_for_wake(self) -> None:
+        if self._fires:
+            return
+        self._stopped.wait()
+
+    def stop(self) -> None:
+        self.stop_called = True
+        self._stopped.set()
+
+
+def test_composite_returns_as_soon_as_fast_source_fires() -> None:
+    fast = _FakeWakeSource(fires=True)
+    slow = _FakeWakeSource(fires=False)
+    composite = CompositeWakeSource([fast, slow])
+
+    t0 = time.monotonic()
+    composite.wait_for_wake()
+    assert time.monotonic() - t0 < 1.0
+
+
+def test_composite_stop_reaches_all_children() -> None:
+    a = _FakeWakeSource(fires=False)
+    b = _FakeWakeSource(fires=False)
+    composite = CompositeWakeSource([a, b])
+    composite.stop()
+    assert a.stop_called
+    assert b.stop_called
+
+
+def test_composite_child_error_does_not_prevent_other_child_from_firing() -> None:
+    class _BrokenWakeSource(WakeSource):
+        def wait_for_wake(self) -> None:
+            raise RuntimeError("simulated child failure")
+
+    broken = _BrokenWakeSource()
+    working = _FakeWakeSource(fires=True)
+    composite = CompositeWakeSource([broken, working])
+
+    t0 = time.monotonic()
+    composite.wait_for_wake()
+    assert time.monotonic() - t0 < 1.0, "a broken child must not block the composite forever"

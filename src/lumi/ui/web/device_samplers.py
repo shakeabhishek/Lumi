@@ -17,6 +17,7 @@ state regardless of which sampler fired last.
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 
 import psutil  # type: ignore[import-not-found]
@@ -29,6 +30,8 @@ log = get_logger(__name__)
 _CPU_INTERVAL_S = 5.0
 _WEATHER_INTERVAL_S = 600.0      # 10 minutes — comfortable for the OWM free tier
 _WEATHER_RETRY_INTERVAL_S = 60.0  # back off harder when something's wrong
+_VISION_SAMPLE_INTERVAL_S = 5.0
+_VISION_STALE_S = 12.0  # a bit more than 2x the vision-worker's own presence-heartbeat cadence
 
 
 def _read_cpu_temp_c() -> int | None:
@@ -115,8 +118,29 @@ async def weather_sampler(bus: DeviceBus, data_dir: Path) -> None:
             await asyncio.sleep(_WEATHER_RETRY_INTERVAL_S)
 
 
+async def vision_liveness_sampler(bus: DeviceBus) -> None:
+    """Derives the on-screen camera-active indicator from how recently the
+    separate vision-worker process last POSTed /api/presence — the
+    worker sends a heartbeat at least every ~5s even when the value
+    hasn't changed (see vision-worker/src/lumi_vision_worker/main.py)
+    specifically so this sampler has something fresh to check. If the
+    worker isn't running (camera_enabled off, or the process is down),
+    the presence timestamp goes stale and cameraActive flips False."""
+    try:
+        while True:
+            await asyncio.sleep(_VISION_SAMPLE_INTERVAL_S)
+            latest = bus.latest() or {}
+            presence = latest.get("presence") or {}
+            ts = presence.get("ts")
+            camera_active = bool(ts) and (time.time() - ts) < _VISION_STALE_S
+            if latest.get("cameraActive") != camera_active:
+                await bus.publish({"cameraActive": camera_active})
+    except asyncio.CancelledError:
+        return
+
+
 def start_samplers(app) -> list[asyncio.Task[None]]:
-    """Kick off both samplers; return the tasks so the lifespan can
+    """Kick off all samplers; return the tasks so the lifespan can
     cancel them on shutdown. Called from the FastAPI lifespan handler."""
     from .device_bus import get_bus  # noqa: PLC0415
 
@@ -124,4 +148,5 @@ def start_samplers(app) -> list[asyncio.Task[None]]:
     return [
         asyncio.create_task(cpu_sampler(bus), name="lumi.cpu_sampler"),
         asyncio.create_task(weather_sampler(bus, app.state.data_dir), name="lumi.weather_sampler"),
+        asyncio.create_task(vision_liveness_sampler(bus), name="lumi.vision_liveness_sampler"),
     ]

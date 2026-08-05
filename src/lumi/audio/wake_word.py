@@ -1,9 +1,14 @@
 """Wake-word detection.
 
-Two sources, picked by config:
+Four sources:
   - PushToTalkWake: press Enter to wake. Default for headless dev.
   - OpenWakeWordWake: continuous mic listening with on-device ONNX models.
     Lazy-imports openwakeword + sounddevice so the package stays optional.
+  - FileTriggerWake: polls for a wake trigger dropped by the separate
+    camera/gesture vision-worker process (wave gesture, presence).
+  - CompositeWakeSource: races multiple sources, first to fire wins —
+    used when camera_enabled pairs the primary source with
+    FileTriggerWake so either voice or gesture can wake Lumi.
 
 The interface (`WakeSource.wait_for_wake`) is what the runtime depends on, so
 swapping detectors is a one-class change.
@@ -18,8 +23,13 @@ UI.
 
 from __future__ import annotations
 
+import contextlib
+import json
 import threading
+import time
 from abc import ABC, abstractmethod
+from datetime import UTC, datetime
+from pathlib import Path
 
 from ..log import get_logger
 
@@ -162,3 +172,113 @@ class OpenWakeWordWake(WakeSource):
                     self._event.set()
         except Exception as exc:
             log.warning("wake.listen_error", error=str(exc))
+
+
+class FileTriggerWake(WakeSource):
+    """Polls data_dir/.wake_trigger.json, dropped by the separate
+    vision-worker process (wave gesture or presence sit-down — see
+    vision-worker/src/lumi_vision_worker/wake_trigger.py).
+
+    Poll-based, not inotify: zero new dependencies, and a wake trigger
+    has no latency budget tighter than ~150ms — a wave gesture takes the
+    user the better part of a second to perform. Mirrors
+    OpenWakeWordWake's background-thread + threading.Event shape, but the
+    "sensor" is a file stat instead of an audio stream.
+
+    Relies on stop() being called between voice-loop turns (already true
+    today, via the same call site that frees OpenWakeWordWake's mic
+    stream) to gate WHEN this polls at all: the poll thread only runs
+    between wait_for_wake() calls, i.e. during IDLE, so a presence/wave
+    trigger written mid-conversation just sits unread in the file until
+    the loop returns to idle — at which point _MAX_TRIGGER_AGE_S decides
+    whether it's still relevant or should be discarded as stale.
+    """
+
+    _MAX_TRIGGER_AGE_S = 5.0  # stale-trigger guard — same idea as
+    # host_helper/send_to_lumi.py's pending-context max age: if Lumi was
+    # mid-turn when the file landed, don't fire on a wave from 30s ago.
+
+    def __init__(self, data_dir: Path, poll_s: float = 0.15) -> None:
+        self._path = data_dir / ".wake_trigger.json"
+        self._poll_s = poll_s
+        self._event = threading.Event()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def wait_for_wake(self) -> None:
+        self._ensure_started()
+        self._event.wait()
+        self._event.clear()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread = None  # next wait_for_wake() rebuilds, same idiom as OpenWakeWordWake.stop()
+
+    def _ensure_started(self) -> None:
+        if self._thread is not None:
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._thread.start()
+
+    def _poll_loop(self) -> None:
+        while not self._stop.is_set():
+            self._check_once()
+            time.sleep(self._poll_s)
+
+    def _check_once(self) -> None:
+        try:
+            if not self._path.exists():
+                return
+            raw = self._path.read_text(encoding="utf-8")
+            self._path.unlink(missing_ok=True)
+            payload = json.loads(raw)
+            ts = datetime.fromisoformat(payload.get("ts", ""))
+            age = (datetime.now(UTC) - ts).total_seconds()
+            if age > self._MAX_TRIGGER_AGE_S:
+                log.info(
+                    "wake.gesture_trigger_stale", age_s=round(age, 1), source=payload.get("source"),
+                )
+                return
+            log.info("wake.gesture_trigger_consumed", source=payload.get("source"))
+            self._event.set()
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+
+
+class CompositeWakeSource(WakeSource):
+    """First-to-fire-wins wrapper over multiple wake sources. Built for
+    camera_enabled=True: races the configured primary wake source
+    (OpenWakeWordWake in production, PushToTalkWake in dev) against
+    FileTriggerWake.
+
+    Caveat, deliberately not hard-blocked: PushToTalkWake.wait_for_wake()
+    blocks on input(), which Python cannot cancel from another thread.
+    Composing it here is safe in practice only because laptop dev has no
+    real camera/vision-worker running, so the file side never fires. The
+    pairing this is actually built for is OpenWakeWordWake +
+    FileTriggerWake on real hardware, where both children ARE cleanly
+    stoppable.
+    """
+
+    def __init__(self, sources: list[WakeSource]) -> None:
+        self._sources = sources
+        self._event = threading.Event()
+
+    def wait_for_wake(self) -> None:
+        self._event.clear()
+        for src in self._sources:
+            threading.Thread(target=self._wait_one, args=(src,), daemon=True).start()
+        self._event.wait()
+
+    def _wait_one(self, src: WakeSource) -> None:
+        try:
+            src.wait_for_wake()
+            self._event.set()
+        except Exception as exc:
+            log.warning("wake.composite_child_error", source=type(src).__name__, error=str(exc))
+
+    def stop(self) -> None:
+        for src in self._sources:
+            with contextlib.suppress(Exception):
+                src.stop()

@@ -6,9 +6,14 @@ import type { FaceState } from '../state';
  * Figma export shipped; the previous pygame implementation used Twemoji
  * PNGs but here we just lean on the system emoji font (the kiosk's
  * Chromium has full emoji coverage out of the box).
+ *
+ * `sleeping` (2026-07-06, presence-driven, IDLE-only) swaps the idle
+ * glyph for 😴 and drops the wiggle — no separate Zzz needed here since
+ * the sleeping-face emoji already carries it.
  */
-export function VectorFace({ state }: { state: FaceState }) {
+export function VectorFace({ state, sleeping = false }: { state: FaceState; sleeping?: boolean }) {
   const glyph = (() => {
+    if (sleeping && state === 'idle') return '😴';
     switch (state) {
       case 'idle':   return '😊';
       case 'listen': return '🤗';
@@ -18,6 +23,7 @@ export function VectorFace({ state }: { state: FaceState }) {
   })();
 
   const anim = (() => {
+    if (sleeping && state === 'idle') return {};
     if (state === 'idle')   return { rotate: [0, -5, 5, -5, 0] };
     if (state === 'think')  return { rotate: [0, 10, -10, 0] };
     if (state === 'speak')  return { scale: [1, 1.12, 0.95, 1.08, 1] };

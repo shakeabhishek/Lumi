@@ -1,5 +1,8 @@
+import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import type { FaceState } from '../state';
+
+const CELEBRATE_MS = 1300;
 
 /**
  * The minimalist pixel face the user explicitly chose from the Figma
@@ -16,40 +19,86 @@ import type { FaceState } from '../state';
  *            (found in real use, 2026-07-03).
  *   THINK  — eyes shift L↔R + 3-dot indicator top-right
  *   SPEAK  — mouth height pulses on a fast cadence
+ *   WAVE   — user-requested "acknowledge the wave" reaction (2026-07-06):
+ *            a ~1.3s smile (wider, warm-tinted mouth + happy double-
+ *            squint eyes) plus a little rotate/bounce dance on the whole
+ *            face, layered on top of whatever state Lumi happens to be
+ *            in when the wave fires — a wave-back should read clearly
+ *            even mid-THINK. Driven by `waveAt` (a fresh timestamp from
+ *            device.gesture, not a 5th LumiState — the enum stays closed).
+ *   SLEEP  — user-requested (2026-07-06): when nobody's around
+ *            (presence-driven, see App.tsx's `sleeping` prop, gated to
+ *            IDLE only so a turn in progress is never interrupted),
+ *            eyes go still and closed and a little "Zzz" floats up near
+ *            the face. `celebrating` still wins over `sleeping` if a
+ *            wave somehow fires in the same instant (e.g. presence just
+ *            flipped back on) — waking up should always read clearly.
  */
-export function PixelFace({ state }: { state: FaceState }) {
-  const eyeAnim = (() => {
-    if (state === 'idle') {
-      return {
-        scaleY: [1, 0.1, 1],
-        scale:  [1, 1.05, 1],
-      };
-    }
-    if (state === 'listen') {
-      return { scale: [1.12, 1.22, 1.12] };
-    }
-    if (state === 'think') {
-      return { x: [-3, 3, -3] };
-    }
-    return {};
-  })();
+export function PixelFace({
+  state,
+  waveAt,
+  sleeping = false,
+}: {
+  state: FaceState;
+  waveAt?: number | null;
+  sleeping?: boolean;
+}) {
+  const [celebrating, setCelebrating] = useState(false);
 
-  const eyeTransition = (() => {
-    if (state === 'idle') return { duration: 3, repeat: Infinity, repeatDelay: 2 };
-    if (state === 'think') return { duration: 1.5, repeat: Infinity };
-    if (state === 'listen') return { duration: 0.8, repeat: Infinity, ease: 'easeInOut' as const };
-    return { duration: 0.3 };
-  })();
+  useEffect(() => {
+    if (waveAt == null) return;
+    setCelebrating(true);
+    const t = setTimeout(() => setCelebrating(false), CELEBRATE_MS);
+    return () => clearTimeout(t);
+  }, [waveAt]);
 
-  const mouthAnim =
-    state === 'speak'
+  const asleep = sleeping && !celebrating;
+
+  const eyeAnim = celebrating
+    ? { scaleY: [1, 0.3, 1, 0.3, 1] }
+    : asleep
+      ? { scaleY: 0.12 }
+      : (() => {
+          if (state === 'idle') {
+            return {
+              scaleY: [1, 0.1, 1],
+              scale:  [1, 1.05, 1],
+            };
+          }
+          if (state === 'listen') {
+            return { scale: [1.12, 1.22, 1.12] };
+          }
+          if (state === 'think') {
+            return { x: [-3, 3, -3] };
+          }
+          return {};
+        })();
+
+  const eyeTransition = celebrating
+    ? { duration: 0.4 }
+    : asleep
+      ? { duration: 0.6 }
+      : (() => {
+          if (state === 'idle') return { duration: 3, repeat: Infinity, repeatDelay: 2 };
+          if (state === 'think') return { duration: 1.5, repeat: Infinity };
+          if (state === 'listen') return { duration: 0.8, repeat: Infinity, ease: 'easeInOut' as const };
+          return { duration: 0.3 };
+        })();
+
+  const mouthAnim = celebrating
+    ? { scaleX: 1.4 }
+    : state === 'speak'
       ? { scaleY: [1, 1.5, 0.8, 1.3, 1] }
       : {};
   const mouthTransition =
     state === 'speak' ? { duration: 0.5, repeat: Infinity } : { duration: 0.3 };
 
   return (
-    <div className="relative w-80 h-80 grid grid-cols-8 grid-rows-8 gap-2 p-6">
+    <motion.div
+      className="relative w-80 h-80 grid grid-cols-8 grid-rows-8 gap-2 p-6"
+      animate={celebrating ? { rotate: [0, -6, 6, -4, 4, 0], y: [0, -10, 0, -6, 0] } : {}}
+      transition={celebrating ? { duration: 1.1, ease: 'easeInOut' } : {}}
+    >
       {/* Left Eye */}
       <motion.div
         className="col-start-2 row-start-3 col-span-2 row-span-2 bg-white/90 rounded-3xl shadow-sm z-10"
@@ -64,14 +113,28 @@ export function PixelFace({ state }: { state: FaceState }) {
         transition={eyeTransition}
       />
 
-      {/* Mouth */}
+      {/* Mouth — warm amber tint during the wave-back smile, matching the
+          existing SPEAK-state amber caption-bubble accent. */}
       <motion.div
-        className="col-start-3 row-start-6 col-span-4 row-span-1 bg-white/90 rounded-full shadow-sm z-10"
+        className={`col-start-3 row-start-6 col-span-4 row-span-1 rounded-full shadow-sm z-10 ${
+          celebrating ? 'bg-amber-200/90' : 'bg-white/90'
+        }`}
         animate={mouthAnim}
         transition={mouthTransition}
       />
 
-      {state === 'think' && (
+      {/* Zzz — floats up and fades, looping, only while asleep. */}
+      {asleep && (
+        <motion.div
+          className="absolute top-6 right-10 text-2xl font-bold text-white/70 select-none z-10"
+          animate={{ y: [0, -14], opacity: [0, 1, 0] }}
+          transition={{ duration: 2.2, repeat: Infinity, ease: 'easeInOut' }}
+        >
+          Zzz
+        </motion.div>
+      )}
+
+      {!asleep && state === 'think' && (
         <motion.div
           className="absolute top-2 right-2 flex gap-1"
           animate={{ opacity: [0.3, 1, 0.3] }}
@@ -98,6 +161,6 @@ export function PixelFace({ state }: { state: FaceState }) {
           ))}
         </div>
       )}
-    </div>
+    </motion.div>
   );
 }

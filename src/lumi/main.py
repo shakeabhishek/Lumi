@@ -41,7 +41,7 @@ app = typer.Typer(name="lumi", add_completion=False, pretty_exceptions_enable=Fa
 log = get_logger(__name__)
 
 
-def _make_wake_source(cfg: Settings) -> WakeSource:
+def _make_primary_wake_source(cfg: Settings) -> WakeSource:
     if cfg.wake == WakeStrategy.PUSH_TO_TALK:
         return PushToTalkWake()
     if cfg.wake == WakeStrategy.WAKE_WORD:
@@ -53,6 +53,18 @@ def _make_wake_source(cfg: Settings) -> WakeSource:
             input_device=cfg.audio_input_device,
         )
     raise NotImplementedError(f"Wake strategy not yet implemented: {cfg.wake}")
+
+
+def _make_wake_source(cfg: Settings, camera_enabled: bool) -> WakeSource:
+    """Wraps the primary wake source (voice) with a gesture/presence
+    trigger when the camera is enabled — additive, not a replacement.
+    See audio/wake_word.py's CompositeWakeSource/FileTriggerWake."""
+    primary = _make_primary_wake_source(cfg)
+    if camera_enabled:
+        from .audio.wake_word import CompositeWakeSource, FileTriggerWake  # noqa: PLC0415
+
+        return CompositeWakeSource([primary, FileTriggerWake(cfg.data_dir)])
+    return primary
 
 
 def _enroll_voice(cfg: Settings, mic: SoundDeviceInput, voice_id: VoiceID) -> None:
@@ -345,7 +357,7 @@ def run(
     # as the chat path; same source of truth via build_cloud_bridge().
     conversation = ConversationManager(llm, mode=cfg.mode, memory=memory, pseudonymizer=pseudo)
     tts = make_tts(cfg.piper_voice, cfg.models_dir / "piper", output_device=cfg.audio_output_device)
-    wake = _make_wake_source(cfg)
+    wake = _make_wake_source(cfg, camera_enabled=_user.camera_enabled)
     router = SkillRouter(
         conversation=conversation,
         tts=tts,

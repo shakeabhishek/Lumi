@@ -191,11 +191,9 @@ Mic → Whisper Tiny (CPU) → text
     → Result → Piper TTS (CPU) → audio → speaker
 ```
 
-**Data flow (gesture):**
-```
-Camera → MediaPipe on Pi 5 CPU → hand landmarks
-       → gesture classifier → action
-```
+**Data flow (gesture):** see the full "Camera & vision" section below for
+the actual three-process pipeline (capture shim → shared memory →
+MediaPipe worker) and the exact wake-vs-display-only split per gesture.
 
 ---
 
@@ -281,13 +279,18 @@ System utility            log2ram                    Reduces SD card writes ~95%
 Process supervisor        systemd                    All Lumi services
 ```
 
-**Service architecture (systemd units):**
-- `lumi.service` — main Python app runtime
-- `lumi-web.service` — FastAPI dashboard
-- `lumi-openclaw.service` — OpenClaw Node.js service (skills + agent)
-- `lumi-gadget.service` — USB composite device setup
-- `lumi-audio.service` — audio pipeline
-- `lumi-camera.service` — vision pipeline
+**Service architecture (systemd units, as actually deployed on the Pi):**
+- `lumi-web.service` — FastAPI dashboard + device display (`:80`)
+- `lumi-voice.service` — voice loop (wake word → STT → LLM → TTS)
+- `lumi-display.service` — Chromium kiosk rendering `/device-display/`
+- `lumi-vision.service` — vision worker (MediaPipe hand-landmark
+  gestures + presence), separate Python 3.12 venv (protobuf 4.x, can't
+  share `lumi-web`'s chromadb-driven protobuf 7.x)
+- `lumi-vision-capture.service` — camera capture shim, runs under the
+  Pi's *system* Python (3.13) where `picamera2`/`libcamera`'s compiled
+  bindings live; mediapipe has no wheel for that Python version on any
+  platform, so capture and inference are split into two processes
+  bridged by POSIX shared memory (see `vision-worker/capture_shim/`)
 
 ---
 
@@ -861,29 +864,72 @@ are already correct; logs `storage.data_dir_perms_tightened` on a fix.
 
 ## Camera & vision
 
+**Status: built and deployed (2026-07-06).** Gesture recognition,
+presence detection, and their display/wake integration are live on the
+Pi under `lumi-vision.service` + `lumi-vision-capture.service`. See
+`vision-worker/README.md` and `vision-worker/capture_shim/README.md` for
+the implementation detail; this section covers the architecture and
+behavior that matters for future sessions.
+
 **Hardware:** Pi Camera Module 3 Wide (102° FOV, 12MP IMX708, motorized autofocus). Connects via CSI ribbon — no PCIe conflict with AI HAT+ 2.
 
-**Vision pipeline:**
+**Vision pipeline — three processes, not one, for two independent version
+conflicts:**
 ```
-Camera → libcamera → frame buffer → MediaPipe Hand Landmarks (on Pi 5 CPU)
-       → 21 hand keypoints per frame at 30 fps
-       → custom gesture classifier (Python)
-       → gesture event → Lumi action
+[system Python 3.13] Picamera2/libcamera capture (capture_shim.py)
+       → POSIX shared memory (raw RGB frames)
+       → [Python 3.12, vision-worker's own venv] MediaPipe Hand Landmarks
+       → 21 hand keypoints per frame (~16-22 fps measured on-Pi)
+       → custom gesture classifier (classify.py/wave.py, pure Python)
+       → gesture/presence event → HTTP push to lumi-web (/api/gesture,
+         /api/presence) for the display, or a file-drop wake trigger
+         consumed by the voice loop's FileTriggerWake
 ```
+Two separate ABI/version walls forced this three-process shape:
+1. MediaPipe needs protobuf 4.x; `lumi-web`'s chromadb needs protobuf
+   7.x — can't share a venv with the main app (this was anticipated).
+2. `picamera2`/`libcamera`'s Python bindings are apt-installed and
+   compiled specifically against the Pi OS's **system** Python (3.13) —
+   but MediaPipe has never published a `cp313` wheel on any platform,
+   and its newest aarch64 Linux wheel at all is `0.10.18`, capped at
+   `cp312` (confirmed against PyPI's full release history, 2026-07-06).
+   Discovered only during real hardware deployment, not anticipated in
+   the original design. Solved by splitting camera capture into its own
+   tiny process (`vision-worker/capture_shim/capture_shim.py`, runs
+   under system Python) that hands frames to the mediapipe process over
+   shared memory — sub-millisecond overhead, negligible against
+   MediaPipe's own ~45-60ms/frame inference budget.
 
 **V1 gesture vocabulary:**
-- 👋 Wave — wake / greet
-- ✋ Open palm — pause / stop talking
-- 👍 Thumbs up — yes / accept
-- 👎 Thumbs down — no / reject
-- ✊ Closed fist — cancel / dismiss
-- Presence detection (no gesture) — auto-wake when user sits down, sleep when user leaves
+- 👋 Wave — **wakes Lumi** (the only gesture that does), plus a smile +
+  little dance reaction on the pixel face
+- ✋ Open palm — display badge only in this build, not yet wired to
+  interrupt TTS (needs its own design pass — see the vision-worker
+  plan's scope note)
+- 👍 Thumbs up / 👎 Thumbs down — display badge only, not yet wired to a
+  yes/no confirmation flow
+- ✊ Closed fist — display badge only
+- Presence detection — **display-only**, per explicit user decision
+  (2026-07-06): sitting down/leaving does **not** wake or sleep Lumi
+  mechanically. It only drives the on-screen ambient dim + closed-
+  eyes/"Zzz" sleep treatment (gated to IDLE, so it never visually
+  interrupts an active turn). The only ways to wake Lumi are a wave
+  gesture or the voice wake word.
 
 **Privacy by design:**
-- Frames never written to disk
-- Only 21-point hand landmarks used (frames discarded immediately)
-- NeoPixel indicator when camera active
-- Easy disable via button or web UI
+- Frames never written to disk anywhere in the pipeline (verified: the
+  shared-memory buffer is overwritten every frame at a fixed address,
+  never persisted; MediaPipe's own frame reference is dropped after
+  landmark extraction)
+- Only 21-point hand landmarks retained past a single loop iteration
+- On-screen camera-active indicator (small icon, `App.tsx`) shipped as
+  the privacy signal for now — a physical NeoPixel on the ReSpeaker HAT
+  is still deferred (no LED-driving code exists in this repo yet; see
+  ROADMAP.md)
+- `camera_enabled` in `/settings/data` actually gates capture — when
+  off, `capture_shim.py` releases the camera and idles in a settings-
+  poll loop rather than just ignoring detections (verified via CPU usage
+  dropping to idle within ~2s of toggling off)
 
 ---
 
@@ -936,6 +982,7 @@ Features deferred from V1 to keep V1 shippable:
 | **Chat streaming endpoint hangs under sustained load** *(found 2026-05-23)* | Phase 4 soak (60 min, mock backend, 5-second cadence) ran cleanly for ~11 min then `/chat/stream` started timing out — 84 ReadTimeouts piled up over the next 49 min. Server process stayed alive, no 5xx, no FD/RSS leak, no exceptions in logs. Latency p95 drift 3.09× (gate threshold 2×). Real user cadence (1-3/min with idle stretches) wouldn't hit this. Likely a StreamingResponse + `loop.run_in_executor` interaction in `chat.py:chat_stream` under sustained concurrent open generators. Investigation plan: reproduce with a shorter, more aggressive soak; check for executor thread starvation; consider moving `next(gen)` off the default executor or making the chunk generator natively async. ~2-3h to root-cause + fix. |
 | **Sprite-pack uploader** | `/settings/sprites` page: list existing sprite folders in `data/sprites/`, upload form (ZIP or PNG frames + manifest.json), delete button. Auto-populates the idle scene dropdown. Validates PNG-only, size caps, safe folder names. User-requested ("tamagotchi customization"). ~2-3h. |
 | **Pixel face redesign** | The pink-heart-with-blush-and-smiley reads off. User to source inspiration; we redo when there's a clear direction. |
+| **Auto-detect location for weather, instead of manual entry** *(user-requested, 2026-07-06)* | Live weather already ships (`weather_sampler` in `device_samplers.py` + `RightPanel`/`WidgetBar` on the device display) but requires the user to type a city into `weather_location` at `/settings/data` (with typeahead via `/api/locations/search`). The Pi 5 has no GPS hardware in the V1 BOM, but it doesn't need one for city-level weather: IP-based geolocation (e.g. a free-tier lookup like ip-api.com/ipinfo.io — one outbound HTTP GET, no new hardware) resolves to city/region accuracy on a home WiFi connection, which is all OpenWeatherMap's endpoint needs anyway. Scope: on first boot (or a "detect automatically" button next to the manual field), fetch IP geolocation, prefill `weather_location`, let the user override it same as today. Worth flagging as a privacy consideration despite being low-stakes (an outbound call revealing rough location to a third-party geolocation service) — should be opt-in, not silent, consistent with the local-first brand. ~2-3h. |
 | **Bear face glyph coverage** | `ʕ ᴥ ʔ` work everywhere we tested, but some bundled fonts on Pi OS don't have `ᴥ` (IPA Letter Ain). Bundle a known-good TTF (DejaVu Sans Mono is on the Pi by default; might still need an explicit path) or swap the `ᴥ` mouth glyph for something more universal. |
 | **Post-train a small model to emit tool_calls reliably under OpenClaw's agent prompt** *(research, ~weeks)* | The blocker that pushed full OpenClaw runtime to V2 is purely behavioural: qwen2.5:7b and friends *see* the tools in OpenClaw's ~13K-token system prompt but choose to roleplay an answer instead of emitting a `tool_call`. The capability is there (94% on our short-prompt viability test), the *habit* isn't. A focused fine-tune could plausibly fix this without needing a cloud LLM. Approach: (1) collect a few thousand (prompt → tool_call) pairs by running real cloud LLMs (Claude/GPT) against OpenClaw's heavy prompt with our plugin set and capturing their tool_call outputs; (2) SFT a 1.5B–8B base (qwen2.5 / llama-3.2) on those traces using LoRA on the JSON-emission turns only — keep the chat behaviour out of training; (3) optionally DPO with negative examples (the roleplay completions we see today) ranked below the matched tool_calls. Eval: re-run the OpenClaw viability harness against the heavy agent prompt at ≥80% to clear V1's bar. Hardware: a single H100 hour should cover a LoRA on 8B; everything else fits on Hailo at inference time. Why this matters: if it works, V1 hybrid stops being the floor and the full OpenClaw runtime + 100+ community plugins becomes the default on-device experience, no cloud required. Risk: even after fine-tune, a 1.5B may not generalize to *novel* tools added post-training — needs a continual-learning loop (auto-finetune on tool_call traces from user-installed skills). |
 
@@ -1094,7 +1141,7 @@ Surface to user when relevant.
 - **SmartiPi cavity vs. optional AI HAT+ 2** 🟡 — the 45 mm cavity fits ~Pi 5 + cooler + one HAT (ReSpeaker); if the vision benchmark forces the AI HAT+ 2 in, two HATs likely won't fit and the enclosure must be revisited.
 - **OpenClaw service startup time** — Adds to Pi boot time. Acceptable threshold?
 - **Skill timeout default** — How long before a stuck skill is killed? (Default 10s, configurable per skill)
-- **Pi-CPU vision headroom** ✅ RESOLVED 2026-07-01 — **PASSED on the actual Pi 5:** MediaPipe HandLandmarker (VIDEO mode) ran **17.2 fps idle / 16.2 fps under a live `qwen2.5:1.5b` turn** (with the Chromium kiosk up) — well above the 10–15 fps target. So the Pi 5 CPU sustains continuous vision + a live turn → **SKIP the AI HAT+ 2, ship on the 16GB Pi.** *(Integration caveat: MediaPipe needs protobuf 4.x while chromadb needs 7.x — they can't share one venv; run the vision worker in its own process/venv, or find a protobuf-7-compatible MediaPipe.)*
+- **Pi-CPU vision headroom** ✅ RESOLVED 2026-07-01, integration shipped 2026-07-06 — **PASSED on the actual Pi 5:** MediaPipe HandLandmarker (VIDEO mode) ran **17.2 fps idle / 16.2 fps under a live `qwen2.5:1.5b` turn** (with the Chromium kiosk up) — well above the 10–15 fps target. So the Pi 5 CPU sustains continuous vision + a live turn → **SKIP the AI HAT+ 2, ship on the 16GB Pi.** Both integration caveats anticipated/discovered during the actual build are resolved: (1) protobuf 4.x-vs-7.x — `vision-worker/` runs as its own process/venv, confirmed on-Pi at ~22 fps camera+MediaPipe together; (2) a *second*, unanticipated conflict found only during real deployment — `picamera2`/`libcamera`'s Python bindings are compiled against the Pi's system Python (3.13), but MediaPipe has no wheel for that version on any platform — solved by splitting camera capture into its own process (`capture_shim.py`, system Python) bridged to the mediapipe worker via POSIX shared memory. See the "Camera & vision" section above for the full pipeline shape.
 
 ---
 

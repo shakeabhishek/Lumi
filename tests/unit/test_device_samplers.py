@@ -13,13 +13,14 @@ display reads via SSE. Tests pin three things:
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from lumi.ui.web.device_bus import DeviceBus
-from lumi.ui.web.device_samplers import cpu_sampler, weather_sampler
+from lumi.ui.web.device_samplers import cpu_sampler, vision_liveness_sampler, weather_sampler
 
 
 @pytest.mark.asyncio
@@ -128,3 +129,49 @@ async def test_weather_sampler_keeps_last_good_reading_on_fetch_error(tmp_path: 
     assert snapshot is not None
     # Last good reading is still there.
     assert snapshot["weather"] == {"tempC": 12, "condition": "rainy", "location": "London"}
+
+
+@pytest.mark.asyncio
+async def test_vision_liveness_flips_active_on_fresh_presence_heartbeat() -> None:
+    bus = DeviceBus()
+    await bus.publish({"presence": {"present": True, "ts": time.time()}, "cameraActive": False})
+
+    with patch("lumi.ui.web.device_samplers._VISION_SAMPLE_INTERVAL_S", 0.05):
+        task = asyncio.create_task(vision_liveness_sampler(bus))
+        await asyncio.sleep(0.15)
+        task.cancel()
+        await task
+
+    assert bus.latest()["cameraActive"] is True
+
+
+@pytest.mark.asyncio
+async def test_vision_liveness_flips_inactive_when_heartbeat_goes_stale() -> None:
+    """If the vision-worker stops posting (camera_enabled off, or the
+    process is down), the presence timestamp ages out and the on-screen
+    camera-active indicator must go dark."""
+    bus = DeviceBus()
+    stale_ts = time.time() - 999
+    await bus.publish({"presence": {"present": True, "ts": stale_ts}, "cameraActive": True})
+
+    with patch("lumi.ui.web.device_samplers._VISION_SAMPLE_INTERVAL_S", 0.05):
+        task = asyncio.create_task(vision_liveness_sampler(bus))
+        await asyncio.sleep(0.15)
+        task.cancel()
+        await task
+
+    assert bus.latest()["cameraActive"] is False
+
+
+@pytest.mark.asyncio
+async def test_vision_liveness_no_presence_yet_is_inactive() -> None:
+    bus = DeviceBus()
+    await bus.publish({"state": "idle"})
+
+    with patch("lumi.ui.web.device_samplers._VISION_SAMPLE_INTERVAL_S", 0.05):
+        task = asyncio.create_task(vision_liveness_sampler(bus))
+        await asyncio.sleep(0.15)
+        task.cancel()
+        await task
+
+    assert bus.latest().get("cameraActive") is False

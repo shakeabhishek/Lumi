@@ -2,9 +2,10 @@
 
 Where we are: full software stack runs on the Pi as systemd services
 (`ollama` + `qwen2.5:1.5b` brain, `lumi-web` dashboard, `lumi-display`
-Chromium face, `lumi-openclaw` skills gateway — all auto-start on boot).
-Text chat works end-to-end with the face reacting; the device screen shows
-the live face + CPU/RAM/temp metrics. Audio and vision are not yet wired.
+Chromium face, `lumi-voice` voice loop, `lumi-vision` + `lumi-vision-
+capture` gesture/presence pipeline — all auto-start on boot). Text chat,
+voice, and camera gestures all work end-to-end with the face reacting;
+the device screen shows the live face + CPU/RAM/temp metrics.
 
 Dependencies are flagged so we pick by what's unblocked.
 
@@ -13,10 +14,7 @@ Dependencies are flagged so we pick by what's unblocked.
 1. **Voice loop (audio I/O)** — the headline gap; Lumi is voice-first by design but text-only today.
    - *Depends on:* the SmartiPi **Display Power Kit** arriving (frees the GPIO for the ReSpeaker).
    - *Scope:* ReSpeaker driver + ALSA → wake word ("Hey Lumi") → Whisper STT → LLM → Piper TTS → speaker.
-2. **Vision (camera → presence + gestures)** — the ambient-awareness differentiator; camera already captures fine.
-   - *Depends on:* **MediaPipe on ARM** (trickiest install in the stack — budget real time).
-   - *Scope:* presence (wake on sit-down / sleep on leave), gesture vocab (wave / thumbs up-down / open palm / fist), face reacts to you.
-   - *Bundles with:* the **Pi-CPU vision benchmark** — the pending AI-HAT buy/skip decision.
+2. **Vision (camera → presence + gestures)** ✅ **built + deployed 2026-07-06** — `lumi-vision.service` (MediaPipe, own Python 3.12 venv) + `lumi-vision-capture.service` (Picamera2 under the Pi's system Python, bridged via shared memory — a second version conflict found only during real deployment, see CLAUDE.md's "Camera & vision"). Wave wakes Lumi + triggers a smile/dance; presence drives a display-only sleep treatment (closed eyes + "Zzz"), does NOT wake/sleep mechanically (user decision). Remaining: physically tune classification thresholds against a real hand (needs someone in front of the camera) and a full 30-60 min soak.
 3. **Cloud LLM ceiling** — smart hard-turn handling; plumbing is ready (secrets file backend done).
    - *Depends on:* an **API key** (add at `/settings/cloud` → 0600 file).
    - *Scope:* pick provider (Gemini ships; Anthropic/OpenAI via OpenClaw), test cloud escalation via `RoutedBackend`, verify PII masking on the cloud path. **Fastest Tier-1 win.**

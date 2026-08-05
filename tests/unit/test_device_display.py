@@ -155,6 +155,63 @@ def test_caption_merges_without_clobbering_other_bus_keys(client: TestClient) ->
     assert latest["caption"] == {"speaker": "user", "text": "hi", "final": True}
 
 
+# ── /api/gesture, /api/presence (vision-worker → display) ──────────────────
+
+
+def test_api_gesture_publishes_to_bus(client: TestClient) -> None:
+    """POST /api/gesture is CSRF-bypassed like /api/state — same trust
+    model, the vision-worker is a separate OS process with no cookie."""
+    r = client.post("/api/gesture", data={"type": "wave"})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "type": "wave"}
+
+    bus = client.app.state.device_bus
+    latest = bus.latest()
+    assert latest["gesture"]["type"] == "wave"
+    assert "ts" in latest["gesture"]
+
+
+def test_api_gesture_rejects_invalid_type(client: TestClient) -> None:
+    r = client.post("/api/gesture", data={"type": "bogus"})
+    assert r.status_code == 400
+
+
+def test_api_gesture_rejects_none_as_a_pushable_type(client: TestClient) -> None:
+    """NONE is the classifier's "nothing detected" sentinel — it should
+    never be pushed as an actual gesture event."""
+    r = client.post("/api/gesture", data={"type": "none"})
+    assert r.status_code == 400
+
+
+def test_api_presence_publishes_to_bus(client: TestClient) -> None:
+    r = client.post("/api/presence", data={"present": "true"})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "present": True}
+
+    bus = client.app.state.device_bus
+    latest = bus.latest()
+    assert latest["presence"]["present"] is True
+    assert "ts" in latest["presence"]
+
+
+def test_api_presence_false(client: TestClient) -> None:
+    r = client.post("/api/presence", data={"present": "false"})
+    assert r.status_code == 200
+    assert r.json()["present"] is False
+
+
+def test_gesture_and_presence_merge_without_clobbering_other_bus_keys(client: TestClient) -> None:
+    client.post("/api/state", data={"state": "idle"})
+    client.post("/api/gesture", data={"type": "thumbs_up"})
+    client.post("/api/presence", data={"present": "true"})
+
+    bus = client.app.state.device_bus
+    latest = bus.latest()
+    assert latest["state"] == "idle"
+    assert latest["gesture"]["type"] == "thumbs_up"
+    assert latest["presence"]["present"] is True
+
+
 @pytest.mark.asyncio
 async def test_bus_seeded_via_publish_face_state(tmp_path) -> None:
     """The contract we care about: after publish_face_state() fires for

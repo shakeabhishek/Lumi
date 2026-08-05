@@ -10,7 +10,9 @@ import { AudioControls } from './components/AudioControls';
 import { RightPanel } from './components/RightPanel';
 import { AmbientBackground } from './components/AmbientBackground';
 import { CaptionBubble } from './components/CaptionBubble';
+import { GestureBadge } from './components/GestureBadge';
 import { useDeviceState, type FaceStyle, type FaceState } from './state';
+import { Camera } from 'lucide-react';
 
 export function App() {
   const device = useDeviceState();
@@ -30,6 +32,14 @@ export function App() {
 
   const state = device.connected ? device.state : demoState;
   const style: FaceStyle = device.style ?? 'pixel';
+  // `presence == null` means no real reading has arrived yet (nothing's
+  // wrong — treat as present so a fresh boot doesn't start "asleep").
+  // Gated to IDLE only so a turn in progress never gets visually
+  // interrupted by someone stepping away mid-conversation. Presence no
+  // longer wakes Lumi (only a wave gesture or the wake word does — see
+  // audio/wake_word.py) — it now only drives this display-only sleep
+  // treatment.
+  const sleeping = device.presence?.present === false && state === 'idle';
 
   return (
     <div
@@ -40,6 +50,52 @@ export function App() {
       {state === 'speak' && style !== 'terminal' && <SoundVisualizer />}
       <AudioControls micMuted={device.micMuted} volume={device.volume} brightness={device.brightness} />
       <CaptionBubble caption={device.caption} />
+      <GestureBadge gesture={device.gesture} />
+
+      {/* Camera-active indicator — on-screen substitute for the physical
+          NeoPixel privacy light (no LED-driving code exists yet, see
+          CLAUDE.md's "Camera & vision" privacy-by-design section).
+          Reflects the vision-worker's presence heartbeat via
+          vision_liveness_sampler, not a local flag — goes dark within
+          ~12s of the worker actually stopping (camera_enabled off, or
+          the process down). */}
+      {device.cameraActive && (
+        <div className="absolute top-4 left-4 z-20 flex items-center gap-1.5 pointer-events-none">
+          <motion.div
+            animate={{ opacity: [0.5, 1, 0.5] }}
+            transition={{ duration: 2, repeat: Infinity }}
+          >
+            <Camera className="w-4 h-4 text-rose-400" />
+          </motion.div>
+        </div>
+      )}
+
+      {/* Presence-driven ambient dim, paired with the face's own closed-
+          eyes/Zzz treatment (PixelFace) or sleeping glyph/status
+          (VectorFace/TerminalFace) below — a subtle dim rather than the
+          face carrying the whole "asleep" signal alone. */}
+      {sleeping && (
+        <motion.div
+          className="absolute inset-0 bg-black/30 z-30 pointer-events-none"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 1.5 }}
+        />
+      )}
+
+      {/* Sprite scenes are pre-rendered PNG loops with no "eyes" to
+          close, so they get a standalone Zzz overlay instead of the
+          per-face treatment PixelFace/VectorFace/TerminalFace render
+          themselves below. */}
+      {sleeping && style === 'sprite' && (
+        <motion.div
+          className="absolute top-1/3 right-1/3 text-3xl font-bold text-white/70 select-none z-30 pointer-events-none"
+          animate={{ y: [0, -14], opacity: [0, 1, 0] }}
+          transition={{ duration: 2.2, repeat: Infinity, ease: 'easeInOut' }}
+        >
+          Zzz
+        </motion.div>
+      )}
 
       {/* Center Face (Perfectly Centered) */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
@@ -53,7 +109,13 @@ export function App() {
             className="flex flex-col items-center gap-12 cursor-pointer pointer-events-auto origin-center"
             whileTap={{ scale: 1.15, rotate: -2 }}
           >
-            {renderFace(style, state, device.spritePack)}
+            {renderFace(
+              style,
+              state,
+              device.spritePack,
+              device.gesture?.type === 'wave' ? device.gesture.ts : null,
+              sleeping,
+            )}
           </motion.div>
         </AnimatePresence>
       </div>
@@ -74,11 +136,20 @@ export function App() {
   );
 }
 
-function renderFace(style: FaceStyle, state: FaceState, spritePack?: string) {
+function renderFace(
+  style: FaceStyle,
+  state: FaceState,
+  spritePack?: string,
+  waveAt?: number | null,
+  sleeping?: boolean,
+) {
   switch (style) {
-    case 'pixel':    return <PixelFace state={state} />;
-    case 'vector':   return <VectorFace state={state} />;
-    case 'terminal': return <TerminalFace state={state} />;
+    case 'pixel':    return <PixelFace state={state} waveAt={waveAt} sleeping={sleeping} />;
+    case 'vector':   return <VectorFace state={state} sleeping={sleeping} />;
+    case 'terminal': return <TerminalFace state={state} sleeping={sleeping} />;
+    // Sprite scenes are pre-rendered PNG loops with no programmatic
+    // "face" to close — the dim + Zzz overlay above still communicates
+    // sleep without needing per-scene authoring.
     case 'sprite':   return <SpriteSceneFace packName={spritePack ?? 'cat'} />;
   }
 }

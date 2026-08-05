@@ -14,7 +14,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from lumi import main as main_mod
-
+from lumi.audio.wake_word import CompositeWakeSource, FileTriggerWake, PushToTalkWake
+from lumi.config import WakeStrategy
 
 # ── _run_with_timeout ────────────────────────────────────────────────────
 #
@@ -121,3 +122,32 @@ def test_run_passes_user_settings_to_make_llm_backend(tmp_path, monkeypatch) -> 
         main_mod.run(log_level="INFO", backend="mock", mode="", list_devices=False, enroll=False)
 
     assert captured["user_settings"] is fake_user
+
+
+# ── _make_wake_source camera_enabled gating ──────────────────────────────
+#
+# Added alongside the vision/gestures build (2026-07-06): camera_enabled
+# pairs the primary wake source with FileTriggerWake so a wave/presence
+# trigger from the separate vision-worker process can also wake Lumi.
+
+
+def test_make_wake_source_returns_bare_primary_when_camera_disabled(tmp_path) -> None:
+    # Explicit wake=PUSH_TO_TALK: don't rely on get_settings()'s ambient
+    # default, which is environment-dependent (the Pi's real .env
+    # configures WAKE_WORD for production use, a laptop dev checkout
+    # doesn't) — this test only cares about the camera_enabled branch.
+    cfg = main_mod.get_settings().model_copy(
+        update={"data_dir": tmp_path, "wake": WakeStrategy.PUSH_TO_TALK},
+    )
+    wake = main_mod._make_wake_source(cfg, camera_enabled=False)
+    assert isinstance(wake, main_mod.PushToTalkWake)
+
+
+def test_make_wake_source_returns_composite_when_camera_enabled(tmp_path) -> None:
+    cfg = main_mod.get_settings().model_copy(
+        update={"data_dir": tmp_path, "wake": WakeStrategy.PUSH_TO_TALK},
+    )
+    wake = main_mod._make_wake_source(cfg, camera_enabled=True)
+    assert isinstance(wake, CompositeWakeSource)
+    assert any(isinstance(src, PushToTalkWake) for src in wake._sources)
+    assert any(isinstance(src, FileTriggerWake) for src in wake._sources)
