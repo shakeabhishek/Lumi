@@ -115,7 +115,7 @@ def _run_capture_session(cfg: Config) -> None:
             # treatment (client.push_presence) — it deliberately never
             # writes a wake trigger. Only a wave gesture (above) or the
             # voice wake word can wake Lumi.
-            is_present = presence.is_present(frame)
+            is_present = presence.is_present(now, frame)
             if last_present is None:
                 last_present = is_present
             elif is_present != last_present:
