@@ -7,7 +7,19 @@ from __future__ import annotations
 import subprocess
 from unittest.mock import patch
 
+import pytest
+
 from lumi.hardware import audio_mixer
+
+
+@pytest.fixture(autouse=True)
+def _reset_capture_profile_cache():
+    """The capture-card probe is cached module-wide (deliberately — see
+    test_capture_probe_is_cached), so it has to be cleared between tests or
+    the first one to run decides the mic for all the others."""
+    audio_mixer.reset_capture_profile_cache()
+    yield
+    audio_mixer.reset_capture_profile_cache()
 
 
 def _fake_run(returncode: int = 0, stdout: str = "") -> object:
@@ -123,64 +135,131 @@ def test_set_volume_also_maxes_boost_controls() -> None:
         assert ["amixer", "-c", "seeed2micvoicec", "sset", "HP DAC", "100%"] in all_calls
 
 
+# ── Mic mute: capture card is DISCOVERED, not hardcoded ──────────────────
+#
+# Playback and capture live on different cards since 2026-08-05: the mic moved
+# to USB and the ReSpeaker went output-only (max_input_channels=0, bare PGA
+# control gone). The old hardcoded PGA path pointed at a control that no longer
+# exists, so the on-screen mic button silently stopped muting anything. See
+# audio_mixer's _CAPTURE_PROFILES.
+
+_USB_MIC_SGET = (
+    "Simple mixer control 'Mic',0\n"
+    "  Capabilities: cvolume cvolume-joined cswitch cswitch-joined\n"
+    "  Mono: Capture 27 [90%] [28.50dB] [on]\n"
+)
+_USB_MIC_SGET_MUTED = (
+    "Simple mixer control 'Mic',0\n"
+    "  Capabilities: cvolume cvolume-joined cswitch cswitch-joined\n"
+    "  Mono: Capture 0 [0%] [0.00dB] [off]\n"
+)
+_RESPEAKER_PGA_SGET = (
+    "Simple mixer control 'PGA',0\n"
+    "  Capabilities: cvolume cswitch\n"
+    "  Front Left: Capture 60 [50%] [10.00dB] [on]\n"
+)
+# What amixer prints for a control with no capture switch — can't be muted.
+_PLAYBACK_ONLY_SGET = (
+    "Simple mixer control 'PCM',0\n"
+    "  Capabilities: pvolume\n"
+    "  Front Left: Playback 111 [88%] [-7.50dB]\n"
+)
+
+
+def _route(**by_control: str):
+    """Fake subprocess.run that answers `sget <control>` per control name and
+    succeeds silently for everything else, so discovery can be steered."""
+    def run(cmd, *a, **kw):
+        if "sget" in cmd:
+            control = cmd[cmd.index("sget") + 1]
+            if control in by_control:
+                return _fake_run(0, by_control[control])
+            return _fake_run(1, "")  # control absent on this card
+        return _fake_run(0)
+    return run
+
+
+def test_discovers_the_usb_mic_when_present() -> None:
+    with patch("subprocess.run", side_effect=_route(Mic=_USB_MIC_SGET)):
+        assert audio_mixer.is_mic_control_available() is True
+        audio_mixer.set_mic_muted(True)
+
+
+def test_mute_targets_the_usb_mic_card_and_control() -> None:
+    with patch("subprocess.run", side_effect=_route(Mic=_USB_MIC_SGET)) as mock_run:
+        audio_mixer.set_mic_muted(True)
+        calls = [c.args[0] for c in mock_run.call_args_list]
+        assert ["amixer", "-c", "Device", "sset", "Mic", "nocap"] in calls
+
+        audio_mixer.set_mic_muted(False)
+        calls = [c.args[0] for c in mock_run.call_args_list]
+        assert ["amixer", "-c", "Device", "sset", "Mic", "cap"] in calls
+
+
+def test_falls_back_to_respeaker_pga_when_no_usb_mic() -> None:
+    """Reverting the mic hardware must need no code change."""
+    with patch("subprocess.run", side_effect=_route(PGA=_RESPEAKER_PGA_SGET)) as mock_run:
+        audio_mixer.set_mic_muted(True)
+        calls = [c.args[0] for c in mock_run.call_args_list]
+        assert ["amixer", "-c", "seeed2micvoicec", "sset", "PGA", "nocap"] in calls
+
+
+def test_ignores_a_control_that_cannot_actually_be_muted() -> None:
+    """A control with no `cswitch` can't be muted. Accepting it would give us a
+    mute button that appears to work and does nothing — the exact failure this
+    whole discovery step exists to prevent."""
+    with patch("subprocess.run", side_effect=_route(Mic=_PLAYBACK_ONLY_SGET)):
+        assert audio_mixer.is_mic_control_available() is False
+        assert audio_mixer.set_mic_muted(True) is False
+
+
+def test_disables_agc_on_whichever_card_owns_the_mic() -> None:
+    """Regression test for a real bug found on the Pi (2026-07-05): PGA's own
+    mute switch alone did NOT silence the capture stream — AGC kept cranking
+    gain against near-silence regardless of the mute state (33% of samples
+    above 0.9 amplitude; disabling AGC alongside gave true silence, peak=0.0).
+    Must fire on every call, whether muting or unmuting. The USB mic's
+    equivalent is named 'Auto Gain Control'."""
+    with patch("subprocess.run", side_effect=_route(Mic=_USB_MIC_SGET)) as mock_run:
+        audio_mixer.set_mic_muted(True)
+        calls = [c.args[0] for c in mock_run.call_args_list]
+        assert ["amixer", "-c", "Device", "sset", "Auto Gain Control", "off"] in calls
+
+        mock_run.reset_mock()
+        audio_mixer.set_mic_muted(False)
+        calls = [c.args[0] for c in mock_run.call_args_list]
+        assert ["amixer", "-c", "Device", "sset", "Auto Gain Control", "off"] in calls
+
+
 def test_get_mic_muted_true_when_switch_off() -> None:
-    sget_output = (
-        "Simple mixer control 'PGA',0\n"
-        "  Front Left: Capture 0 [0%] [0.00dB] [off]\n"
-    )
-    with patch("subprocess.run", return_value=_fake_run(0, sget_output)):
+    with patch("subprocess.run", side_effect=_route(Mic=_USB_MIC_SGET_MUTED)):
         assert audio_mixer.get_mic_muted() is True
 
 
 def test_get_mic_muted_false_when_switch_on() -> None:
-    sget_output = (
-        "Simple mixer control 'PGA',0\n"
-        "  Front Left: Capture 60 [50%] [10.00dB] [on]\n"
-    )
-    with patch("subprocess.run", return_value=_fake_run(0, sget_output)):
+    with patch("subprocess.run", side_effect=_route(Mic=_USB_MIC_SGET)):
         assert audio_mixer.get_mic_muted() is False
 
 
-def test_get_mic_muted_false_when_card_unavailable() -> None:
+def test_get_mic_muted_false_when_no_card_available() -> None:
+    """Dev laptop: no cards at all. Must report unmuted rather than crash."""
     with patch("subprocess.run", side_effect=FileNotFoundError):
         assert audio_mixer.get_mic_muted() is False
+        assert audio_mixer.is_mic_control_available() is False
 
 
-def test_set_mic_muted_targets_pga_control() -> None:
-    """PGA is a *capture*-type switch (cswitch), not a playback switch —
-    amixer rejects `mute`/`unmute` on it ("Invalid command!"); the correct
-    keywords for a capture switch are `nocap` (mute) / `cap` (unmute),
-    confirmed against the real card."""
-    with patch("subprocess.run", return_value=_fake_run(0)) as mock_run:
-        audio_mixer.set_mic_muted(True)
-        args = mock_run.call_args[0][0]
-        assert args == ["amixer", "-c", "seeed2micvoicec", "sset", "PGA", "nocap"]
-
-        audio_mixer.set_mic_muted(False)
-        args = mock_run.call_args[0][0]
-        assert args == ["amixer", "-c", "seeed2micvoicec", "sset", "PGA", "cap"]
-
-
-def test_set_mic_muted_also_disables_agc() -> None:
-    """Regression test for a real bug found on the Pi (2026-07-05): PGA's
-    own mute switch alone did NOT silence the capture stream — AGC
-    (Automatic Gain Control) kept cranking gain trying to hit its target
-    level against near-silence, regardless of PGA's mute state. Directly
-    measured: muting PGA alone still left the capture stream at 33% of
-    samples above 0.9 amplitude; disabling AGC together with PGA's mute
-    produced true silence (peak=0.0, rms=0.0). set_mic_muted() must
-    disable AGC on every call, whether muting or unmuting — it's cheap
-    insurance against AGC being re-enabled by some other path, not
-    conditional on the mute direction."""
-    with patch("subprocess.run", return_value=_fake_run(0)) as mock_run:
-        audio_mixer.set_mic_muted(True)
-        all_calls = [c.args[0] for c in mock_run.call_args_list]
-        assert ["amixer", "-c", "seeed2micvoicec", "sset", "AGC", "off"] in all_calls
-
+def test_capture_probe_is_cached() -> None:
+    """Probing shells out per candidate card; doing that on every mute toggle
+    would put two subprocess spawns in the path of an on-screen button tap."""
+    with patch("subprocess.run", side_effect=_route(Mic=_USB_MIC_SGET)) as mock_run:
+        audio_mixer.is_mic_control_available()
+        probe_calls = len([c for c in mock_run.call_args_list if "sget" in c.args[0]])
         mock_run.reset_mock()
-        audio_mixer.set_mic_muted(False)
-        all_calls = [c.args[0] for c in mock_run.call_args_list]
-        assert ["amixer", "-c", "seeed2micvoicec", "sset", "AGC", "off"] in all_calls
+        audio_mixer.is_mic_control_available()
+        audio_mixer.is_mic_control_available()
+        again = len([c for c in mock_run.call_args_list if "sget" in c.args[0]])
+        assert probe_calls >= 1
+        assert again == 0, "profile should be resolved once and cached"
 
 
 def test_amixer_timeout_returns_none() -> None:

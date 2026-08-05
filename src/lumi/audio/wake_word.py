@@ -115,6 +115,10 @@ class OpenWakeWordWake(WakeSource):
         self._cooldown_s = cooldown_s
         self._input_device = input_device
         self._model_path = model_path
+        # Resolved in _open_stream() once the device can be probed. Defaults
+        # keep the no-resample path intact for 16 kHz-capable hardware.
+        self._capture_rate = self._SAMPLE_RATE
+        self._capture_frame_len = self._FRAME_LEN
         self._event = threading.Event()
         self._oww: object | None = None
         self._stream: object | None = None
@@ -201,25 +205,69 @@ class OpenWakeWordWake(WakeSource):
     def _open_stream(self) -> None:
         import sounddevice as sd  # noqa: PLC0415
 
+        from .resample import StreamResampler, pick_capture_rate  # noqa: PLC0415
+
+        # openwakeword's 16 kHz requirement is not negotiable — its
+        # melspectrogram frontend is trained at that rate and takes 1280-sample
+        # (80 ms) frames. Feeding it 48 kHz doesn't error, it silently wrecks
+        # accuracy. Lumi's USB mic can't do 16 kHz at all, so the stream opens
+        # at whatever the device accepts and each block is converted down.
+        self._capture_rate = pick_capture_rate(self._input_device, self._SAMPLE_RATE)
+        # Blocksize scaled so each read yields exactly one post-resample frame:
+        # 3840 at 48 kHz, 3528 at 44.1 kHz (3528 * 160/441 == 1280 exactly).
+        self._capture_frame_len = round(
+            self._FRAME_LEN * self._capture_rate / self._SAMPLE_RATE,
+        )
+        # Stateful, not per-block: filtering each frame independently would
+        # put a step discontinuity at every 80 ms boundary — 12.5 clicks a
+        # second into the very model that's listening for a short pattern.
+        self._resampler = StreamResampler(self._capture_rate, self._SAMPLE_RATE)
         self._stream = sd.InputStream(
-            samplerate=self._SAMPLE_RATE,
+            samplerate=self._capture_rate,
             channels=1,
             dtype="int16",
-            blocksize=self._FRAME_LEN,
+            blocksize=self._capture_frame_len,
             device=self._input_device,
         )
         self._stream.start()  # type: ignore[attr-defined]
 
-    def _listen(self) -> None:
+    def _to_model_frame(self, samples: object) -> object:
+        """Resample one captured block to exactly _FRAME_LEN int16 samples."""
         import numpy as np  # noqa: PLC0415
+
+        if self._capture_rate == self._SAMPLE_RATE:
+            return samples
+        # Resampled as raw int16 magnitudes rather than normalised floats: the
+        # FIR has unity DC gain, so levels survive, and it saves a scaling
+        # round-trip. float32's 24-bit mantissa covers int16 exactly.
+        converted = self._resampler.process(np.asarray(samples, dtype=np.float32))
+        # The FIR can overshoot slightly on transients — clip before the cast
+        # so a loud consonant wraps to a negative sample instead of clipping.
+        converted = np.clip(converted, -32768.0, 32767.0)
+        frame = converted.astype(np.int16)
+        # openwakeword wants EXACTLY _FRAME_LEN; guard the off-by-one that
+        # fractional ratios can produce rather than trusting the arithmetic.
+        if frame.shape[0] > self._FRAME_LEN:
+            frame = frame[: self._FRAME_LEN]
+        elif frame.shape[0] < self._FRAME_LEN:
+            frame = np.pad(frame, (0, self._FRAME_LEN - frame.shape[0]))
+        return frame
+
+    def _listen(self) -> None:
         from time import monotonic  # noqa: PLC0415
+
+        import numpy as np  # noqa: PLC0415
 
         last_fire = 0.0
         try:
             while not self._stop.is_set():
-                frame, _overflowed = self._stream.read(self._FRAME_LEN)  # type: ignore[attr-defined]
-                samples = np.frombuffer(frame, dtype=np.int16) if isinstance(frame, bytes) else frame[:, 0]
-                scores = self._oww.predict(samples)  # type: ignore[union-attr]
+                frame, _overflowed = self._stream.read(self._capture_frame_len)  # type: ignore[attr-defined]
+                samples = (
+                    np.frombuffer(frame, dtype=np.int16)
+                    if isinstance(frame, bytes)
+                    else frame[:, 0]
+                )
+                scores = self._oww.predict(self._to_model_frame(samples))  # type: ignore[union-attr]
                 score = float(scores.get(self._model_name, 0.0))
                 if score >= self._threshold and (monotonic() - last_fire) >= self._cooldown_s:
                     log.info("wake.fired", score=round(score, 3))

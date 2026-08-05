@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from ..audio.resample import pick_capture_rate, resample_to_target
 from ..log import get_logger
 from .base import AudioInput, AudioOutput
 
@@ -16,27 +17,51 @@ log = get_logger(__name__)
 
 
 class SoundDeviceInput(AudioInput):
+    """Mic capture, always returning audio at `sample_rate` regardless of what
+    the hardware can actually do.
+
+    The indirection earns its keep since the mic moved to USB (2026-08-05):
+    that device rejects 16 kHz outright, and both Whisper and openwakeword
+    require exactly 16 kHz. So the stream is opened at whatever rate the
+    device accepts and converted down — see audio/resample.py, including why
+    naive decimation would quietly wreck wake-word accuracy.
+
+    The capture rate is probed once and cached, not per-record: probing opens
+    and closes a PortAudio stream, which on ALSA is slow enough to notice at
+    the front of every turn.
+    """
+
     def __init__(self, sample_rate: int = 16000, device: str | None = None) -> None:
         self._sample_rate = sample_rate
         self._device = device
+        self._capture_rate: int | None = None
 
     @property
     def sample_rate(self) -> int:
         return self._sample_rate
 
+    def _resolve_capture_rate(self) -> int:
+        if self._capture_rate is None:
+            self._capture_rate = pick_capture_rate(self._device, self._sample_rate)
+        return self._capture_rate
+
     def record(self, duration_s: float) -> np.ndarray:
         import sounddevice as sd  # noqa: PLC0415
 
-        log.debug("recording", duration_s=duration_s, sr=self._sample_rate)
+        capture_rate = self._resolve_capture_rate()
+        log.debug(
+            "recording", duration_s=duration_s, sr=self._sample_rate,
+            capture_sr=capture_rate,
+        )
         samples = sd.rec(
-            int(duration_s * self._sample_rate),
-            samplerate=self._sample_rate,
+            int(duration_s * capture_rate),
+            samplerate=capture_rate,
             channels=1,
             dtype="float32",
             device=self._device,
         )
         sd.wait()
-        return samples.flatten()
+        return resample_to_target(samples.flatten(), capture_rate, self._sample_rate)
 
 
 class SoundDeviceOutput(AudioOutput):

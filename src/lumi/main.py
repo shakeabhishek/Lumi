@@ -52,11 +52,18 @@ def _make_primary_wake_source(cfg: Settings) -> WakeSource:
         # that's the "Hey Lumi" path, see docs/wake-word-training.md. Absent
         # one, openwakeword's bundled pretrained set is used and the default
         # `hey_jarvis` stand-in applies.
+        #
+        # Passed only when the file exists, so the default config doesn't log a
+        # "custom model absent" warning on every boot for a model nobody asked
+        # for. Configuring a name with no model still surfaces loudly — as
+        # `wake.model_missing`, which is the accurate complaint (the name isn't
+        # in the loaded set) rather than a note about a path.
+        custom_model = cfg.models_dir / "wake" / f"{cfg.wake_word_model}.onnx"
         return OpenWakeWordWake(
             model=cfg.wake_word_model,
             threshold=cfg.wake_word_threshold,
             input_device=cfg.audio_input_device,
-            model_path=cfg.models_dir / "wake" / f"{cfg.wake_word_model}.onnx",
+            model_path=custom_model if custom_model.exists() else None,
         )
     raise NotImplementedError(f"Wake strategy not yet implemented: {cfg.wake}")
 

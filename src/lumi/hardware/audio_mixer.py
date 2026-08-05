@@ -1,5 +1,8 @@
-"""ALSA mixer control for the ReSpeaker card — real hardware volume/mute
-backing the device-display's on-screen audio controls.
+"""ALSA mixer control — real hardware volume/mute backing the device-display's
+on-screen audio controls.
+
+Speaker output is the ReSpeaker HAT; mic capture is whatever mic is connected
+(discovered — see the note on split cards further down).
 
 Two separate knobs, deliberately not conflated:
 
@@ -26,22 +29,35 @@ Two separate knobs, deliberately not conflated:
   or HP were set to. This is why "max volume is too low" persisted even
   with PCM and HP both already at their ceiling. Maxed alongside HP.
 
-  Mic privacy mute       -> the "PGA" (capture gain) control's hardware
-  mute switch, which silences audio at the ALSA capture stage itself —
-  not just an app-level flag. This matches the smart-speaker convention
-  the on-screen mic button's icon implies (a mic-mute, not a speaker
-  mute), and holds true even before a voice loop consumes the mic.
-  PGA's mute switch alone is NOT sufficient, though — "AGC" (Automatic
-  Gain Control) actively fights it, cranking gain against near-silence
-  regardless of PGA's mute state (found live on the Pi, 2026-07-05;
-  see set_mic_muted/_disable_agc). Every mute call also force-disables
-  AGC for this reason.
+  Mic privacy mute       -> the capture control's hardware mute switch,
+  which silences audio at the ALSA capture stage itself — not just an
+  app-level flag. This matches the smart-speaker convention the on-screen
+  mic button's icon implies (a mic-mute, not a speaker mute), and holds
+  true even before a voice loop consumes the mic. The mute switch alone is
+  NOT sufficient, though: every mic has an automatic-gain-control sibling
+  that actively fights it, cranking gain against near-silence regardless
+  of the mute state (found live on the Pi, 2026-07-05 with the ReSpeaker's
+  "AGC"; the USB mic's is "Auto Gain Control"). Every mute call also
+  force-disables it for this reason. See set_mic_muted/_disable_agc.
 
-Card is addressed by name ("seeed2micvoicec"), not a numeric index, since
-card ordering can shift (e.g. relative to the HDMI audio outputs) but the
-name is stable. Every function no-ops safely (returns a sensible default /
-False) when the card or `amixer` isn't present — e.g. running on a laptop
-during dev, where these controls are simply unavailable.
+**Playback and capture are on different cards** as of 2026-08-05. The mic
+moved to a USB mic, and the ReSpeaker now reports `max_input_channels=0` —
+it's output-only in this build, and its bare `PGA` capture control is gone
+(only `Line PGA Bypass`/`HP PGA Bypass` remain). So the old mic-mute pointed
+at a control that no longer exists, meaning the on-screen mic button silently
+stopped muting anything. Speaker volume still belongs to the ReSpeaker.
+
+Rather than hardcode the new card, the capture side is **discovered** at first
+use from `_CAPTURE_PROFILES`, probing for a control that actually exists and
+is capture-capable. The user has now swapped mic hardware twice; a table plus
+a probe survives the third time, and a wrong guess surfaces as "unavailable"
+rather than as a mute button that quietly does nothing.
+
+Cards are addressed by name, not numeric index, since card ordering can shift
+(e.g. relative to the HDMI audio outputs) but the name is stable. Every
+function no-ops safely (returns a sensible default / False) when the card or
+`amixer` isn't present — e.g. running on a laptop during dev, where these
+controls are simply unavailable.
 """
 
 from __future__ import annotations
@@ -53,11 +69,27 @@ from ..log import get_logger
 
 log = get_logger(__name__)
 
-_CARD = "seeed2micvoicec"
+_PLAYBACK_CARD = "seeed2micvoicec"
 _SPEAKER_CONTROL = "PCM"
 _SPEAKER_BOOST_CONTROLS = ("HP", "HP DAC")
-_MIC_CONTROL = "PGA"
-_AGC_CONTROL = "AGC"
+
+# Ordered candidates for the capture side: (card, mute control, AGC control).
+# First one whose mute control actually exists on the box wins.
+_CAPTURE_PROFILES: tuple[tuple[str, str, str | None], ...] = (
+    # The USB mic, Lumi's current input. ALSA gives it the unhelpfully
+    # generic card id "Device" (confirmed via /proc/asound/card1/id); its
+    # controls are 'Mic' (cvolume + cswitch) and 'Auto Gain Control'.
+    # Listed first because it's what's plugged in today.
+    ("Device", "Mic", "Auto Gain Control"),
+    # The ReSpeaker HAT's own mics — kept so reverting the hardware needs no
+    # code change. PGA is its capture switch, and AGC actively fights it.
+    (_PLAYBACK_CARD, "PGA", "AGC"),
+)
+
+# Resolved lazily by _capture_profile(); None means "not looked up yet",
+# and a cached () sentinel would be less readable than a separate flag.
+_capture_cache: tuple[str, str, str | None] | None = None
+_capture_probed = False
 
 # PCM's raw dB scale is roughly LINEAR in dB (confirmed directly: 0%→
 # -63.5dB, 50%→-31.5dB, 100%→0dB) — but human hearing perceives loudness
@@ -73,11 +105,11 @@ _AGC_CONTROL = "AGC"
 _PCM_FLOOR_PERCENT = 75
 
 
-def _amixer(*args: str) -> str | None:
+def _amixer_on(card: str, *args: str) -> str | None:
     try:
         r = subprocess.run(
-            ["amixer", "-c", _CARD, *args],
-            capture_output=True, text=True, timeout=3,
+            ["amixer", "-c", card, *args],
+            capture_output=True, text=True, timeout=3, check=False,
         )
         if r.returncode != 0:
             return None
@@ -86,9 +118,53 @@ def _amixer(*args: str) -> str | None:
         return None
 
 
+def _amixer(*args: str) -> str | None:
+    """Playback card — speaker volume and its boost stages."""
+    return _amixer_on(_PLAYBACK_CARD, *args)
+
+
+def _capture_profile() -> tuple[str, str, str | None] | None:
+    """Resolve (card, mute control, AGC control) for whatever mic is actually
+    connected, probing once and caching. Returns None if no candidate has a
+    usable capture switch — e.g. on a dev laptop."""
+    global _capture_cache, _capture_probed  # noqa: PLW0603
+    if _capture_probed:
+        return _capture_cache
+
+    _capture_probed = True
+    for card, mute_control, agc_control in _CAPTURE_PROFILES:
+        out = _amixer_on(card, "sget", mute_control)
+        # 'cswitch' is what makes cap/nocap valid; a control that only has
+        # cvolume can't be muted, and asserting otherwise would give us a
+        # button that appears to work and doesn't.
+        if out and "cswitch" in out:
+            _capture_cache = (card, mute_control, agc_control)
+            log.info(
+                "audio.capture_mixer_resolved",
+                card=card, control=mute_control, agc=agc_control,
+            )
+            return _capture_cache
+
+    log.info("audio.capture_mixer_unavailable", probed=[p[0] for p in _CAPTURE_PROFILES])
+    _capture_cache = None
+    return None
+
+
+def reset_capture_profile_cache() -> None:
+    """Force re-probing — for tests, and for a mic hot-swap without a restart."""
+    global _capture_cache, _capture_probed  # noqa: PLW0603
+    _capture_cache = None
+    _capture_probed = False
+
+
 def is_available() -> bool:
-    """True iff the ReSpeaker card is present and `amixer` works."""
+    """True iff the playback card is present and `amixer` works."""
     return _amixer("scontrols") is not None
+
+
+def is_mic_control_available() -> bool:
+    """True iff a mutable capture control was found on some card."""
+    return _capture_profile() is not None
 
 
 def _slider_to_pcm_percent(level: int) -> int:
@@ -147,17 +223,22 @@ def _ensure_boost_controls_maxed() -> None:
 
 def get_mic_muted() -> bool:
     """True iff the mic capture path is hardware-muted."""
-    out = _amixer("sget", _MIC_CONTROL)
+    profile = _capture_profile()
+    if profile is None:
+        return False
+    card, control, _ = profile
+    out = _amixer_on(card, "sget", control)
     return bool(out) and "[off]" in out
 
 
 def set_mic_muted(muted: bool) -> bool:
-    """Mute/unmute the mic capture path at the hardware level.
+    """Mute/unmute the mic capture path at the hardware level, on whichever
+    card the mic actually lives on (see _capture_profile).
 
-    PGA is a *capture*-type switch (`cswitch`), not a playback switch —
-    amixer rejects `mute`/`unmute` on it ("Invalid command!"); the
+    These are *capture*-type switches (`cswitch`), not playback switches —
+    amixer rejects `mute`/`unmute` on them ("Invalid command!"); the
     correct keywords for a capture switch are `nocap` (mute) / `cap`
-    (unmute), confirmed against the real card.
+    (unmute), confirmed against the real cards.
 
     Also force-disables AGC (see _disable_agc's docstring) on every
     call, muted or not — found live on the Pi (2026-07-05) that PGA's
@@ -165,12 +246,17 @@ def set_mic_muted(muted: bool) -> bool:
     fighting it. Redundant with the one-time fix applied at deploy time
     (`alsactl store`), but cheap insurance against AGC getting
     re-enabled by some other path (a factory reset, a driver reload).
+    The USB mic has its own 'Auto Gain Control' that behaves the same way.
     """
-    _disable_agc()
-    return _amixer("sset", _MIC_CONTROL, "nocap" if muted else "cap") is not None
+    profile = _capture_profile()
+    if profile is None:
+        return False
+    card, control, agc_control = profile
+    _disable_agc(card, agc_control)
+    return _amixer_on(card, "sset", control, "nocap" if muted else "cap") is not None
 
 
-def _disable_agc() -> None:
+def _disable_agc(card: str, agc_control: str | None) -> None:
     """AGC (Automatic Gain Control) actively fights PGA's own mute and
     gain settings — found live on the Pi (2026-07-05): muting PGA alone
     left the capture stream receiving heavily saturated "audio" (33% of
@@ -184,4 +270,6 @@ def _disable_agc() -> None:
     when NOT muted — so this is called unconditionally, not gated on
     the mute state itself.
     """
-    _amixer("sset", _AGC_CONTROL, "off")
+    if agc_control is None:
+        return
+    _amixer_on(card, "sset", agc_control, "off")
