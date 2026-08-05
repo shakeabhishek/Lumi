@@ -19,10 +19,39 @@ from lumi.ui.web.app import create_app  # noqa: E402
 from lumi.ui.web.persistence import UserSettings, save_settings  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _sandbox_home(tmp_path_factory, monkeypatch):
+    """Sandbox HOME so no route exercised here can write into the
+    developer's real ~/.openclaw/openclaw.json. None of the routes in this
+    file sync to OpenClaw today (only /settings/cloud does), but test
+    residue landing in production config is a failure this project has
+    already hit once — see test_csrf.py's identical fixture and CLAUDE.md's
+    V2-verification notes."""
+    fake_home = tmp_path_factory.mktemp("fake_home")
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+
+def _warm(c: TestClient) -> TestClient:
+    """CSRF warm-up. The middleware only accepts a token that matches an
+    *existing* cookie, and it's a browser's first GET that mints one — so a
+    cold POST is a 403 by design. Doing the GET then pinning the token as a
+    default header mirrors what base.html's htmx:configRequest hook does
+    for every real request in the dashboard.
+
+    Deliberately a helper here rather than a change to the middleware:
+    CSRF behaviour itself is owned by tests/unit/test_csrf.py (including
+    the negative cases). This file is about route behaviour, and shouldn't
+    be re-asserting that a token is required on every POST.
+    """
+    c.get("/")  # 200 or 303 — either way the Set-Cookie lands in the jar
+    c.headers["X-CSRF-Token"] = c.cookies.get("csrf_token", "")
+    return c
+
+
 @pytest.fixture
 def client(tmp_path: Path) -> TestClient:
     app = create_app(tmp_path)
-    return TestClient(app, follow_redirects=True)
+    return _warm(TestClient(app, follow_redirects=True))
 
 
 @pytest.fixture
@@ -30,7 +59,7 @@ def onboarded_client(tmp_path: Path) -> TestClient:
     s = UserSettings(onboarding_complete=True, lumi_name="Nova")
     save_settings(tmp_path, s)
     app = create_app(tmp_path)
-    return TestClient(app, follow_redirects=True)
+    return _warm(TestClient(app, follow_redirects=True))
 
 
 class TestDashboard:
@@ -53,7 +82,7 @@ class TestOnboarding:
 
     def test_step_3_saves_name(self, tmp_path: Path) -> None:
         app = create_app(tmp_path)
-        c = TestClient(app, follow_redirects=True)
+        c = _warm(TestClient(app, follow_redirects=True))
         resp = c.post("/onboarding/3", data={"lumi_name": "Atlas"})
         assert resp.status_code == 200
         from lumi.ui.web.persistence import load_settings
@@ -62,7 +91,7 @@ class TestOnboarding:
 
     def test_step_4_skip_advances(self, tmp_path: Path) -> None:
         app = create_app(tmp_path)
-        c = TestClient(app, follow_redirects=True)
+        c = _warm(TestClient(app, follow_redirects=True))
         resp = c.post("/onboarding/4/skip")
         assert resp.status_code == 200
         from lumi.ui.web.persistence import load_settings
@@ -71,7 +100,7 @@ class TestOnboarding:
 
     def test_step_5_saves_voice(self, tmp_path: Path) -> None:
         app = create_app(tmp_path)
-        c = TestClient(app, follow_redirects=True)
+        c = _warm(TestClient(app, follow_redirects=True))
         c.post("/onboarding/5", data={"piper_voice": "en_GB-jenny-diphone"})
         from lumi.ui.web.persistence import load_settings
         s = load_settings(tmp_path)
@@ -79,7 +108,7 @@ class TestOnboarding:
 
     def test_step_9_marks_complete(self, tmp_path: Path) -> None:
         app = create_app(tmp_path)
-        c = TestClient(app, follow_redirects=True)
+        c = _warm(TestClient(app, follow_redirects=True))
         c.post("/onboarding/9", data={"owner_name": "Alex"})
         from lumi.ui.web.persistence import load_settings
         s = load_settings(tmp_path)
@@ -100,7 +129,7 @@ class TestSettings:
     def test_personality_saves_override(self, tmp_path: Path) -> None:
         s = UserSettings(onboarding_complete=True)
         save_settings(tmp_path, s)
-        c = TestClient(create_app(tmp_path), follow_redirects=True)
+        c = _warm(TestClient(create_app(tmp_path), follow_redirects=True))
         c.post("/settings/personality", data={"system_prompt_override": "Be brief."})
         from lumi.ui.web.persistence import load_settings
         assert load_settings(tmp_path).system_prompt_override == "Be brief."
@@ -118,7 +147,7 @@ class TestSettings:
     def test_data_saves_permissions(self, tmp_path: Path) -> None:
         s = UserSettings(onboarding_complete=True)
         save_settings(tmp_path, s)
-        c = TestClient(create_app(tmp_path), follow_redirects=True)
+        c = _warm(TestClient(create_app(tmp_path), follow_redirects=True))
         c.post("/settings/data", data={"clipboard": "on", "wifi_skills": "on"})
         from lumi.ui.web.persistence import load_settings
         loaded = load_settings(tmp_path)
@@ -135,7 +164,7 @@ class TestSkills:
     def test_toggle_disables_skill(self, tmp_path: Path) -> None:
         s = UserSettings(onboarding_complete=True)
         save_settings(tmp_path, s)
-        c = TestClient(create_app(tmp_path), follow_redirects=False)
+        c = _warm(TestClient(create_app(tmp_path), follow_redirects=False))
         resp = c.post("/skills/weather/toggle")
         assert resp.status_code == 200
         from lumi.ui.web.persistence import load_settings
@@ -144,7 +173,7 @@ class TestSkills:
     def test_toggle_re_enables_skill(self, tmp_path: Path) -> None:
         s = UserSettings(onboarding_complete=True, enabled_skills=["timer"])
         save_settings(tmp_path, s)
-        c = TestClient(create_app(tmp_path), follow_redirects=False)
+        c = _warm(TestClient(create_app(tmp_path), follow_redirects=False))
         c.post("/skills/weather/toggle")
         from lumi.ui.web.persistence import load_settings
         assert "weather" in load_settings(tmp_path).enabled_skills
