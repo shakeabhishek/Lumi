@@ -47,10 +47,15 @@ def _make_primary_wake_source(cfg: Settings) -> WakeSource:
     if cfg.wake == WakeStrategy.WAKE_WORD:
         from .audio.wake_word import OpenWakeWordWake  # noqa: PLC0415
 
+        # A custom-trained model (models/wake/<name>.onnx) wins if present —
+        # that's the "Hey Lumi" path, see docs/wake-word-training.md. Absent
+        # one, openwakeword's bundled pretrained set is used and the default
+        # `hey_jarvis` stand-in applies.
         return OpenWakeWordWake(
             model=cfg.wake_word_model,
             threshold=cfg.wake_word_threshold,
             input_device=cfg.audio_input_device,
+            model_path=cfg.models_dir / "wake" / f"{cfg.wake_word_model}.onnx",
         )
     raise NotImplementedError(f"Wake strategy not yet implemented: {cfg.wake}")
 

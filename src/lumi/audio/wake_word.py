@@ -13,12 +13,33 @@ Four sources:
 The interface (`WakeSource.wait_for_wake`) is what the runtime depends on, so
 swapping detectors is a one-class change.
 
-A note on names: openwakeword 0.4.0 ships 5 pre-trained models by default —
-"alexa", "hey_mycroft", "hey_jarvis", "timer", "weather" (verified directly,
-2026-07-02). "Hey Lumi" isn't pre-trained, so we use "hey_jarvis" as a proxy
-until either a custom Lumi model is trained (openwakeword has a notebook for
-this) or we swap to Porcupine, which generates custom wake words from a web
-UI.
+A note on names — **Lumi does not answer to "Hey Lumi" yet.** openwakeword
+ships only pre-trained models: `alexa`, `hey_jarvis`, `hey_marvin`,
+`hey_mycroft`, `weather`, and a family of timer phrases (enumerated directly
+off the installed package on the Pi, 2026-08-05). There is no `hey_lumi`, so
+the shipping default is `hey_jarvis` as a stand-in. That's a product-identity
+gap, not just a config detail: the tagline promises "Hey Lumi" and the
+onboarding flow invites the user to *name* their Lumi, but the device
+currently wakes to someone else's name. Tracked in ROADMAP.md — the fix is a
+custom-trained model, see `docs/wake-word-training.md`.
+
+Two corrections to an earlier note here (2026-07-02) that read "bare
+constructor, deliberately no kwargs" because `wakeword_models=` raised
+TypeError:
+
+  1. That kwarg wasn't *removed* in 0.4.0, it was **renamed** to
+     `wakeword_model_paths` (verified against the installed version,
+     2026-08-05). Custom ONNX models can be loaded — the capability was
+     there all along under a different name, so the fallback to a bare
+     `Model()` was unnecessary.
+  2. Loading by explicit path changes the score-dict keys. Bare `Model()`
+     keys on friendly names (`hey_jarvis`); `wakeword_model_paths=[...]`
+     keys on the **file stem** (`hey_jarvis_v0.1`). `_listen()` looks up
+     `self._model_name` in that dict, so a mismatch means the lookup
+     silently returns 0.0 and the wake word never fires, with no error
+     anywhere. `_load_model()` now validates the configured name against
+     what actually loaded and logs `wake.model_missing` at error level
+     rather than going quietly deaf.
 """
 
 from __future__ import annotations
@@ -83,11 +104,17 @@ class OpenWakeWordWake(WakeSource):
         threshold: float = 0.6,
         cooldown_s: float = 2.0,
         input_device: int | str | None = None,
+        model_path: Path | None = None,
     ) -> None:
+        """`model` is the score-dict key to watch. `model_path`, if given,
+        points at a custom-trained ONNX (e.g. a "Hey Lumi" model) to load
+        instead of the bundled set — its file stem must equal `model`, since
+        that's how openwakeword keys path-loaded models."""
         self._model_name = model
         self._threshold = threshold
         self._cooldown_s = cooldown_s
         self._input_device = input_device
+        self._model_path = model_path
         self._event = threading.Event()
         self._oww: object | None = None
         self._stream: object | None = None
@@ -133,15 +160,43 @@ class OpenWakeWordWake(WakeSource):
     def _load_model(self) -> object:
         from openwakeword.model import Model  # noqa: PLC0415
 
-        # Bare constructor, deliberately no kwargs: `wakeword_models=` /
-        # `inference_framework=` were removed in openwakeword 0.4.0 (verified
-        # directly against the installed version, 2026-07-02 — passing them
-        # raises `TypeError: AudioFeatures.__init__() got an unexpected
-        # keyword argument 'inference_framework'`). Model() bare loads all 5
-        # default pretrained models; _listen() below already picks just
-        # `self._model_name` out of the returned scores dict, so loading the
-        # others too costs a little idle CPU but changes nothing behaviorally.
-        return Model()
+        # A custom-trained model (the "Hey Lumi" path — see
+        # docs/wake-word-training.md) is loaded by explicit path, and ONLY
+        # it: no reason to also run inference on five phrases we ignore.
+        # Otherwise fall back to the bundled pretrained set.
+        #
+        # `inference_framework=` genuinely is gone in 0.4.0 — don't re-add
+        # it. `wakeword_model_paths=` is the current name for what used to
+        # be `wakeword_models=`.
+        if self._model_path is not None and self._model_path.exists():
+            model = Model(wakeword_model_paths=[str(self._model_path)])
+            log.info("wake.model_loaded", source="custom", path=str(self._model_path))
+        else:
+            if self._model_path is not None:
+                log.warning(
+                    "wake.custom_model_absent",
+                    path=str(self._model_path),
+                    falling_back_to="bundled pretrained models",
+                )
+            model = Model()
+            log.info("wake.model_loaded", source="bundled")
+
+        # Guard the silent-deafness failure: _listen() looks the configured
+        # name up in predict()'s score dict, and a miss just reads as 0.0
+        # forever — the wake word would never fire and nothing would say
+        # why. Note the two key conventions: bundled models key on friendly
+        # names ("hey_jarvis"), path-loaded ones on the file stem
+        # ("hey_lumi" for hey_lumi.onnx).
+        loaded = getattr(model, "models", None)
+        available = sorted(loaded.keys()) if isinstance(loaded, dict) else []
+        if available and self._model_name not in available:
+            log.error(
+                "wake.model_missing",
+                requested=self._model_name,
+                available=available,
+                consequence="wake word will NEVER fire — score lookup returns 0.0",
+            )
+        return model
 
     def _open_stream(self) -> None:
         import sounddevice as sd  # noqa: PLC0415

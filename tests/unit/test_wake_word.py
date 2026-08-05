@@ -146,23 +146,100 @@ def test_stop_preserves_loaded_model_to_avoid_reload_cost() -> None:
     assert w._oww is fake_model
 
 
-def test_load_model_calls_bare_constructor() -> None:
-    """Regression lock for the openwakeword 0.4.0 compatibility fix.
-
-    The old call — Model(wakeword_models=[...], inference_framework="onnx")
-    — raises TypeError against the real 0.4.0 API (verified on the Pi,
-    2026-07-02): those kwargs were removed. _load_model() must call Model()
-    with no arguments; _listen() already picks the configured model name out
-    of the returned scores dict regardless of how many models loaded."""
+def _patched_model_cls(loaded_names: list[str] | None = None) -> tuple[MagicMock, MagicMock]:
+    """A fake openwakeword.model.Model whose instances report `loaded_names`
+    via the `.models` dict — that's what _load_model() inspects to detect the
+    silent-deafness case."""
     fake_model_cls = MagicMock()
+    if loaded_names is not None:
+        fake_model_cls.return_value.models = dict.fromkeys(loaded_names, object())
     fake_module = MagicMock()
     fake_module.Model = fake_model_cls
+    return fake_model_cls, fake_module
+
+
+def test_load_model_uses_bare_constructor_without_a_custom_model() -> None:
+    """With no custom ONNX on disk, openwakeword's bundled pretrained set is
+    what we want, and `Model()` bare is how you get it.
+
+    Note `inference_framework=` genuinely IS gone in 0.4.0 — passing it
+    raises TypeError (verified on the Pi, 2026-07-02). Don't re-add it."""
+    fake_model_cls, fake_module = _patched_model_cls(["hey_jarvis"])
 
     with patch.dict(sys.modules, {"openwakeword": MagicMock(), "openwakeword.model": fake_module}):
         w = OpenWakeWordWake(model="hey_jarvis")
         w._load_model()
 
     fake_model_cls.assert_called_once_with()
+
+
+def test_load_model_loads_a_custom_onnx_by_path(tmp_path) -> None:
+    """The "Hey Lumi" path. `wakeword_models=` wasn't removed in 0.4.0 — it
+    was renamed to `wakeword_model_paths=` (verified against the installed
+    version, 2026-08-05), so custom models were loadable all along."""
+    wake_dir = tmp_path / "wake"
+    wake_dir.mkdir()
+    custom = wake_dir / "hey_lumi.onnx"
+    custom.write_bytes(b"not-a-real-onnx")
+    fake_model_cls, fake_module = _patched_model_cls(["hey_lumi"])
+
+    with patch.dict(sys.modules, {"openwakeword": MagicMock(), "openwakeword.model": fake_module}):
+        w = OpenWakeWordWake(model="hey_lumi", model_path=custom)
+        w._load_model()
+
+    fake_model_cls.assert_called_once_with(wakeword_model_paths=[str(custom)])
+
+
+def test_load_model_falls_back_when_the_custom_onnx_is_absent(tmp_path) -> None:
+    """Until a hey_lumi.onnx is actually trained, main.py still points at
+    where it *would* live — that must degrade to the bundled set, not crash
+    the voice loop on boot."""
+    fake_model_cls, fake_module = _patched_model_cls(["hey_jarvis"])
+
+    with patch.dict(sys.modules, {"openwakeword": MagicMock(), "openwakeword.model": fake_module}):
+        w = OpenWakeWordWake(model="hey_jarvis", model_path=tmp_path / "wake" / "hey_lumi.onnx")
+        w._load_model()
+
+    fake_model_cls.assert_called_once_with()
+
+
+def test_load_model_logs_an_error_when_the_configured_name_never_loaded() -> None:
+    """The silent-deafness trap. _listen() looks self._model_name up in
+    predict()'s score dict; a miss returns 0.0 forever, so the wake word
+    simply never fires and nothing anywhere says why. Setting
+    LUMI_WAKE_WORD_MODEL=hey_lumi with no trained model does exactly this.
+
+    Also the reason the two key conventions matter: bundled models key on
+    friendly names ("hey_jarvis"), path-loaded ones on the file stem
+    ("hey_jarvis_v0.1").
+    """
+    _, fake_module = _patched_model_cls(["alexa", "hey_jarvis", "hey_mycroft"])
+
+    with (
+        patch.dict(sys.modules, {"openwakeword": MagicMock(), "openwakeword.model": fake_module}),
+        patch("lumi.audio.wake_word.log") as fake_log,
+    ):
+        w = OpenWakeWordWake(model="hey_lumi")
+        w._load_model()
+
+    assert fake_log.error.called, "a never-firing wake word must not fail silently"
+    event, kwargs = fake_log.error.call_args[0][0], fake_log.error.call_args[1]
+    assert event == "wake.model_missing"
+    assert kwargs["requested"] == "hey_lumi"
+    assert "hey_jarvis" in kwargs["available"]
+
+
+def test_load_model_stays_quiet_when_the_configured_name_did_load() -> None:
+    _, fake_module = _patched_model_cls(["alexa", "hey_jarvis"])
+
+    with (
+        patch.dict(sys.modules, {"openwakeword": MagicMock(), "openwakeword.model": fake_module}),
+        patch("lumi.audio.wake_word.log") as fake_log,
+    ):
+        w = OpenWakeWordWake(model="hey_jarvis")
+        w._load_model()
+
+    assert not fake_log.error.called
 
 
 def test_wait_for_wake_blocks_until_event() -> None:
