@@ -11,9 +11,11 @@ The runtime depends on the `TTS` protocol, not either implementation.
 
 from __future__ import annotations
 
+import contextlib
 import platform
 import shutil
 import subprocess
+import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Protocol
@@ -27,6 +29,13 @@ class TTS(Protocol):
     def speak(self, text: str) -> None:
         """Block until the text has been spoken."""
 
+    def stop(self) -> None:
+        """Cut playback of the in-flight utterance immediately, from another
+        thread. Must be safe to call when nothing is playing (no-op) and
+        must cause any concurrent `speak()` to return promptly rather than
+        finishing the utterance. This is what makes barge-in possible — see
+        `speak_streaming`'s `cancel` parameter."""
+
     @property
     def name(self) -> str: ...
 
@@ -37,22 +46,49 @@ class MacSayTTS:
     def __init__(self, voice: str = "Ava", rate: int = 180) -> None:
         self._voice = voice
         self._rate = rate
+        # Held so stop() can kill an in-flight utterance. `say` is a
+        # subprocess rather than PortAudio playback, so this needs its own
+        # handle — sd.stop() has no effect on it.
+        self._proc: subprocess.Popen[bytes] | None = None
+        self._stopped = threading.Event()
 
     @property
     def name(self) -> str:
         return f"mac-say:{self._voice}"
 
     def speak(self, text: str) -> None:
-        if not text:
+        if not text or self._stopped.is_set():
             return
         try:
-            subprocess.run(
+            proc = subprocess.Popen(
                 ["say", "-v", self._voice, "-r", str(self._rate), text],
-                check=True,
             )
         except FileNotFoundError:
             log.warning("`say` not available; falling back to print")
             print(f"[Lumi]: {text}")
+            return
+        self._proc = proc
+        # Re-checked after the process exists: stop() can land between the
+        # is_set() check above and Popen returning, in which case it saw
+        # _proc is None and had nothing to terminate.
+        if self._stopped.is_set():
+            with contextlib.suppress(Exception):
+                proc.terminate()
+        try:
+            proc.wait()
+        finally:
+            self._proc = None
+
+    def stop(self) -> None:
+        self._stopped.set()
+        proc = self._proc
+        if proc is None:
+            return
+        with contextlib.suppress(Exception):
+            proc.terminate()
+
+    def reset(self) -> None:
+        self._stopped.clear()
 
 
 class PiperTTS:
@@ -103,6 +139,9 @@ class PiperTTS:
         self._model_path = voice_dir / f"{voice}.onnx"
         self._output_device = output_device
         self._piper_voice: object | None = None  # lazy-loaded, then kept resident
+        # Barge-in latch — see stop()/reset() for why sd.stop() alone isn't
+        # enough to suppress an utterance.
+        self._stopped = threading.Event()
 
     @property
     def name(self) -> str:
@@ -191,14 +230,21 @@ class PiperTTS:
         return np.tanh(samples * smooth_gain).astype(np.float32)
 
     def speak(self, text: str) -> None:
-        if not text:
+        # Latch checked first, before the model load, so a barge-in that
+        # already fired doesn't pay for work whose output gets discarded.
+        if not text or self._stopped.is_set():
             return
         import numpy as np  # noqa: PLC0415
         import sounddevice as sd  # noqa: PLC0415
 
         voice = self._ensure_loaded()
+        # Re-checked before and after synthesis: it's ~0.4-0.7s per sentence
+        # on the Pi, a wide enough window for a barge-in to land inside, and
+        # it shouldn't still produce audio afterwards.
+        if self._stopped.is_set():
+            return
         chunks = list(voice.synthesize(text))  # type: ignore[attr-defined]
-        if not chunks:
+        if not chunks or self._stopped.is_set():
             return
         # AudioChunk.audio_float_array is already [-1, 1] float — no
         # int16 normalization needed (that was only ever an artifact of
@@ -208,11 +254,69 @@ class PiperTTS:
         sd.play(samples, samplerate=chunks[0].sample_rate, device=self._output_device)
         sd.wait()
 
+    def stop(self) -> None:
+        """Cut playback mid-utterance. `sd.stop()` aborts the PortAudio
+        stream, which is what unblocks the `sd.wait()` in speak().
+
+        The latch matters as much as the sd.stop(): a barge-in can land in
+        the window between two sentences, or during the ~0.4-0.7s of Piper
+        synthesis before playback starts, where there is no active stream
+        for sd.stop() to abort. Without the latch that utterance would
+        still play. Cleared by `reset()` at the start of the next turn.
+        """
+        self._stopped.set()
+        with contextlib.suppress(Exception):
+            import sounddevice as sd  # noqa: PLC0415
+
+            sd.stop()
+
+    def reset(self) -> None:
+        """Clear a previous stop() so this instance can speak again. Called
+        by speak_streaming at the start of each reply — PiperTTS is loaded
+        once and reused for the whole process lifetime, so the latch has to
+        be per-turn, not per-instance."""
+        self._stopped.clear()
+
+
+_CANCEL_POLL_S = 0.05
+
 
 def speak_streaming(
-    tts: TTS, chunks: Iterator[str], *, on_sentence: Callable[[str, bool], None] | None = None,
-) -> None:  # noqa: F811
+    tts: TTS,
+    chunks: Iterator[str],
+    *,
+    on_sentence: Callable[[str, bool], None] | None = None,
+    cancel: threading.Event | None = None,
+) -> bool:  # noqa: F811
     """Buffer an LLM token stream into sentences and speak each as it completes.
+
+    Returns True if the whole reply was spoken, False if it was cut short by
+    `cancel` — the caller needs to know which happened so an interrupted
+    turn can be logged and captioned differently from a completed one.
+
+    `cancel`, if given, is an Event any other thread can set to barge in
+    (open-palm gesture, ReSpeaker button, see runtime/barge_in.py). It cuts
+    audio mid-sentence rather than at the next boundary — a barge-in that
+    politely finished the current sentence would feel broken, because the
+    sentence is exactly what the user is interrupting. Concretely:
+
+      * a watcher thread calls `tts.stop()` the moment the event fires,
+        which aborts PortAudio playback and unblocks the `sd.wait()` inside
+        `PiperTTS.speak()`;
+      * the worker stops pulling sentences off the queue, so everything
+        already synthesized-but-unplayed is dropped rather than drained.
+        That's the open question the GestureBadge comment flagged — dropping
+        is the answer, since holding it would just replay stale speech;
+      * the producer stops consuming the LLM stream, so a long reply doesn't
+        keep generating into a void.
+
+    Known limit, deliberately not papered over: if the LLM stream itself
+    stalls with nothing queued, the producer is blocked inside
+    `for chunk in chunks` and Python can't interrupt that from another
+    thread. Cancellation lands when the next chunk arrives. This doesn't
+    affect real barge-in — you can only interrupt speech that's playing,
+    which means sentences are queued — and main.py's `_SPEAK_TIMEOUT_S`
+    already backstops a genuinely wedged stream.
 
     Runs TTS in a background thread so audio plays while the LLM continues
     generating the next sentence — significantly reduces perceived latency.
@@ -245,26 +349,61 @@ def speak_streaming(
     """
     import queue  # noqa: PLC0415
     import re  # noqa: PLC0415
-    import threading  # noqa: PLC0415
 
     q: queue.Queue[tuple[str, bool] | None] = queue.Queue()
+    # Set by whichever side notices the cancel first (watcher or producer).
+    aborted = threading.Event()
+    # Set when the worker is done, so the watcher thread doesn't outlive the
+    # call it belongs to.
+    finished = threading.Event()
+
+    # PiperTTS is loaded once and reused for the whole process lifetime, so
+    # a stop() from a previous turn's barge-in would otherwise still be
+    # latched and silence this reply.
+    reset = getattr(tts, "reset", None)
+    if callable(reset):
+        reset()
+
+    def _cancel_watcher() -> None:
+        assert cancel is not None
+        while not finished.is_set():
+            if cancel.wait(timeout=_CANCEL_POLL_S):
+                aborted.set()
+                with contextlib.suppress(Exception):
+                    tts.stop()
+                return
 
     def _worker() -> None:
-        while True:
-            item = q.get()
-            if item is None:
-                break
-            sentence, is_last = item
-            if on_sentence is not None:
-                on_sentence(sentence, is_last)
-            tts.speak(sentence)
+        try:
+            while True:
+                item = q.get()
+                if item is None:
+                    break
+                if aborted.is_set():
+                    # Drain without speaking. Can't just break: the producer
+                    # may still be putting, and it needs a consumer to avoid
+                    # blocking on an unbounded-but-unread queue.
+                    continue
+                sentence, is_last = item
+                if on_sentence is not None:
+                    on_sentence(sentence, is_last)
+                tts.speak(sentence)
+        finally:
+            finished.set()
 
     t = threading.Thread(target=_worker, daemon=True)
     t.start()
+    watcher: threading.Thread | None = None
+    if cancel is not None:
+        watcher = threading.Thread(target=_cancel_watcher, daemon=True)
+        watcher.start()
 
     buf = ""
     pending: str | None = None
     for chunk in chunks:
+        if cancel is not None and cancel.is_set():
+            aborted.set()
+            break
         buf += chunk
         # Split on sentence-ending punctuation followed by whitespace
         parts = re.split(r"(?<=[.!?…])\s+", buf)
@@ -276,18 +415,25 @@ def speak_streaming(
                 pending = clean
         buf = parts[-1]
 
-    if buf.strip():
-        # A trailing, punctuation-less remainder is the true final piece —
-        # whatever was pending (if anything) is confirmed NOT last.
-        if pending is not None:
-            q.put((pending, False))
-        q.put((buf.strip(), True))
-    elif pending is not None:
-        # Stream ended exactly on a sentence boundary — the held-back
-        # sentence IS the final one after all.
-        q.put((pending, True))
+    # On abort, skip the final flush entirely — there's no point marking a
+    # last sentence as final when we're not going to speak it.
+    if not aborted.is_set():
+        if buf.strip():
+            # A trailing, punctuation-less remainder is the true final piece —
+            # whatever was pending (if anything) is confirmed NOT last.
+            if pending is not None:
+                q.put((pending, False))
+            q.put((buf.strip(), True))
+        elif pending is not None:
+            # Stream ended exactly on a sentence boundary — the held-back
+            # sentence IS the final one after all.
+            q.put((pending, True))
     q.put(None)
     t.join()
+    finished.set()
+    if watcher is not None:
+        watcher.join(timeout=1.0)
+    return not aborted.is_set()
 
 
 def make_tts(piper_voice: str, voice_dir: Path, output_device: str | None = None) -> TTS:
@@ -310,3 +456,10 @@ class _PrintTTS:
 
     def speak(self, text: str) -> None:
         print(f"[Lumi]: {text}")
+
+    def stop(self) -> None:
+        """Nothing to cut — printing is instantaneous, so there's never an
+        in-flight utterance to abort. Present to satisfy the TTS protocol."""
+
+    def reset(self) -> None:
+        """No latch to clear (see stop())."""

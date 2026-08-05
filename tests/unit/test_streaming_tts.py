@@ -1,11 +1,15 @@
-"""Tests for speak_streaming — sentence buffering and thread overlap."""
+"""Tests for speak_streaming — sentence buffering, thread overlap, barge-in."""
 
 from __future__ import annotations
 
+import threading
 import time
+from pathlib import Path
 from unittest.mock import MagicMock
 
-from lumi.audio.tts import speak_streaming
+import pytest
+
+from lumi.audio.tts import MacSayTTS, PiperTTS, speak_streaming
 
 
 def _chunks(*parts: str):
@@ -169,6 +173,189 @@ def test_on_sentence_does_not_change_tts_behavior() -> None:
     full = " ".join(calls)
     assert "Hello world." in full
     assert "Next one." in full
+
+
+# ── Barge-in / cancellation ──────────────────────────────────────────────
+#
+# Until 2026-08-05 there was no way to stop Lumi mid-reply by any means:
+# the wake source is stopped for the duration of a turn, the ReSpeaker
+# button was never wired, and open-palm only rendered a badge. These lock
+# in the cancellation contract the barge-in surfaces are built on.
+
+
+def test_returns_true_when_it_speaks_the_whole_reply() -> None:
+    """The return value is how callers tell a completed turn from an
+    interrupted one (for captions and the audit log)."""
+    tts = MagicMock()
+    assert speak_streaming(tts, _chunks("One. ", "Two.")) is True
+
+
+def test_returns_true_with_an_unset_cancel_event() -> None:
+    tts = MagicMock()
+    assert speak_streaming(tts, _chunks("One. "), cancel=threading.Event()) is True
+    tts.stop.assert_not_called()
+
+
+def test_cancel_already_set_speaks_nothing() -> None:
+    """Barge-in that lands before the reply starts — e.g. the user waves
+    off an answer they can already tell they don't want."""
+    cancel = threading.Event()
+    cancel.set()
+    tts = MagicMock()
+    assert speak_streaming(tts, _chunks("One. ", "Two."), cancel=cancel) is False
+    tts.speak.assert_not_called()
+
+
+def test_cancel_mid_utterance_drops_the_remaining_sentences() -> None:
+    """The core barge-in case, and the open question GestureBadge.tsx
+    flagged: sentences already parsed and queued but not yet played get
+    DROPPED, not drained. Holding them would just replay stale speech the
+    user has already interrupted.
+
+    Synchronised on stop() rather than a sleep, which also mirrors the real
+    contract: PiperTTS.speak() returns because stop() aborted the PortAudio
+    stream out from under its sd.wait().
+    """
+    cancel = threading.Event()
+    stop_called = threading.Event()
+    spoken: list[str] = []
+
+    def speak(text: str) -> None:
+        spoken.append(text)
+        if len(spoken) == 1:
+            first_utterance.set()
+            stop_called.wait(timeout=3.0)
+
+    first_utterance = threading.Event()
+    tts = MagicMock()
+    tts.speak.side_effect = speak
+    tts.stop.side_effect = stop_called.set
+
+    def barge_in() -> None:
+        first_utterance.wait(timeout=3.0)
+        cancel.set()
+
+    threading.Thread(target=barge_in, daemon=True).start()
+    completed = speak_streaming(
+        tts, _chunks("One. ", "Two. ", "Three. ", "Four."), cancel=cancel,
+    )
+
+    assert completed is False
+    assert spoken == ["One."], "queued-but-unplayed sentences should be dropped"
+    tts.stop.assert_called()
+
+
+def test_cancel_stops_consuming_the_llm_stream() -> None:
+    """A cancelled reply shouldn't keep pulling tokens into a void — on the
+    cloud path that's billable, and on the local path it's CPU the rest of
+    the stack wants."""
+    cancel = threading.Event()
+    pulled: list[int] = []
+
+    def stream():
+        for i in range(50):
+            if i == 3:
+                cancel.set()  # barge-in lands as the 4th chunk is produced
+            pulled.append(i)
+            yield f"Sentence {i}. "
+
+    tts = MagicMock()
+    assert speak_streaming(tts, stream(), cancel=cancel) is False
+    # The producer checks cancel at the top of each iteration, so it stops
+    # right after the chunk that set it — not after all 50.
+    assert pulled == [0, 1, 2, 3]
+
+
+def test_cancel_suppresses_the_final_sentence_marker() -> None:
+    """No point captioning a sentence as the final one when it's never
+    going to be spoken — the caller marks the turn interrupted instead."""
+    cancel = threading.Event()
+    cancel.set()
+    seen: list[tuple[str, bool]] = []
+    speak_streaming(
+        MagicMock(), _chunks("One. ", "Two."),
+        on_sentence=lambda t, f: seen.append((t, f)),
+        cancel=cancel,
+    )
+    assert seen == []
+
+
+def test_resets_the_backend_latch_at_the_start_of_each_reply() -> None:
+    """PiperTTS is loaded once and reused for the whole process lifetime, so
+    a stop() latched by a previous turn's barge-in would silence the next
+    reply entirely if it weren't cleared."""
+    tts = MagicMock()
+    speak_streaming(tts, _chunks("Hello."))
+    tts.reset.assert_called_once()
+
+
+def test_works_with_a_backend_that_has_no_reset() -> None:
+    """reset()/stop() are part of the TTS protocol, but a third-party or
+    older backend object may not have them — that shouldn't crash a reply
+    that isn't even using cancellation."""
+    class Minimal:
+        def __init__(self) -> None:
+            self.spoken: list[str] = []
+
+        @property
+        def name(self) -> str:
+            return "minimal"
+
+        def speak(self, text: str) -> None:
+            self.spoken.append(text)
+
+    tts = Minimal()
+    assert speak_streaming(tts, _chunks("Hello there.")) is True  # type: ignore[arg-type]
+    assert tts.spoken == ["Hello there."]
+
+
+# ── Backend stop() implementations ───────────────────────────────────────
+
+
+def test_piper_stop_latches_so_a_queued_utterance_stays_silent(tmp_path: Path) -> None:
+    """sd.stop() alone can't cover a barge-in that lands between sentences,
+    or during the ~0.4-0.7s of synthesis before playback starts — there's no
+    active stream to abort. The latch covers that window.
+
+    Also proves the latch short-circuits before the model load: this voice
+    file doesn't exist, so speak() would raise FileNotFoundError if the
+    latch weren't checked first.
+    """
+    piper = PiperTTS("no-such-voice", tmp_path)
+    piper.stop()
+    piper.speak("this must not play")  # no raise == never reached the load
+
+
+def test_piper_reset_clears_the_latch(tmp_path: Path) -> None:
+    piper = PiperTTS("no-such-voice", tmp_path)
+    piper.stop()
+    piper.reset()
+    # Latch cleared, so speak() now proceeds far enough to hit the missing
+    # model — which is the proof it's no longer short-circuiting.
+    with pytest.raises(FileNotFoundError):
+        piper.speak("now it tries for real")
+
+
+def test_mac_say_stop_terminates_the_in_flight_process() -> None:
+    """`say` is a subprocess, not PortAudio playback, so sd.stop() has no
+    effect on it — it needs its own handle."""
+    if not hasattr(MacSayTTS, "stop"):  # pragma: no cover
+        pytest.skip("stop() not implemented")
+    tts = MacSayTTS()
+    started = threading.Event()
+
+    def run() -> None:
+        started.set()
+        # A long utterance so there's reliably something in flight.
+        tts.speak("one two three four five six seven eight nine ten")
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    started.wait(timeout=2.0)
+    time.sleep(0.3)  # let Popen actually spawn
+    tts.stop()
+    t.join(timeout=3.0)
+    assert not t.is_alive(), "stop() should have cut the utterance short"
 
 
 def test_router_handle_streaming_yields_chunks() -> None:
