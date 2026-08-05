@@ -27,6 +27,7 @@ from .hardware.audio_io import SoundDeviceInput
 from .host_helper.send_to_lumi import consume_pending, format_hint
 from .llm import make_llm_backend
 from .log import configure_logging, get_logger
+from .runtime.barge_in import BargeInWatcher
 from .runtime.conversation import ConversationManager
 from .runtime.device_display_client import clear_caption, push_caption
 from .runtime.device_display_client import state_callback as _device_display_callback
@@ -154,6 +155,9 @@ def _voice_loop(
     )
 
     caption_base = f"http://127.0.0.1:{cfg.web_port}"
+    # One watcher for the whole loop, armed/disarmed around each reply — see
+    # runtime/barge_in.py for why it isn't just left running.
+    barge_in = BargeInWatcher(cfg.data_dir)
 
     while True:
         sm.transition(LumiState.IDLE)
@@ -267,16 +271,32 @@ def _voice_loop(
                 # see _SPEAK_TIMEOUT_S; this is what would have caught the
                 # Piper/aplay hang found on the Pi 2026-07-05 even without
                 # knowing its root cause) ---
+                #
+                # Barge-in armed only for the duration of the reply: an open
+                # palm while idle shouldn't arm a trap that kills the NEXT
+                # reply before it starts. See runtime/barge_in.py.
+                cancel = barge_in.arm()
                 try:
-                    _run_with_timeout(
+                    completed = _run_with_timeout(
                         speak_streaming, tts, _collecting_chunks(),
-                        on_sentence=_push_reply_caption, timeout=_SPEAK_TIMEOUT_S,
+                        on_sentence=_push_reply_caption, cancel=cancel,
+                        timeout=_SPEAK_TIMEOUT_S,
                     )
                 except concurrent.futures.TimeoutError:
                     log.warning("tts.speak_timeout", timeout_s=_SPEAK_TIMEOUT_S)
+                    completed = False
                 except Exception as exc:
                     log.warning("tts.error", error=str(exc))
+                    completed = False
+                finally:
+                    barge_in.disarm()
                 reply_text = "".join(collected)
+                if completed is False and cancel.is_set():
+                    # Clear the live caption immediately rather than leaving
+                    # the half-spoken sentence frozen on screen — the whole
+                    # point of interrupting is that Lumi drops it.
+                    log.info("voice.reply_interrupted", source=barge_in.source)
+                    clear_caption(base_url=caption_base)
                 typer.echo("")  # newline after streamed output
         except Exception as exc:
             reply_text = safe_error_message(exc, where="voice.router")

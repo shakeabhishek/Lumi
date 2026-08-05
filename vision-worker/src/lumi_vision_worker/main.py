@@ -109,6 +109,14 @@ def _run_capture_session(cfg: Config) -> None:
                 client.push_gesture(effective.value, base_url=cfg.web_base_url)
                 if effective == GestureType.WAVE:
                     wake_trigger.write_wake_trigger(cfg.data_dir, source="gesture:wave")
+                elif effective == GestureType.OPEN_PALM:
+                    # "Stop talking." Written unconditionally — this process
+                    # has no idea whether Lumi is mid-reply, and the main app
+                    # ignores the trigger unless she's speaking. See
+                    # wake_trigger.py's module docstring.
+                    wake_trigger.write_barge_in_trigger(
+                        cfg.data_dir, source="gesture:open_palm",
+                    )
                 log.info("vision_worker.gesture_fired", extra={"gesture": effective.value})
 
             # Presence only drives the display's ambient dim/sleep
