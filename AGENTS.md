@@ -80,11 +80,20 @@ already broke the kiosk once this session.
 ```
 rsync -az uv.lock pyproject.toml -e ssh lumi@192.168.0.45:/home/lumi/lumi/
 ssh lumi@192.168.0.45 'cd /home/lumi/lumi && export PATH=$HOME/.local/bin:$PATH && \
-  uv sync --extra memory --extra web --extra secrets --extra host'
+  uv sync --extra memory --extra web --extra secrets --extra host --extra wake --extra pi'
 ```
-Use exactly these four extras on the Pi. **Do not add `--extra voice`** —
-it pulls in `torch`/`transformers` (~2 GB, not needed, and not what the
-validated LLM setup uses). `--extra dev` is laptop-only (pytest/ruff/mypy).
+Use exactly these six extras on the Pi. **`uv sync` uninstalls anything the
+listed extras don't cover**, so an incomplete list is destructive, not just
+insufficient — the 2026-08-05 run removed `torch`/`resemblyzer` (the `voice`
+extra) and `pytest`/`ruff` (`dev`) because neither was listed. Harmless
+there, but the same mechanism would silently drop `openwakeword` if `wake`
+were omitted, which is why it's now written down. Verify production imports
+after any sync rather than assuming. `wake` is openwakeword; `pi` is
+gpiozero + lgpio + spidev for the ReSpeaker button and its LEDs (Pi-only —
+it won't resolve on the Mac).
+**Do not add `--extra voice`** — it pulls in `torch`/`transformers` (~2 GB,
+not needed, and not what the validated LLM setup uses). `--extra dev` is
+laptop-only (pytest/ruff/mypy).
 
 **React device-display app** (`src/lumi/ui/device_display/src/**` — the
 Lumi face UI): must be **built on the Mac** first, then the build output
