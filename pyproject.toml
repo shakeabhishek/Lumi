@@ -60,6 +60,13 @@ voice = ["resemblyzer>=0.1.1"]
 # the earlier "no py3.12 wheel" note was stale. Lumi's WAKE_WORD strategy
 # lazy-imports openwakeword so it stays optional for PUSH_TO_TALK-only use.
 wake = ["openwakeword>=0.4.0"]
+# Real GPIO — the ReSpeaker HAT's physical button, and its RGB LEDs over SPI.
+# Pi-only: gpiozero's lgpio backend and spidev are Linux/Pi-specific, so this
+# extra must NOT be added to the Mac dev sync (`uv sync` would fail to
+# resolve). On the Pi, add `--extra pi` to the extras list in AGENTS.md.
+# gpiozero needs lgpio explicitly on Pi 5 — RPi.GPIO does not work there
+# (different SoC, RP1 southbridge), which is why it isn't listed.
+pi = ["gpiozero>=2.0", "lgpio>=0.2.2.0", "spidev>=3.6"]
 
 [project.scripts]
 lumi = "lumi.main:app"

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import sys
+from collections.abc import Callable
 
 import typer
 
@@ -68,16 +69,27 @@ def _make_primary_wake_source(cfg: Settings) -> WakeSource:
     raise NotImplementedError(f"Wake strategy not yet implemented: {cfg.wake}")
 
 
-def _make_wake_source(cfg: Settings, camera_enabled: bool) -> WakeSource:
-    """Wraps the primary wake source (voice) with a gesture/presence
-    trigger when the camera is enabled — additive, not a replacement.
-    See audio/wake_word.py's CompositeWakeSource/FileTriggerWake."""
-    primary = _make_primary_wake_source(cfg)
-    if camera_enabled:
-        from .audio.wake_word import CompositeWakeSource, FileTriggerWake  # noqa: PLC0415
+def _make_wake_source(
+    cfg: Settings, camera_enabled: bool, is_speaking: Callable[[], bool],
+) -> WakeSource:
+    """Wraps the primary wake source (voice) with the additional ways to wake
+    Lumi — all additive, never a replacement. See audio/wake_word.py's
+    CompositeWakeSource.
 
-        return CompositeWakeSource([primary, FileTriggerWake(cfg.data_dir)])
-    return primary
+    - camera on: FileTriggerWake picks up a wave gesture.
+    - always: ButtonWake, the ReSpeaker HAT's physical button. Included
+      unconditionally because it degrades to a no-op when there's no GPIO
+      (dev laptop), and it's the one wake/interrupt surface that works with
+      the camera disabled and the mic muted.
+    """
+    from .audio.wake_word import CompositeWakeSource, FileTriggerWake  # noqa: PLC0415
+    from .hardware.button import ButtonWake  # noqa: PLC0415
+
+    primary = _make_primary_wake_source(cfg)
+    extras: list[WakeSource] = [ButtonWake(cfg.data_dir, is_speaking)]
+    if camera_enabled:
+        extras.append(FileTriggerWake(cfg.data_dir))
+    return CompositeWakeSource([primary, *extras])
 
 
 def _enroll_voice(cfg: Settings, mic: SoundDeviceInput, voice_id: VoiceID) -> None:
@@ -389,7 +401,24 @@ def run(
     # as the chat path; same source of truth via build_cloud_bridge().
     conversation = ConversationManager(llm, mode=cfg.mode, memory=memory, pseudonymizer=pseudo)
     tts = make_tts(cfg.piper_voice, cfg.models_dir / "piper", output_device=cfg.audio_output_device)
-    wake = _make_wake_source(cfg, camera_enabled=_user.camera_enabled)
+
+    # Face rendering happens in the browser (laptop V1) or the Chromium
+    # kiosk on the Pi (Phase 5) — both pointed at the FastAPI server's
+    # /device-display/ route. The voice loop's StateMachine just emits
+    # transitions via HTTP push. base_url follows cfg.web_port so this
+    # can't silently drift from wherever `lumi web` actually runs.
+    #
+    # Built before the wake source because ButtonWake needs to ask it whether
+    # Lumi is mid-reply — that's what decides whether a press means "wake" or
+    # "stop talking".
+    sm = StateMachine()
+    sm.on_state_change(_device_display_callback(base_url=f"http://127.0.0.1:{cfg.web_port}"))
+
+    wake = _make_wake_source(
+        cfg,
+        camera_enabled=_user.camera_enabled,
+        is_speaking=lambda: sm.state is LumiState.SPEAK,
+    )
     router = SkillRouter(
         conversation=conversation,
         tts=tts,
@@ -400,14 +429,6 @@ def run(
         pseudonymizer=pseudo,
     )
     perf_log = PerfLog(cfg.data_dir)
-
-    # Face rendering happens in the browser (laptop V1) or the Chromium
-    # kiosk on the Pi (Phase 5) — both pointed at the FastAPI server's
-    # /device-display/ route. The voice loop's StateMachine just emits
-    # transitions via HTTP push. base_url follows cfg.web_port so this
-    # can't silently drift from wherever `lumi web` actually runs.
-    sm = StateMachine()
-    sm.on_state_change(_device_display_callback(base_url=f"http://127.0.0.1:{cfg.web_port}"))
 
     with typer.progressbar(length=1, label="Loading Whisper model") as progress:
         stt._load()
