@@ -22,7 +22,7 @@ print("SPI0.0 opened at", spi.max_speed_hz, "Hz")
 for name, colour in (("RED", (255,0,0)), ("GREEN", (0,255,0)), ("BLUE", (0,0,255))):
     print(f"  writing {name} to {N} LEDs — look at the HAT")
     spi.xfer2(frame([colour]*N))
-    time.sleep(1.5)
+    time.sleep(3.0)
 
 print("  writing OFF")
 spi.xfer2(frame([(0,0,0)]*N))

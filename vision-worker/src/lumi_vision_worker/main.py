@@ -42,6 +42,18 @@ _MODEL_PATH = Path(__file__).parent / "hand_landmarker.task"
 _N_CONSECUTIVE = 3  # frames a candidate gesture must hold before "detected" (~180ms at 16fps)
 _COOLDOWN_S = 1.5  # per-gesture-type suppression after firing (mirrors OpenWakeWordWake's cooldown)
 
+# Gestures that mean "stop talking". Open palm is the deliberate "hold on"
+# signal; thumbs-down is included because "no" while she's mid-sentence means
+# the same thing to a user, and making them behave differently would be a
+# distinction only the code cares about. Both are ignored unless she's
+# actually speaking — see runtime/barge_in.py's arming.
+#
+# Thumbs-UP is deliberately NOT here, and is still wired to nothing but its
+# display badge. The obvious pairing would be a yes/no confirmation flow, but
+# nothing in Lumi asks a yes/no question today, so the answering half would be
+# built against no caller. See ROADMAP #12.
+_BARGE_IN_GESTURES = frozenset({GestureType.OPEN_PALM, GestureType.THUMBS_DOWN})
+
 
 def _camera_enabled(data_dir: Path) -> bool:
     try:
@@ -109,13 +121,13 @@ def _run_capture_session(cfg: Config) -> None:
                 client.push_gesture(effective.value, base_url=cfg.web_base_url)
                 if effective == GestureType.WAVE:
                     wake_trigger.write_wake_trigger(cfg.data_dir, source="gesture:wave")
-                elif effective == GestureType.OPEN_PALM:
+                elif effective in _BARGE_IN_GESTURES:
                     # "Stop talking." Written unconditionally — this process
                     # has no idea whether Lumi is mid-reply, and the main app
                     # ignores the trigger unless she's speaking. See
                     # wake_trigger.py's module docstring.
                     wake_trigger.write_barge_in_trigger(
-                        cfg.data_dir, source="gesture:open_palm",
+                        cfg.data_dir, source=f"gesture:{effective.value}",
                     )
                 log.info("vision_worker.gesture_fired", extra={"gesture": effective.value})
 

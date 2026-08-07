@@ -206,8 +206,9 @@ MediaPipe worker) and the exact wake-vs-display-only split per gesture.
 | | Active cooler for Pi 5 | Thermal management (required) |
 | **Storage** | SanDisk Extreme 256GB A2 V30 microSD (`SDSQXAV-256G-GN6MA`) | OS, models, ChromaDB, user data |
 | **Display** | Raspberry Pi Touch Display 2 (7", run landscape 1280×720) in a SmartiPi Touch Pro 3 enclosure | Lumi's animated face + the finished product shell |
-| **Audio** | ReSpeaker 2-Mics Pi HAT V2.0 | Mics + speaker output + 3 RGB LEDs + 1 button (compact HAT) |
-| | 3-5W 4Ω speaker with JST connector | Voice output |
+| **Audio** | ReSpeaker 2-Mics Pi HAT V2.0 | **Speaker output + the physical button (GPIO17)**. Its onboard mics are NOT used (capture moved to an external USB mic, 2026-08-06) and its 3 RGB LEDs are unusable — the HAT is sealed inside the case, so nothing on it is visible or audible. |
+| | External USB mic (`Generalplus`, ALSA card id `Device`) | **Voice input.** Mounted outside the enclosure. 44.1/48 kHz only — no 16 kHz, hence `audio/resample.py`. |
+| | 3-5W 4Ω speaker with JST connector | Voice output — mounted **outside** the case, not firing through a rear vent |
 | **Camera** | Pi Camera Module 3 Wide | Gestures + presence detection (102° FOV, autofocus) |
 | | CSI ribbon cable (Pi 5 15→22-pin, CAM variant) | Camera on the Pi 5's 2nd MIPI port |
 | | DSI ribbon cable (Pi 5 22-pin) | Display on the Pi 5's 1st MIPI port |
@@ -745,7 +746,7 @@ Camera frames               → Never stored, never persisted
 - Weather API — public, no user data sent
 - All skill network traffic logged in audit log
 
-**Camera-active indicator:** a NeoPixel on the ReSpeaker HAT lights red when camera is active. Manual 3D-printed privacy cap for V1; integrated slider shutter for V2.
+**Camera-active indicator:** an **on-screen** pulsing red camera glyph (`App.tsx`, driven by `cameraActive` off the vision worker's presence heartbeat — dark within ~12s of capture actually stopping). The originally-planned NeoPixel on the ReSpeaker HAT is **abandoned as not-applicable**: the HAT is sealed inside the SmartiPi enclosure, so a light on it is invisible and would be a privacy signal nobody can see (resolved 2026-08-06, see `docs/privacy-led.md`). A physical light would have to be an externally-mounted LED, like the now-external speaker and USB mic — V2, alongside the shutter. Manual 3D-printed privacy cap for V1; integrated slider shutter for V2.
 
 **Data export:** Export everything (conversations, embeddings, preferences, audit log) as a single archive via web UI.
 
@@ -923,9 +924,11 @@ Two separate ABI/version walls forced this three-process shape:
   landmark extraction)
 - Only 21-point hand landmarks retained past a single loop iteration
 - On-screen camera-active indicator (small icon, `App.tsx`) shipped as
-  the privacy signal for now — a physical NeoPixel on the ReSpeaker HAT
-  is still deferred (no LED-driving code exists in this repo yet; see
-  ROADMAP.md)
+  the privacy signal for V1, and now permanently rather than "for now":
+  the ReSpeaker HAT sits sealed inside the enclosure, so an LED on it
+  can't be seen by anyone (resolved 2026-08-06 — see
+  `docs/privacy-led.md` for what was investigated and why a physical
+  light now means an *externally* mounted LED, which is V2)
 - `camera_enabled` in `/settings/data` actually gates capture — when
   off, `capture_shim.py` releases the camera and idles in a settings-
   poll loop rather than just ignoring detections (verified via CPU usage
@@ -1137,7 +1140,9 @@ Surface to user when relevant.
 - **Onboarding system prompts** — Per work mode (Developer / Writer / Student / General).
 - **CSI ribbon cable** — Pi 5 uses smaller CSI connector than Camera Module 3 ships with. Verify adapter needed.
 - **3D-printed manual privacy cap** — V1 trust signal — needs design.
-- **Audio in the SmartiPi enclosure** 🟠 *(2026-06-20, top hardware risk; plan forming)* — seal the Pi + ReSpeaker behind the screen → use the case's **rear grill vents**. Speaker (detachable JST) fires out a rear vent = easy; mics are **soldered to the 2-Mics HAT**, so they listen from wherever the board sits — orient the mic ports toward a vent. Keep **mics and speaker on separate vents, far apart** (no hardware AEC → co-location kills barge-in) + software WebRTC AEC. Rear mics face away from the user → OK near-field with wake-word + button; **fallback** = front-mounted USB mic. Validate pickup early. See bom.md.
+- **Audio in the SmartiPi enclosure** ✅ **RESOLVED 2026-08-06 — the fallback won: both transducers are now OUTSIDE the case.** The 06-20 plan was to seal the Pi + ReSpeaker behind the screen and fire audio through the case's rear grill vents, with a front-mounted USB mic listed only as a fallback if rear-facing mics couldn't hear the user. In practice the build went straight to external hardware: **an external USB mic** (`Usb Audio Device`, card id `Device`) and **the speaker mounted outside the case**, with the ReSpeaker HAT retained inside purely as the playback codec. This dissolves the original risk rather than mitigating it — mic placement is now free (no vent orientation to get right), and mic/speaker separation for barge-in is a matter of where you physically put them, not of which vent they share. Software AEC is still worth having, but is no longer load-bearing.
+  Three consequences already handled in code (2026-08-05/06): (1) the USB mic **does not support 16 kHz**, only 44.1/48 kHz, while openwakeword and Whisper both require exactly 16 kHz — see `audio/resample.py`; (2) **playback and capture are now different ALSA cards**, so `hardware/audio_mixer.py` discovers the capture card by probing rather than hardcoding, and mic-mute had silently stopped working before that; (3) a **sealed HAT can't host the privacy LED** — see `docs/privacy-led.md` and Tier 3 #8.
+  Also note the ReSpeaker's own mics have been observed reporting `max_input_channels=0` on one boot and `2` on the next — unexplained, and no longer on the critical path now that capture is external, but don't rely on them.
 - **SmartiPi cavity vs. optional AI HAT+ 2** 🟡 — the 45 mm cavity fits ~Pi 5 + cooler + one HAT (ReSpeaker); if the vision benchmark forces the AI HAT+ 2 in, two HATs likely won't fit and the enclosure must be revisited.
 - **OpenClaw service startup time** — Adds to Pi boot time. Acceptable threshold?
 - **Skill timeout default** — How long before a stuck skill is killed? (Default 10s, configurable per skill)

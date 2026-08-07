@@ -1,56 +1,77 @@
-# The physical camera privacy light
+# The camera privacy light
 
-ROADMAP Tier 3 #8. Status: **SPI enabled and the write path proven; whether
-the LEDs physically exist on this HAT revision is unverified.**
+**Resolved 2026-08-06: the on-screen indicator is V1's privacy signal. The
+ReSpeaker HAT's LEDs cannot serve this purpose, and the roadmap item asking
+for them is closed as not-applicable rather than not-done.**
 
-## Why it's still open
+## Why the HAT LEDs are the wrong answer
 
-The on-screen camera indicator ships today (`App.tsx`, driven by the vision
-worker's presence heartbeat via `vision_liveness_sampler`, dark within ~12s of
-the worker stopping). CLAUDE.md's privacy-by-design section calls the physical
-NeoPixel "still deferred (no LED-driving code exists in this repo yet)". A
-light on the hardware is a stronger trust signal than a light in the UI the
-camera feeds, so it's worth finishing.
+ROADMAP Tier 3 #8 asked for a "camera-active **privacy light** (red when
+camera on)", and CLAUDE.md's privacy-by-design section described a NeoPixel on
+the ReSpeaker HAT as the intended mechanism, with the on-screen icon as a
+stand-in until it was wired.
 
-## What's done
+The blocker isn't software. **The HAT is sealed inside the SmartiPi Touch Pro 3
+enclosure** (confirmed with the user, 2026-08-06). A privacy indicator that
+nobody can see is not an indicator. Even a perfectly working APA102 driver
+would have produced light trapped inside the case — which is worse than no
+light, because the code and the docs would both claim the feature shipped.
 
-`dtparam=spi=on` is now in `/boot/firmware/config.txt` — SPI was off, and the
-ReSpeaker's RGB LEDs are APA102 devices driven over SPI0, so nothing could
-have worked before. `/dev/spidev0.0` and `/dev/spidev0.1` now exist.
+This is a hardware-topology conclusion, not a bug: the enclosure decision
+(2026-06-20, chosen for product finish) and the HAT-LED plan are simply
+incompatible, and nothing noticed because the two were recorded in different
+places.
 
-Backup before the change: `/boot/firmware/config.txt.bak-pre-spi-2026-08-05`.
-The Pi rebooted cleanly with it — all services active, `goodix-touch-rebind`
-oneshot reported `success`, touch intact.
+## What was investigated, so nobody repeats it
 
-`scripts/led_probe.py` writes red → green → blue → off to 3 APA102 LEDs on
-SPI0. It runs without error on the device, which proves the bus and the write
-path. It does **not** prove an LED lit.
+- SPI was **off** on the device. The HAT's RGB LEDs are APA102 parts driven
+  over SPI0, so nothing could ever have worked without enabling it.
+- `dtparam=spi=on` was added, the Pi rebooted cleanly (all services active,
+  `goodix-touch-rebind` oneshot `success`, touch intact), and
+  `/dev/spidev0.{0,1}` appeared.
+- `scripts/led_probe.py` wrote red/green/blue/off frames to 3 APA102 LEDs on
+  SPI0 without error — proving the bus and the write path, but never that a
+  physical LED lit.
+- **The SPI line has since been reverted** (`/boot/firmware/config.txt`), since
+  it exists only for this dead end. Backup of the pre-change file:
+  `/boot/firmware/config.txt.bak-pre-spi-2026-08-05`. SPI stays live until the
+  next reboot, then goes away.
+- It also remains unconfirmed whether the **v2.0** board has the LEDs at all.
+  Its overlay (`respeaker-2mic-v2_0`) declares only the TLV320AIC3104 codec,
+  I2S and a fixed clock — no LED node. The v1.0/WM8960 board is the one
+  documented as carrying 3 APA102s. Moot now, but worth knowing.
 
-## What needs a person
+`scripts/led_probe.py` is kept because it's the fastest way to answer the
+"does this HAT have LEDs" question if the enclosure ever opens up.
 
-Run it while looking at the HAT:
+## What V1 actually ships
 
-```bash
-ssh lumi@192.168.0.45 'cd /home/lumi/lumi && .venv/bin/python /tmp/led_probe.py'
-# (scp scripts/led_probe.py to /tmp first)
-```
+The on-screen camera indicator in `App.tsx` — a pulsing rose camera glyph,
+driven by `cameraActive`, which `device_samplers.py`'s `vision_liveness_sampler`
+derives from the vision worker's presence heartbeat. It goes dark within ~12s
+of the worker actually stopping (`camera_enabled` off, or the process down),
+so it reflects real capture state rather than a local flag.
 
-Three LEDs should cycle red, green, blue, then go dark, ~1.5s each.
+Its one honest weakness: it's rendered by the same app the camera feeds, on
+the same screen. A physical light is a stronger trust signal because it can't
+be faked by the software being watched.
 
-**If they light:** wire a driver that turns them red whenever the vision
-worker is capturing, mirroring `device_samplers.py`'s `cameraActive` logic so
-the on-screen icon and the physical light can never disagree. The natural
-owner is a small `hardware/leds.py` alongside `hardware/button.py`, called
-from the vision worker's capture session start/stop.
+## If a physical light is wanted
 
-**If they don't:** this HAT is the **v2.0** (TLV320AIC3104 codec — see
-`dtoverlay=respeaker-2mic-v2_0`, whose decompiled overlay declares only the
-codec, I2S and a fixed clock, with no LED node). The v1.0 board with the
-WM8960 is the one documented as having 3 APA102s; the v2.0 may simply have
-dropped them. In that case either revert the SPI line or leave it (harmless),
-and either add a discrete LED on a spare GPIO or keep the on-screen indicator
-as V1's privacy signal and move the NeoPixel to V2 alongside the physical
-shutter.
+It has to be **outside the case**, routed the way the speaker and the USB mic
+already are (both external as of 2026-08-06 — see CLAUDE.md's resolved
+enclosure-audio question). Options, cheapest first:
 
-Do not write the driver before someone confirms which of those it is — code
-that drives nothing looks like code that works.
+1. A discrete LED on a spare GPIO, mounted through the case shell. No SPI, no
+   APA102 protocol — `gpiozero.LED` next to `hardware/button.py`, driven from
+   the vision worker's capture session start/stop. Needs one BOM line and a
+   hole in the enclosure.
+2. A single external NeoPixel/APA102 on a short lead. More colour control than
+   is needed for "red means recording", and re-adds the SPI dependency.
+
+Either way, wire it off the **same** source as `cameraActive` rather than a
+parallel code path, so the physical light and the on-screen icon can never
+disagree — a privacy signal that contradicts itself is worse than one signal.
+
+Treat this as a V2 item alongside the physical camera shutter, which has the
+same "needs to be reachable from outside the shell" constraint.
