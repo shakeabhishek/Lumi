@@ -667,6 +667,19 @@ def keys(
     if not name:
         typer.echo("Provide a key name. Known: " + ", ".join(KNOWN), err=True)
         raise typer.Exit(1)
+    # Reject unknown names rather than storing them. Without this, a typo
+    # stores a secret nothing will ever read and still prints "Stored ...",
+    # so the operator believes the key is configured. Found on the device
+    # 2026-08-06: data/.secrets.json held a single entry named `k` while
+    # `cloud_llm_api_key` was absent — the cloud LLM had been silently
+    # falling back to the local 1.5B model for conversational replies.
+    if name not in KNOWN:
+        typer.echo(
+            f"Unknown key name: {name!r}. Nothing was stored.\n"
+            f"Known names: {', '.join(KNOWN)}",
+            err=True,
+        )
+        raise typer.Exit(1)
     if action == "get":
         typer.echo(_secrets.mask(_secrets.get_secret(name)))
     elif action == "set":

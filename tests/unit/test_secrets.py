@@ -133,3 +133,35 @@ def test_migration_no_op_when_no_legacy_key(tmp_path: Path) -> None:
     # No keychain writes; flag is preserved.
     assert fake._store == {}
     assert s.cloud_llm_api_key_set is True
+
+
+# ── `lumi keys set` name validation ──────────────────────────────────────
+
+from typer.testing import CliRunner  # noqa: E402
+
+import lumi.runtime.secrets as secrets_module  # noqa: E402
+from lumi.main import app  # noqa: E402
+
+
+def test_keys_set_rejects_an_unknown_name(monkeypatch, tmp_path) -> None:
+    """Found on the device 2026-08-06: data/.secrets.json held a single entry
+    named `k` while `cloud_llm_api_key` was absent, so the cloud LLM had been
+    silently falling back to the local 1.5B model for every conversational
+    reply. `lumi keys set` accepted any name and still printed "Stored ...",
+    so a typo left the operator believing the key was configured."""
+    stored: dict[str, str] = {}
+    monkeypatch.setattr(secrets_module, "set_secret", stored.__setitem__)
+    result = CliRunner().invoke(app, ["keys", "set", "k"])
+    assert result.exit_code != 0
+    assert stored == {}, "an unknown key name must store nothing"
+    assert "Unknown key name" in result.output
+
+
+def test_keys_set_accepts_a_known_name(monkeypatch) -> None:
+    stored: dict[str, str] = {}
+    monkeypatch.setattr(secrets_module, "set_secret", stored.__setitem__)
+    result = CliRunner().invoke(
+        app, ["keys", "set", "cloud_llm_api_key"], input="some-value\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert stored.get("cloud_llm_api_key") == "some-value"

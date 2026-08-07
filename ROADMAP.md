@@ -65,6 +65,36 @@ Dependencies are flagged so we pick by what's unblocked.
    - **the ReSpeaker button** (GPIO17, real `gpiozero` — one button,
      context-dependent: barge-in while speaking, wake otherwise)
 
+## 🟠 Also broken right now (found during the 2026-08-06 soak)
+
+**The cloud LLM ceiling is inactive on the device, and the dashboard says
+it's on.** `user_settings.json` has `cloud_routing_enabled=True`,
+`cloud_llm_provider=gemini`, `cloud_llm_api_key_set=True` — but
+`get_cloud_api_key("gemini")` returns nothing, so `make_llm_backend` never
+builds `RoutedBackend` and **every conversational reply is served by the
+local `qwen2.5:1.5b`**. Measured cost: **p50 20.8s, p95 46.3s per chat
+turn**. That is precisely what the 2026-07-05 cloud-first flip existed to
+prevent.
+
+Diagnosis: `data/.secrets.json` (the file backend — working; a write/read
+round-trip across processes persists correctly) contains a single entry
+named `k` and no `cloud_llm_api_key`. A real Gemini key *is* still present
+in `~/.openclaw/openclaw.json`, which is why the OpenClaw **skill** path
+runs in cloud mode while conversation does not. Root cause of the stray
+entry: `lumi keys set` accepted any name without validating it against
+`KNOWN` and still printed "Stored …", so a typo produced a secret nothing
+reads plus a success message. **Fixed** — unknown names are now rejected,
+and the silent-downgrade log is now an `error` naming the consequence.
+
+*Fix:* re-enter the Gemini key at `/settings/cloud`. Then confirm
+`llm.routed_backend_active` appears in the `lumi-web` journal and re-run
+`scripts/pi_soak.py` — latency should drop sharply.
+
+*Still open:* `cloud_llm_api_key_set` can disagree with the secret store
+and nothing surfaces it in the UI. The settings page should show
+retrievability, not just the stored boolean — a privacy/trust surface that
+lies about whether cloud is on is worse than one that says nothing.
+
 ## 🧩 Tier 2 — Make it usable & real
 
 6. **On-device onboarding** — the 9-step first-run flow exists; test

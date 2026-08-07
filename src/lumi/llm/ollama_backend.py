@@ -124,10 +124,24 @@ def make_llm_backend(cfg: Settings, *, user_settings: Any = None) -> LLMBackend:
     api_key = get_cloud_api_key(provider)
     cloud = build_cloud_client(provider, model, api_key)
     if cloud is None:
-        log.warning(
+        # Error, not warning. This is the silent-downgrade case: settings say
+        # cloud routing is on and a key is set, the dashboard shows it as
+        # configured, and every reply quietly comes from the local 1.5B model
+        # instead — which on the Pi is ~20s per turn versus cloud speed, i.e.
+        # exactly what the 2026-07-05 cloud-first flip existed to avoid.
+        # Observed live on the device 2026-08-06, where the only trace of it
+        # anywhere was one warning line at startup.
+        log.error(
             "llm.cloud_routing_unconfigured",
-            provider=provider, key_in_keychain=bool(api_key),
-            advice="set /settings/cloud key and confirm provider/model are filled in",
+            provider=provider,
+            key_retrievable=bool(api_key),
+            settings_claim_key_is_set=bool(key_set),
+            consequence="ALL replies served by the local model; cloud ceiling inactive",
+            advice=(
+                "re-enter the key at /settings/cloud — `cloud_llm_api_key_set` "
+                "in user_settings.json can be True while the secret store has "
+                "no retrievable value, and nothing else surfaces the mismatch"
+            ),
         )
         return local
 
