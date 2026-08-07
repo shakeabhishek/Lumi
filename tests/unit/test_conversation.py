@@ -242,3 +242,44 @@ def test_mode_property(manager: ConversationManager) -> None:
     assert manager.mode == Mode.GENERAL
     manager.set_mode(Mode.DICTATION)
     assert manager.mode == Mode.DICTATION
+
+
+# ── history is bounded ───────────────────────────────────────────────────
+
+
+def test_history_is_bounded_not_append_only() -> None:
+    """Found by the 2026-08-06 soak: _history was append-only while only its
+    tail is ever read, so it grew forever (~7 MB across 45 turns in lumi-web).
+    Slow, but this process runs 24/7."""
+    conv = ConversationManager(MockLLMBackend(response="ok"), max_turns=3)
+    for i in range(200):
+        conv.chat(f"message {i}")
+    assert len(conv._history) <= 3 * 4, f"history grew to {len(conv._history)}"
+
+
+def test_bound_is_wider_than_the_prompt_window() -> None:
+    """Trimming must never starve the prompt builder, which reads
+    max_turns*2 messages."""
+    conv = ConversationManager(MockLLMBackend(response="ok"), max_turns=5)
+    for i in range(100):
+        conv.chat(f"m{i}")
+    assert len(conv._history) >= conv._max_turns * 2
+
+
+def test_most_recent_turns_are_the_ones_kept() -> None:
+    """Trimming drops the OLDEST — dropping the newest would silently break
+    the conversation actually in progress."""
+    conv = ConversationManager(MockLLMBackend(response="ok"), max_turns=2)
+    for i in range(50):
+        conv.chat(f"unique-{i}")
+    contents = [m["content"] for m in conv._history]
+    assert "unique-49" in contents
+    assert "unique-0" not in contents
+
+
+def test_streaming_path_is_bounded_too() -> None:
+    """stream_chat has its own append sites; both must go through _remember."""
+    conv = ConversationManager(MockLLMBackend(response="ok"), max_turns=3)
+    for i in range(100):
+        list(conv.stream_chat(f"m{i}"))
+    assert len(conv._history) <= 3 * 4

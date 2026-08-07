@@ -29,6 +29,7 @@ What it watches for, and why each one:
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import re
 import statistics
@@ -38,7 +39,21 @@ from pathlib import Path
 
 import httpx
 
+# nohup + redirect means stdout is block-buffered, so progress lines were
+# invisible until the process exited — a 30-minute soak you can't watch.
+print = functools.partial(print, flush=True)  # noqa: A001
+
 _RSS_GROWTH_LIMIT_KB = 150 * 1024
+# ollama is exempt from the RSS-growth gate. Its whole job is loading a 1.4 GB
+# model on demand into a child runner process, so a 30-min soak legitimately
+# shows ~500 MB of "growth" as the model warms and its KV cache fills toward
+# num_ctx — then releases it when keep_alive expires (measured: 1352->1835 MB
+# during the 2026-08-06 soak, 61 MB idle a few minutes later). Gating on a
+# fixed delta here produced a FAIL that was purely an artefact of the gate.
+# A real ollama leak would show as RSS that never comes back down at idle,
+# which needs a longer observation window than this script's, not a tighter
+# threshold.
+_RSS_EXEMPT_FROM_GROWTH_GATE = frozenset({"ollama"})
 _FD_GROWTH_LIMIT = 50
 # Heartbeat is one push per 5s => ~12/min. This allows real presence
 # transitions on top; a return toward the pre-fix 110/min trips it.
@@ -247,12 +262,13 @@ def run(duration_s: int, interval_s: float, base_url: str) -> int:
         if not began or not ended:
             print(f"  {s:<22} (no /proc sample)")
             continue
+        note = "  (growth gate exempt: model load)" if s in _RSS_EXEMPT_FROM_GROWTH_GATE else ""
         print(
             f"  {s:<22} alive={alive[s]:<8} "
             f"rss {began['rss_kb'] // 1024}->{ended['rss_kb'] // 1024}MB "
             f"(peak {pk.get('rss_kb', 0) // 1024}) "
             f"fd {began['fds']}->{ended['fds']}  "
-            f"thr {began['threads']}->{ended['threads']}",
+            f"thr {began['threads']}->{ended['threads']}{note}",
         )
 
     print("\njournals:")
@@ -271,7 +287,10 @@ def run(duration_s: int, interval_s: float, base_url: str) -> int:
             fails.append(f"{s} not active at end ({alive[s]})")
         began, ended = first.get(s, {}), last.get(s, {})
         if began and ended:
-            if ended["rss_kb"] > began["rss_kb"] + _RSS_GROWTH_LIMIT_KB:
+            if (
+                s not in _RSS_EXEMPT_FROM_GROWTH_GATE
+                and ended["rss_kb"] > began["rss_kb"] + _RSS_GROWTH_LIMIT_KB
+            ):
                 fails.append(f"{s} RSS grew {(ended['rss_kb'] - began['rss_kb']) // 1024}MB")
             if ended["fds"] > began["fds"] + _FD_GROWTH_LIMIT:
                 fails.append(f"{s} FDs grew {ended['fds'] - began['fds']}")

@@ -83,6 +83,24 @@ class ConversationManager:
         self._history.clear()
         log.info("conversation.cleared")
 
+    def _remember(self, message: Message) -> None:
+        """Append to history, bounded.
+
+        Only the tail is ever read — `_max_turns * 2` messages for the prompt
+        and `_history[-1]` for the memory lookup — so an append-only list grew
+        forever for no benefit. Harmless in a CLI session, but this process is
+        a 24/7 appliance: the 30-minute soak on 2026-08-06 put ~7 MB into
+        lumi-web across 45 turns. Slow, but genuinely unbounded.
+
+        The cap is deliberately larger than the prompt window (4x rather than
+        exactly `_max_turns * 2`) so trimming can never interact with what the
+        prompt builder expects to find.
+        """
+        self._history.append(message)
+        cap = self._max_turns * 4
+        if len(self._history) > cap:
+            del self._history[:-cap]
+
     def _build_messages(self) -> list[Message]:
         """Build the message array for the model.
 
@@ -148,7 +166,7 @@ class ConversationManager:
 
     def chat(self, user_text: str) -> str:
         """Add user turn, stream LLM reply, return the full reply string."""
-        self._history.append({"role": "user", "content": user_text})
+        self._remember({"role": "user", "content": user_text})
         # Length only — raw transcript could be PII, and the audit log is the
         # proper place for content (it goes through the pseudonymizer in
         # cloud mode). Structured logs may be tail'd, mirrored, or shipped.
@@ -156,7 +174,7 @@ class ConversationManager:
 
         reply = "".join(self._backend.chat(self._build_messages())).strip()
 
-        self._history.append({"role": "assistant", "content": reply})
+        self._remember({"role": "assistant", "content": reply})
         log.info("conversation.assistant", chars=len(reply))
         if self._memory:
             self._memory.store_turn(user_text, reply)
@@ -167,7 +185,7 @@ class ConversationManager:
 
         Appends the full assembled reply to history once the stream is exhausted.
         """
-        self._history.append({"role": "user", "content": user_text})
+        self._remember({"role": "user", "content": user_text})
         log.info("conversation.user", chars=len(user_text))
 
         buffer: list[str] = []
@@ -176,7 +194,7 @@ class ConversationManager:
             yield chunk
 
         reply = "".join(buffer).strip()
-        self._history.append({"role": "assistant", "content": reply})
+        self._remember({"role": "assistant", "content": reply})
         log.info("conversation.assistant", chars=len(reply))
         if self._memory:
             self._memory.store_turn(user_text, reply)
