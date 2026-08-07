@@ -201,3 +201,58 @@ def test_cloud_get_shows_masked_key_when_set() -> None:
         r = c.get("/settings/cloud")
     assert "sk-a" in r.text and "1234" in r.text     # masked indicator visible
     assert "sk-ant-api03-AbCdEfGh1234" not in r.text  # full key never rendered
+
+
+# ── the page must report verified state, not a cached mirror ──────────────
+#
+# Found on the device 2026-08-06: user_settings.json said
+# cloud_llm_api_key_set=True while nothing could read a key back, so the
+# dashboard reported cloud routing as configured while every reply came from
+# the local 1.5B model. The template branched on the cached boolean.
+
+
+def _cloud_page(tmp_path, monkeypatch, *, flag: bool, stored_key: str) -> str:
+    from fastapi.testclient import TestClient
+
+    import lumi.runtime.secrets as sec
+    from lumi.ui.web.app import create_app
+    from lumi.ui.web.persistence import UserSettings, save_settings
+
+    save_settings(
+        tmp_path,
+        UserSettings(
+            onboarding_complete=True,
+            cloud_llm_provider="gemini",
+            cloud_llm_api_key_set=flag,
+            cloud_routing_enabled=True,
+        ),
+    )
+    monkeypatch.setattr(sec, "get_secret", lambda k: stored_key if k == "cloud_llm_api_key" else "")
+    client = TestClient(create_app(tmp_path), follow_redirects=True)
+    return client.get("/settings/cloud").text
+
+
+def test_warns_when_the_flag_claims_a_key_that_cannot_be_read(tmp_path, monkeypatch) -> None:
+    page = _cloud_page(tmp_path, monkeypatch, flag=True, stored_key="")
+    assert "not actually active" in page
+    assert "local model" in page
+
+
+def test_no_warning_when_the_key_is_genuinely_readable(tmp_path, monkeypatch) -> None:
+    page = _cloud_page(tmp_path, monkeypatch, flag=True, stored_key="AIzaREALKEY1234")
+    assert "not actually active" not in page
+
+
+def test_no_warning_when_nothing_is_configured(tmp_path, monkeypatch) -> None:
+    """A fresh install shouldn't be scolded — the flag and the store agree."""
+    page = _cloud_page(tmp_path, monkeypatch, flag=False, stored_key="")
+    assert "not actually active" not in page
+
+
+def test_clear_button_follows_the_readable_key_not_the_flag(tmp_path, monkeypatch) -> None:
+    """Offering "Clear key" for a key that isn't there is a dead control."""
+    stale = _cloud_page(tmp_path, monkeypatch, flag=True, stored_key="")
+    assert "Clear key" not in stale
+
+    real = _cloud_page(tmp_path, monkeypatch, flag=True, stored_key="AIzaREALKEY1234")
+    assert "Clear key" in real

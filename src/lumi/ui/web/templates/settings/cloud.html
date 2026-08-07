@@ -2,6 +2,18 @@
 {% block title %}Cloud LLM — Lumi{% endblock %}
 {% block content %}
 <h1>Cloud LLM routing</h1>
+
+{% if key_flag_stale %}
+<div style="margin:.75rem 0;padding:.75rem 1rem;border:1px solid var(--iris-danger,#c44);border-radius:.5rem;background:rgba(196,68,68,0.08)">
+  <strong>Cloud routing is not actually active.</strong>
+  <p style="margin:.4rem 0 0;font-size:.9rem;">
+    Settings record an API key as saved, but no key can be read back from the
+    {{ "OS keychain" if secret_backend == "keychain" else "secret store" }}.
+    Every reply is being served by the local model instead — noticeably slower.
+    Paste the key again below to fix it.
+  </p>
+</div>
+{% endif %}
 <p>
   {{ settings.lumi_name }}'s local model runs on-device (Ollama, on the Pi's
   CPU) as the private/offline floor. When cloud routing is on, {{ settings.lumi_name }}
@@ -33,7 +45,7 @@
       <label for="api_key">API key</label>
       <input id="api_key" type="password" name="cloud_llm_api_key"
              value=""
-             placeholder="{{ 'enter to update — current: ' ~ key_mask if settings.cloud_llm_api_key_set else 'sk-ant-… / sk-… / AIza…' }}"
+             placeholder="{{ 'enter to update — current: ' ~ key_mask if key_present else 'sk-ant-… / sk-… / AIza…' }}"
              autocomplete="off">
       <div class="form-hint">
         {% if secret_backend == "keychain" %}
@@ -45,7 +57,7 @@
         readable only by the account Lumi runs as.
         {% endif %}
         The value is never displayed back to the UI —
-        only the masked indicator {{ "(currently " ~ key_mask ~ ")" if settings.cloud_llm_api_key_set else "" }} is shown.
+        only the masked indicator {{ "(currently " ~ key_mask ~ ")" if key_present else "" }} is shown.
         Leave this field blank to keep the existing key; click <em>clear</em> to remove it.
       </div>
     </div>
@@ -85,7 +97,7 @@
 
     <div class="btn-row">
       <button type="submit" class="btn primary">Save</button>
-      {% if settings.cloud_llm_api_key_set %}
+      {% if key_present %}
       <button type="button" class="btn danger" onclick="__lumiAskClearKey()">
         Clear key
       </button>
@@ -94,7 +106,7 @@
     </div>
   </form>
 
-  {% if settings.cloud_llm_api_key_set %}
+  {% if key_present %}
   {# Two-step confirmation for cloud-key removal. A single browser confirm()
      was too easy to mis-tap; recovering means pasting the key again, which
      the user may not have ready. Require typing the literal word "clear". #}

@@ -27,9 +27,11 @@ is set (a boolean) plus non-sensitive provider/model names — never the secret.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 from ..log import get_logger
@@ -76,15 +78,93 @@ def _secrets_file() -> Path:
     return Settings().data_dir / SECRETS_FILENAME
 
 
-def _file_read() -> dict[str, str]:
+class SecretStoreUnreadable(RuntimeError):
+    """The secrets file exists but couldn't be parsed.
+
+    Raised only on the read-modify-write path. Treating an unreadable store as
+    empty there is how you silently destroy every other secret — see
+    `_file_read`'s `strict` argument.
+    """
+
+
+def _file_read(*, strict: bool = False) -> dict[str, str]:
+    """Load the secrets file.
+
+    `strict` distinguishes the two callers, which need opposite behaviour on a
+    damaged file:
+
+      * **reads** (`get_secret`) want `strict=False` — a missing key and an
+        unreadable store both mean "no value", and raising would take down a
+        voice turn over a secret that may not even be configured.
+      * **read-modify-write** (`set_secret`/`delete_secret`) MUST use
+        `strict=True`. Those do `store = read(); store[k] = v; write(store)`,
+        so a read that quietly returns `{}` writes back a store containing
+        *only* the new key and erases everything else.
+
+    That is not hypothetical. On the device (2026-08-06) `data/.secrets.json`
+    held a single entry named `k` with `cloud_llm_api_key` gone, and the cloud
+    LLM had been silently falling back to the local 1.5B model as a result.
+    """
     p = _secrets_file()
     if not p.exists():
+        return {}          # legitimately empty — safe for both callers
+    try:
+        raw = p.read_text(encoding="utf-8")
+    except OSError as exc:
+        if strict:
+            raise SecretStoreUnreadable(f"cannot read {p.name}") from exc
+        return {}
+    if not raw.strip():
         return {}
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
-    except Exception:
+        data = json.loads(raw)
+    except ValueError as exc:
+        if strict:
+            raise SecretStoreUnreadable(f"{p.name} is not valid JSON") from exc
         return {}
+    if not isinstance(data, dict):
+        if strict:
+            raise SecretStoreUnreadable(f"{p.name} does not contain an object")
+        return {}
+    return {str(k): str(v) for k, v in data.items()}
+
+
+@contextlib.contextmanager
+def _file_lock() -> Iterator[None]:
+    """Serialise read-modify-write across processes.
+
+    Three separate processes touch this file — `lumi-web`, `lumi-voice`, and
+    the `lumi keys` CLI. Without a lock, two concurrent `set_secret` calls both
+    read the old store, both add their own key, and the second write drops the
+    first one's. A classic lost update, and with three long-lived writers it's
+    a matter of when rather than whether.
+
+    `flock` on a sidecar file rather than the secrets file itself, so the
+    atomic `os.replace` in `_file_write` (which swaps the inode out from under
+    any handle) can't invalidate the lock mid-cycle. Best-effort: if flock
+    isn't available the operation still proceeds unserialised rather than
+    failing, which is the pre-existing behaviour.
+    """
+    p = _secrets_file()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = p.with_suffix(p.suffix + ".lock")
+    try:
+        import fcntl  # noqa: PLC0415
+    except ImportError:                     # pragma: no cover - non-POSIX
+        yield
+        return
+    fd = None
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    except OSError:                         # pragma: no cover
+        yield
+    finally:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
 
 
 def _file_write(store: dict[str, str]) -> None:
@@ -120,9 +200,12 @@ def set_secret(key: str, value: str) -> None:
     if _keychain_ok():
         _client().set_password(_SERVICE, key, value)  # type: ignore[attr-defined]
     else:
-        store = _file_read()
-        store[key] = value
-        _file_write(store)
+        # strict + locked: this is the read-modify-write path, where treating a
+        # damaged store as empty would erase every other secret.
+        with _file_lock():
+            store = _file_read(strict=True)
+            store[key] = value
+            _file_write(store)
     log.info("secrets.set", key=key, backend=backend_kind())
 
 
@@ -137,16 +220,25 @@ def get_secret(key: str) -> str:
 
 
 def delete_secret(key: str) -> None:
-    """Remove the secret. Silent no-op if it didn't exist."""
+    """Remove the secret. Silent no-op if it didn't exist.
+
+    Deliberately still swallows errors — callers use this for cleanup and
+    factory reset, where a failure shouldn't abort the wider operation. But it
+    now uses the strict, locked read so a damaged store can't turn "delete one
+    key" into "delete everything".
+    """
     try:
         if _keychain_ok():
             _client().delete_password(_SERVICE, key)  # type: ignore[attr-defined]
         else:
-            store = _file_read()
-            if key in store:
-                del store[key]
-                _file_write(store)
+            with _file_lock():
+                store = _file_read(strict=True)
+                if key in store:
+                    del store[key]
+                    _file_write(store)
         log.info("secrets.deleted", key=key)
+    except SecretStoreUnreadable:
+        log.warning("secrets.delete_skipped_unreadable_store", key=key)
     except Exception:
         pass
 

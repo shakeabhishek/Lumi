@@ -519,9 +519,21 @@ async def cloud_get(request: Request) -> HTMLResponse:
     from ....runtime import secrets  # noqa: PLC0415
 
     existing = secrets.get_secret(_CLOUD_KEY_NAME)
+    # `key_present` is the RETRIEVABLE truth; settings.cloud_llm_api_key_set is
+    # only a cached mirror of it. The template used to branch on the mirror, so
+    # when the two drifted the page cheerfully reported a configured key that
+    # nothing could read — which is how the cloud LLM sat silently disabled on
+    # the device while the dashboard said it was on (2026-08-06). A privacy
+    # surface that lies about whether cloud is active is worse than one that
+    # says nothing, so the page now reports what it can actually verify and
+    # names the mismatch when there is one.
+    user = load_settings(request.app.state.data_dir)
+    key_present = bool(existing)
     return _render(
         request, "settings/cloud.html",
         key_mask=secrets.mask(existing),
+        key_present=key_present,
+        key_flag_stale=bool(user.cloud_llm_api_key_set) and not key_present,
         secret_backend=secrets.backend_kind(),
     )
 

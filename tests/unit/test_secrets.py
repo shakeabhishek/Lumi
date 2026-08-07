@@ -176,3 +176,110 @@ def test_keys_set_accepts_a_known_name(monkeypatch) -> None:
     )
     assert result.exit_code == 0, result.output
     assert stored.get("cloud_llm_api_key") == "some-value"
+
+
+# ── the file backend must never destroy secrets it didn't touch ───────────
+#
+# Found on the device 2026-08-06: data/.secrets.json contained a single entry
+# named `k` with cloud_llm_api_key gone, and the cloud LLM had been silently
+# falling back to the local 1.5B model as a result. Two mechanisms could do
+# that, and both are now closed.
+
+
+@pytest.fixture
+def file_store(tmp_path, monkeypatch):
+    """Force the file backend into tmp_path (the dev laptop has a keychain)."""
+    import lumi.runtime.secrets as sec
+
+    monkeypatch.setattr(sec, "_keychain_ok", lambda: False)
+    monkeypatch.setattr(sec, "_secrets_file", lambda: tmp_path / ".secrets.json")
+    return tmp_path / ".secrets.json"
+
+
+def test_set_preserves_other_secrets(file_store) -> None:
+    from lumi.runtime.secrets import get_secret, set_secret
+
+    set_secret("cloud_llm_api_key", "cloud-value")
+    set_secret("gmail_app_password", "gmail-value")
+    assert get_secret("cloud_llm_api_key") == "cloud-value"
+    assert get_secret("gmail_app_password") == "gmail-value"
+
+
+def test_a_corrupt_store_is_never_silently_overwritten(file_store) -> None:
+    """The exact destruction path. `set_secret` does read-modify-write; if the
+    read swallows a JSON error and returns {}, the write persists ONLY the new
+    key and erases every other secret. It must refuse instead."""
+    from lumi.runtime.secrets import SecretStoreUnreadable, set_secret
+
+    file_store.write_text("{this is not json", encoding="utf-8")
+    with pytest.raises(SecretStoreUnreadable):
+        set_secret("k", "whatever")
+    # The damaged file is left exactly as it was, for a human to inspect —
+    # better than a store that looks fine and is missing credentials.
+    assert file_store.read_text(encoding="utf-8") == "{this is not json"
+
+
+def test_a_non_object_store_is_also_refused(file_store) -> None:
+    from lumi.runtime.secrets import SecretStoreUnreadable, set_secret
+
+    file_store.write_text('["a", "list"]', encoding="utf-8")
+    with pytest.raises(SecretStoreUnreadable):
+        set_secret("k", "v")
+
+
+def test_delete_skips_rather_than_wiping_a_corrupt_store(file_store) -> None:
+    """delete_secret still swallows errors (callers use it for cleanup and
+    factory reset), but must not turn "delete one key" into "delete all"."""
+    from lumi.runtime.secrets import delete_secret
+
+    file_store.write_text("{broken", encoding="utf-8")
+    delete_secret("cloud_llm_api_key")  # must not raise
+    assert file_store.read_text(encoding="utf-8") == "{broken"
+
+
+def test_absent_and_empty_files_are_treated_as_legitimately_empty(file_store) -> None:
+    """"No file yet" and "unparseable file" are different situations — first
+    run must still work."""
+    from lumi.runtime.secrets import get_secret, set_secret
+
+    assert get_secret("anything") == ""
+    set_secret("first", "value")          # no file existed
+    assert get_secret("first") == "value"
+
+    file_store.write_text("   \n", encoding="utf-8")
+    set_secret("second", "value")         # whitespace-only, not corrupt
+    assert get_secret("second") == "value"
+
+
+def test_reads_stay_forgiving_when_the_store_is_damaged(file_store) -> None:
+    """A corrupt store must not raise on the READ path — that would take down
+    a voice turn over a secret that may not even be configured."""
+    from lumi.runtime.secrets import get_secret
+
+    file_store.write_text("{broken", encoding="utf-8")
+    assert get_secret("cloud_llm_api_key") == ""
+
+
+def test_concurrent_writers_do_not_lose_each_others_keys(file_store) -> None:
+    """Three processes touch this file — lumi-web, lumi-voice, and the CLI.
+    Unlocked read-modify-write means two concurrent set_secret calls both read
+    the old store and the second write drops the first's key."""
+    import threading
+
+    from lumi.runtime.secrets import get_secret, set_secret
+
+    names = [f"key_{i}" for i in range(24)]
+    barrier = threading.Barrier(len(names))
+
+    def writer(name: str) -> None:
+        barrier.wait()          # maximise overlap
+        set_secret(name, f"value-of-{name}")
+
+    threads = [threading.Thread(target=writer, args=(n,)) for n in names]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    missing = [n for n in names if get_secret(n) != f"value-of-{n}"]
+    assert not missing, f"lost {len(missing)} of {len(names)} concurrent writes: {missing[:5]}"
