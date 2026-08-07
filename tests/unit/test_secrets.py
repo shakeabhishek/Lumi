@@ -157,6 +157,17 @@ def test_keys_set_rejects_an_unknown_name(monkeypatch, tmp_path) -> None:
     assert "Unknown key name" in result.output
 
 
+def test_keys_delete_accepts_an_unknown_name(monkeypatch) -> None:
+    """Validation is write-only. Blocking delete would make a stray entry —
+    exactly the `k` this guard exists because of — impossible to clean up
+    through the CLI."""
+    deleted: list[str] = []
+    monkeypatch.setattr(secrets_module, "delete_secret", deleted.append)
+    result = CliRunner().invoke(app, ["keys", "delete", "k"])
+    assert result.exit_code == 0, result.output
+    assert deleted == ["k"]
+
+
 def test_keys_set_accepts_a_known_name(monkeypatch) -> None:
     stored: dict[str, str] = {}
     monkeypatch.setattr(secrets_module, "set_secret", stored.__setitem__)

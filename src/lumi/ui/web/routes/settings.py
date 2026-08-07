@@ -440,6 +440,8 @@ _KNOWN_SECRET_KEYS: tuple[str, ...] = (
     # "Forget everything" would leave working mailbox credentials on disk.
     "gmail_address",
     "gmail_app_password",
+    "gmail_personal_address",
+    "gmail_personal_app_password",
 )
 
 

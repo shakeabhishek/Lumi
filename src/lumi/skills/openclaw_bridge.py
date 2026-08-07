@@ -244,6 +244,13 @@ _SKILL_IMPLS: dict[str, dict[str, Any]] = {
     "gmail_read": {
         "tool_name": "read_email",
         "parameters": {
+            "account": {
+                "type": "string",
+                "description": (
+                    "Whose mailbox: 'mine' for the user's own Gmail (default), "
+                    "'lumi' for Lumi's dedicated account, or 'both'."
+                ),
+            },
             "limit": {
                 "type": "number",
                 "description": "How many messages to summarise (1-10). Default 5.",
@@ -260,8 +267,11 @@ _SKILL_IMPLS: dict[str, dict[str, Any]] = {
 
 
 def _gmail_read(args: dict[str, Any]) -> str:
-    from .google_read import gmail_recent  # noqa: PLC0415
+    from .google_read import _DEFAULT_ACCOUNT, gmail_recent  # noqa: PLC0415
 
+    # Coerced rather than trusted: a local model will happily pass "true" as a
+    # string, or a float for limit, and a TypeError here would surface to the
+    # user as a generic skill failure.
     unread = args.get("unread_only", True)
     if isinstance(unread, str):
         unread = unread.strip().lower() not in ("false", "0", "no", "off")
@@ -269,7 +279,8 @@ def _gmail_read(args: dict[str, Any]) -> str:
         limit = int(float(args.get("limit", 5)))
     except (TypeError, ValueError):
         limit = 5
-    return gmail_recent(limit=limit, unread_only=bool(unread))
+    account = str(args.get("account") or _DEFAULT_ACCOUNT)
+    return gmail_recent(limit=limit, unread_only=bool(unread), account=account)
 
 
 # ── Catalog discovery: read SKILL.md manifests from the OpenClaw workspace ─

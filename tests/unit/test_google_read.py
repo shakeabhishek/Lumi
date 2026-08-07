@@ -17,7 +17,10 @@ from lumi.skills import google_read
 from lumi.skills.google_read import (
     GMAIL_ADDRESS_KEY,
     GMAIL_APP_PASSWORD_KEY,
+    GMAIL_PERSONAL_ADDRESS_KEY,
+    GMAIL_PERSONAL_APP_PASSWORD_KEY,
     configured,
+    configured_accounts,
     gmail_recent,
 )
 
@@ -76,9 +79,33 @@ class _FakeIMAP:
         raise AssertionError("append() is a WRITE — must never be called")
 
 
+# The default account is "mine" (the owner's inbox), so the general-purpose
+# fixture configures that one; `both_creds` wires up Lumi's as well.
 @pytest.fixture
 def creds(monkeypatch):
+    store = {
+        GMAIL_PERSONAL_ADDRESS_KEY: "owner.personal@gmail.com",
+        GMAIL_PERSONAL_APP_PASSWORD_KEY: "abcd" * 4,
+    }
+    monkeypatch.setattr(google_read.secrets, "get_secret", store.get)
+    return store
+
+
+@pytest.fixture
+def lumi_creds(monkeypatch):
     store = {GMAIL_ADDRESS_KEY: "lumi.dedicated@gmail.com", GMAIL_APP_PASSWORD_KEY: "abcd" * 4}
+    monkeypatch.setattr(google_read.secrets, "get_secret", store.get)
+    return store
+
+
+@pytest.fixture
+def both_creds(monkeypatch):
+    store = {
+        GMAIL_PERSONAL_ADDRESS_KEY: "owner.personal@gmail.com",
+        GMAIL_PERSONAL_APP_PASSWORD_KEY: "abcd" * 4,
+        GMAIL_ADDRESS_KEY: "lumi.dedicated@gmail.com",
+        GMAIL_APP_PASSWORD_KEY: "efgh" * 4,
+    }
     monkeypatch.setattr(google_read.secrets, "get_secret", store.get)
     return store
 
@@ -236,16 +263,137 @@ def test_empty_inbox_reads_naturally(creds) -> None:
 
 def test_unconfigured_explains_the_app_password_requirement(no_creds) -> None:
     """The most likely setup mistake is using the account password. Google
-    requires a 16-char App Password with 2-Step Verification for IMAP."""
+    requires a 16-char App Password with 2-Step Verification for IMAP. The hint
+    names the exact secret for the account asked about, not a generic one."""
     out = gmail_recent()
     assert "App Password" in out
-    assert "lumi keys set gmail_app_password" in out
+    assert "lumi keys set gmail_personal_app_password" in out
+
+    lumi_hint = gmail_recent(account="lumi")
+    assert "lumi keys set gmail_app_password" in lumi_hint
+
+
+def test_single_account_errors_are_unprefixed(creds) -> None:
+    """No point saying "your inbox:" when only one mailbox was consulted —
+    matches the success and empty-inbox paths."""
+    fake = _FakeIMAP([])
+    fake.login = MagicMock(side_effect=TimeoutError("timed out"))
+    assert _run(fake) == "I couldn't reach Gmail just now."
+
+
+def test_multi_account_errors_say_which_mailbox_failed(both_creds) -> None:
+    fake = _FakeIMAP([])
+    fake.login = MagicMock(side_effect=TimeoutError("timed out"))
+    out = _run(fake, account="both")
+    assert "your inbox: I couldn't reach Gmail" in out
+    assert "Lumi's inbox: I couldn't reach Gmail" in out
 
 
 def test_configured_reflects_secret_presence(creds, monkeypatch) -> None:
     assert configured() is True
     monkeypatch.setattr(google_read.secrets, "get_secret", lambda _k: None)
     assert configured() is False
+
+
+# ── two mailboxes ────────────────────────────────────────────────────────
+
+
+def test_only_configured_accounts_are_reachable(lumi_creds) -> None:
+    """Absence of a credential IS the access control. With only Lumi's account
+    wired, there is no code path that reaches the owner's inbox."""
+    assert configured_accounts() == ["lumi"]
+
+
+def test_both_accounts_when_both_are_wired(both_creds) -> None:
+    assert set(configured_accounts()) == {"mine", "lumi"}
+
+
+def test_unconfigured_personal_inbox_is_not_read(lumi_creds) -> None:
+    """Asking for the owner's mail with no personal credential must decline,
+    never silently fall back to reading Lumi's inbox instead — a mailbox mixup
+    on a spoken summary is a privacy failure, not a UX wrinkle."""
+    fake = _FakeIMAP([_header_bytes("a@b.com", "should not be read")])
+    out = _run(fake, account="mine")
+    assert "isn't set up yet" in out
+    assert "should not be read" not in out
+    assert fake.calls == [], "no IMAP connection should have been made at all"
+
+
+def test_default_account_is_the_owners_inbox(creds) -> None:
+    """"Check my email" is the overwhelmingly common request."""
+    fake = _FakeIMAP([_header_bytes("a@b.com", "hello")])
+    out = _run(fake)
+    assert "hello" in out
+    assert ("login", "owner.personal@gmail.com") in fake.calls
+
+
+def test_lumi_account_can_be_addressed_explicitly(both_creds) -> None:
+    fake = _FakeIMAP([_header_bytes("a@b.com", "hello")])
+    _run(fake, account="lumi")
+    assert ("login", "lumi.dedicated@gmail.com") in fake.calls
+
+
+def test_both_labels_each_section_so_ownership_is_never_ambiguous(both_creds) -> None:
+    """Spoken aloud, an unlabelled combined summary would leave you unsure
+    whose mail you just heard."""
+    fake = _FakeIMAP([_header_bytes("a@b.com", "shared subject")])
+    out = _run(fake, account="both")
+    assert "your inbox" in out
+    assert "Lumi's inbox" in out
+    logins = [v for k, v in fake.calls if k == "login"]
+    assert "owner.personal@gmail.com" in logins
+    assert "lumi.dedicated@gmail.com" in logins
+
+
+def test_one_account_failing_does_not_lose_the_other(both_creds) -> None:
+    """A dead personal mailbox shouldn't blank out Lumi's, or vice versa."""
+    import imaplib as _imaplib  # noqa: PLC0415
+
+    calls = {"n": 0}
+
+    class _FlakyFirst(_FakeIMAP):
+        def login(self, user, password):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise _imaplib.IMAP4.error("AUTHENTICATIONFAILED")
+            return super().login(user, password)
+
+    fake = _FlakyFirst([_header_bytes("a@b.com", "survivor")])
+    out = _run(fake, account="both")
+    assert "rejected the login" in out
+    assert "survivor" in out
+
+
+def test_unknown_account_name_is_refused_clearly(both_creds) -> None:
+    fake = _FakeIMAP([_header_bytes("a@b.com", "x")])
+    out = _run(fake, account="nonsense")
+    assert "don't know an email account" in out
+    assert fake.calls == []
+
+
+def test_account_name_is_case_and_space_insensitive(creds) -> None:
+    fake = _FakeIMAP([_header_bytes("a@b.com", "hello")])
+    out = _run(fake, account="  MINE ")
+    assert "hello" in out
+
+
+def test_personal_secrets_are_swept_by_factory_reset() -> None:
+    """Read-only or not, these are live credentials to the owner's real
+    mailbox — "Forget everything" must remove them."""
+    from lumi.ui.web.routes.settings import _KNOWN_SECRET_KEYS  # noqa: PLC0415
+
+    assert GMAIL_PERSONAL_ADDRESS_KEY in _KNOWN_SECRET_KEYS
+    assert GMAIL_PERSONAL_APP_PASSWORD_KEY in _KNOWN_SECRET_KEYS
+
+
+def test_personal_secrets_are_settable_via_the_cli() -> None:
+    import inspect  # noqa: PLC0415
+
+    from lumi import main as main_mod  # noqa: PLC0415
+
+    src = inspect.getsource(main_mod.keys)
+    assert GMAIL_PERSONAL_ADDRESS_KEY in src
+    assert GMAIL_PERSONAL_APP_PASSWORD_KEY in src
 
 
 def test_auth_failure_is_actionable_and_leaks_nothing(creds) -> None:
@@ -255,18 +403,11 @@ def test_auth_failure_is_actionable_and_leaks_nothing(creds) -> None:
 
     fake = _FakeIMAP([])
     fake.login = MagicMock(
-        side_effect=_imaplib.IMAP4.error("AUTHENTICATIONFAILED for lumi.dedicated@gmail.com"),
+        side_effect=_imaplib.IMAP4.error("AUTHENTICATIONFAILED for owner.personal@gmail.com"),
     )
     out = _run(fake)
     assert "App Password" in out
-    assert "lumi.dedicated@gmail.com" not in out
-
-
-def test_network_failure_is_a_plain_sentence(creds) -> None:
-    fake = _FakeIMAP([])
-    fake.login = MagicMock(side_effect=TimeoutError("timed out"))
-    out = _run(fake)
-    assert out == "I couldn't reach Gmail just now."
+    assert "owner.personal@gmail.com" not in out
 
 
 def test_imap_uses_a_timeout_below_the_skill_deadline(creds) -> None:

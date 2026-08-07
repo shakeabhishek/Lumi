@@ -27,6 +27,24 @@ configured)". See the read-only notes on `gmail_recent` below; there are two
 distinct ways an IMAP client silently writes to a mailbox, and both are
 avoided deliberately.
 
+**Two mailboxes, deliberately not equivalent.** Lumi has her own dedicated
+account, and (2026-08-06, at the user's explicit and twice-stated request)
+read-only access to the owner's personal Gmail as well. The second one is a
+documented reversal of CLAUDE.md's "never use the user's primary
+email/calendar" decision — recorded there rather than left as code silently
+contradicting the docs.
+
+They are separate credential pairs on purpose, not one list:
+
+  * they show up distinctly in `lumi keys list`, so it's obvious at a glance
+    whether the personal mailbox is wired up;
+  * the personal one is opt-in by *existence* — no credential, no access, and
+    no code path that can reach it. That's the same consent model as the
+    weather and cloud keys;
+  * they carry very different sensitivity. Lumi's own inbox is low-stakes
+    plumbing; the owner's is the highest-PII surface in the product, and the
+    audit log needs to say which one was read.
+
 **Calendar and Drive are not here yet.** Calendar is next, over the secret
 iCal (ICS) address Google Calendar exposes per calendar — a plain HTTPS GET,
 no OAuth, and read-only by protocol since an ICS feed has no write verb. It
@@ -63,11 +81,50 @@ _IMAP_TIMEOUT_S = 6.0
 _MAX_MESSAGES = 10
 _MAX_SUBJECT_CHARS = 120
 
-# Secret names. Registered in main.py's `lumi keys` KNOWN tuple and in
-# settings.py's _KNOWN_SECRET_KEYS so factory reset deletes them — without the
-# latter, "Forget everything" would leave mailbox credentials on disk.
+# Secret names. Every one must also appear in main.py's `lumi keys` KNOWN
+# tuple (which hard-fails unknown names, so omitting one makes it unsettable)
+# and in settings.py's _KNOWN_SECRET_KEYS, without which "Forget everything"
+# would leave working mailbox credentials on disk.
 GMAIL_ADDRESS_KEY = "gmail_address"
 GMAIL_APP_PASSWORD_KEY = "gmail_app_password"
+GMAIL_PERSONAL_ADDRESS_KEY = "gmail_personal_address"
+GMAIL_PERSONAL_APP_PASSWORD_KEY = "gmail_personal_app_password"
+
+
+@dataclass(frozen=True)
+class Mailbox:
+    """One configured mailbox. `label` is what gets spoken and audit-logged."""
+
+    key: str          # "lumi" | "mine"
+    label: str        # human/spoken name
+    address_secret: str
+    password_secret: str
+
+
+# Ordered: `both` reads the owner's mail first, since that's what a desk
+# companion is usually being asked about.
+MAILBOXES: tuple[Mailbox, ...] = (
+    Mailbox("mine", "your inbox", GMAIL_PERSONAL_ADDRESS_KEY, GMAIL_PERSONAL_APP_PASSWORD_KEY),
+    Mailbox("lumi", "Lumi's inbox", GMAIL_ADDRESS_KEY, GMAIL_APP_PASSWORD_KEY),
+)
+
+_DEFAULT_ACCOUNT = "mine"
+
+
+def _mailbox(key: str) -> Mailbox | None:
+    return next((m for m in MAILBOXES if m.key == key), None)
+
+
+def _credentials(box: Mailbox) -> tuple[str, str] | None:
+    address = secrets.get_secret(box.address_secret)
+    password = secrets.get_secret(box.password_secret)
+    return (address, password) if address and password else None
+
+
+def configured_accounts() -> list[str]:
+    """Which mailboxes have complete credentials. Absence of a credential is
+    the access control — there is no code path to an unconfigured mailbox."""
+    return [m.key for m in MAILBOXES if _credentials(m) is not None]
 
 
 @dataclass(frozen=True)
@@ -98,13 +155,19 @@ def _friendly_sender(raw: str | None) -> str:
 
 
 def configured() -> bool:
-    return bool(
-        secrets.get_secret(GMAIL_ADDRESS_KEY) and secrets.get_secret(GMAIL_APP_PASSWORD_KEY),
-    )
+    """True if ANY mailbox is usable."""
+    return bool(configured_accounts())
 
 
-def gmail_recent(limit: int = 5, unread_only: bool = True) -> str:
-    """Summarise the most recent messages in the dedicated mailbox's INBOX.
+def gmail_recent(
+    limit: int = 5, unread_only: bool = True, account: str = _DEFAULT_ACCOUNT,
+) -> str:
+    """Summarise recent INBOX messages for one mailbox or both.
+
+    `account` is "mine" (the owner's personal Gmail), "lumi" (her own dedicated
+    account), or "both". Defaults to "mine" because "check my email" is the
+    overwhelmingly common request; "both" labels each section so a spoken
+    summary can't leave you unsure whose mail you just heard.
 
     Returns a short human/LLM-readable string, or a specific, actionable
     message when it can't run — never a raw exception, since this text may be
@@ -120,46 +183,94 @@ def gmail_recent(limit: int = 5, unread_only: bool = True) -> str:
          A plain BODY fetch sets the `\\Seen` flag as a side effect — Lumi
          glancing at the inbox would mark the user's mail as read, which is a
          write to their mailbox and exactly the kind of surprise the
-         dedicated-account decision exists to prevent.
+         read-only commitment exists to prevent.
       3. No STORE, no EXPUNGE, no COPY, no APPEND anywhere in this module.
 
     Bodies are never fetched at all — only From/Subject/Date. Message bodies
     are the highest-PII surface in the whole product, and a spoken summary
-    doesn't need them.
+    doesn't need them. That restraint matters more on the owner's personal
+    mailbox than on Lumi's own.
     """
-    address = secrets.get_secret(GMAIL_ADDRESS_KEY)
-    password = secrets.get_secret(GMAIL_APP_PASSWORD_KEY)
-    if not address or not password:
-        return (
-            "Gmail isn't set up yet. Run `lumi keys set gmail_address` and "
-            "`lumi keys set gmail_app_password` — the password must be a Google "
-            "App Password (16 characters, needs 2-Step Verification on the "
-            "account), not the account password."
-        )
+    requested = (account or _DEFAULT_ACCOUNT).strip().lower()
+    if requested == "both":
+        targets = list(MAILBOXES)
+    else:
+        box = _mailbox(requested)
+        if box is None:
+            return (
+                f"I don't know an email account called {requested!r}. "
+                f"Try 'mine', 'lumi', or 'both'."
+            )
+        targets = [box]
+
+    usable = [(b, c) for b in targets if (c := _credentials(b)) is not None]
+    if not usable:
+        return _setup_hint(targets)
 
     limit = max(1, min(int(limit), _MAX_MESSAGES))
+    multi = len(usable) > 1
+    sections: list[str] = []
 
-    try:
-        headers = _fetch_headers(address, password, limit, unread_only)
-    except imaplib.IMAP4.error as exc:
-        # Most likely an auth failure. Deliberately does not echo the server
-        # string, which can contain the account address.
-        log.warning("gmail.imap_error", error=type(exc).__name__)
-        return (
-            "Gmail rejected the login. Check that gmail_app_password is a "
-            "current App Password and that IMAP is enabled on the account."
+    for box, (address, password) in usable:
+        try:
+            headers = _fetch_headers(address, password, limit, unread_only)
+        except imaplib.IMAP4.error as exc:
+            # Most likely an auth failure. Deliberately does not echo the
+            # server string, which can contain the account address.
+            log.warning("gmail.imap_error", account=box.key, error=type(exc).__name__)
+            prefix = f"{box.label}: " if multi else ""
+            sections.append(
+                f"{prefix}Gmail rejected the login. Check that "
+                f"{box.password_secret} is a current App Password and that "
+                f"IMAP is enabled on the account.",
+            )
+            continue
+        except (OSError, TimeoutError) as exc:
+            log.warning("gmail.network_error", account=box.key, error=type(exc).__name__)
+            prefix = f"{box.label}: " if multi else ""
+            sections.append(f"{prefix}I couldn't reach Gmail just now.")
+            continue
+
+        # Logged per account so the audit trail says WHICH inbox was read —
+        # "Lumi read your personal mail" is precisely what a user would want
+        # a record of. Counts only, never content.
+        log.info(
+            "gmail.read",
+            account=box.key, unread_only=unread_only, messages=len(headers),
         )
-    except (OSError, TimeoutError) as exc:
-        log.warning("gmail.network_error", error=type(exc).__name__)
-        return "I couldn't reach Gmail just now."
 
-    if not headers:
-        return "No unread mail." if unread_only else "The inbox looks empty."
+        if not headers:
+            empty = "No unread mail." if unread_only else "Inbox looks empty."
+            sections.append(f"{box.label}: {empty}" if multi else empty)
+            continue
 
-    scope = "unread" if unread_only else "recent"
-    lines = [f"{len(headers)} {scope} message{'s' if len(headers) != 1 else ''}:"]
-    lines += [f"- {h.sender}: {h.subject}" for h in headers]
-    return "\n".join(lines)
+        scope = "unread" if unread_only else "recent"
+        plural = "s" if len(headers) != 1 else ""
+        head = (
+            f"{box.label} — {len(headers)} {scope} message{plural}:"
+            if multi
+            else f"{len(headers)} {scope} message{plural}:"
+        )
+        body = [f"- {h.sender}: {h.subject}" for h in headers]
+        sections.append("\n".join([head, *body]))
+
+    return "\n\n".join(sections)
+
+
+def _setup_hint(targets: list[Mailbox]) -> str:
+    """Names the exact secrets missing, rather than a generic 'not configured'
+    — the most common setup mistake is using the account password instead of a
+    Google App Password."""
+    names = " and ".join(
+        f"`lumi keys set {b.address_secret}` / `lumi keys set {b.password_secret}`"
+        for b in targets
+    )
+    which = " or ".join(b.label for b in targets)
+    return (
+        f"{which} isn't set up yet. Run {names}. The password must be a Google "
+        f"App Password (16 characters, needs 2-Step Verification on the "
+        f"account), not the account password."
+    )
 
 
 def _fetch_headers(

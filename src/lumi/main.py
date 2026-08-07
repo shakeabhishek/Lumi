@@ -664,6 +664,11 @@ def keys(
         "cloud_llm_api_key",
         "gmail_address",
         "gmail_app_password",
+        # The owner's personal mailbox — read-only. Separate credentials from
+        # Lumi's own account on purpose, so `lumi keys list` makes it obvious
+        # whether personal-mail access is wired up.
+        "gmail_personal_address",
+        "gmail_personal_app_password",
     )
     if action == "list":
         for k in KNOWN:
@@ -672,13 +677,17 @@ def keys(
     if not name:
         typer.echo("Provide a key name. Known: " + ", ".join(KNOWN), err=True)
         raise typer.Exit(1)
-    # Reject unknown names rather than storing them. Without this, a typo
-    # stores a secret nothing will ever read and still prints "Stored ...",
-    # so the operator believes the key is configured. Found on the device
-    # 2026-08-06: data/.secrets.json held a single entry named `k` while
-    # `cloud_llm_api_key` was absent — the cloud LLM had been silently
-    # falling back to the local 1.5B model for conversational replies.
-    if name not in KNOWN:
+    # Reject unknown names on WRITE only. Without this, a typo stores a secret
+    # nothing will ever read and still prints "Stored ...", so the operator
+    # believes the key is configured. Found on the device 2026-08-06:
+    # data/.secrets.json held a single entry named `k` while
+    # `cloud_llm_api_key` was absent — the cloud LLM had been silently falling
+    # back to the local 1.5B model for conversational replies.
+    #
+    # `get` and `delete` deliberately accept ANY name: validating them would
+    # make exactly that kind of stray entry impossible to inspect or clean up
+    # through the CLI, which is the opposite of helpful.
+    if action == "set" and name not in KNOWN:
         typer.echo(
             f"Unknown key name: {name!r}. Nothing was stored.\n"
             f"Known names: {', '.join(KNOWN)}",
