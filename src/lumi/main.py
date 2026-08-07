@@ -659,7 +659,12 @@ def keys(
     """Manage API keys in the OS keychain (no plaintext on disk)."""
     from .runtime import secrets as _secrets  # noqa: PLC0415
 
-    KNOWN = ("openweathermap_api_key", "cloud_llm_api_key")
+    KNOWN = (
+        "openweathermap_api_key",
+        "cloud_llm_api_key",
+        "gmail_address",
+        "gmail_app_password",
+    )
     if action == "list":
         for k in KNOWN:
             typer.echo(f"  {k:30s} {_secrets.mask(_secrets.get_secret(k))}")

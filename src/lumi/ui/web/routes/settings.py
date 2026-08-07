@@ -436,6 +436,10 @@ async def data_export(request: Request) -> StreamingResponse:
 _KNOWN_SECRET_KEYS: tuple[str, ...] = (
     "cloud_llm_api_key",
     "openweathermap_api_key",
+    # Gmail App Password + the address it belongs to. Without these here,
+    # "Forget everything" would leave working mailbox credentials on disk.
+    "gmail_address",
+    "gmail_app_password",
 )
 
 

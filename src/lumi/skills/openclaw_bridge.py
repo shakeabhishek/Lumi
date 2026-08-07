@@ -237,7 +237,39 @@ _SKILL_IMPLS: dict[str, dict[str, Any]] = {
         "required": [],
         "callable": lambda args: _news_headlines(str(args.get("source", "bbc"))),
     },
+    # Gmail over IMAP with an App Password — no OAuth. See
+    # skills/google_read.py for why OAuth is the wrong tool for a headless
+    # appliance, and for the three separate measures that keep this
+    # read-only at the protocol level.
+    "gmail_read": {
+        "tool_name": "read_email",
+        "parameters": {
+            "limit": {
+                "type": "number",
+                "description": "How many messages to summarise (1-10). Default 5.",
+            },
+            "unread_only": {
+                "type": "boolean",
+                "description": "Only unread messages. Default true.",
+            },
+        },
+        "required": [],
+        "callable": lambda args: _gmail_read(args),
+    },
 }
+
+
+def _gmail_read(args: dict[str, Any]) -> str:
+    from .google_read import gmail_recent  # noqa: PLC0415
+
+    unread = args.get("unread_only", True)
+    if isinstance(unread, str):
+        unread = unread.strip().lower() not in ("false", "0", "no", "off")
+    try:
+        limit = int(float(args.get("limit", 5)))
+    except (TypeError, ValueError):
+        limit = 5
+    return gmail_recent(limit=limit, unread_only=bool(unread))
 
 
 # ── Catalog discovery: read SKILL.md manifests from the OpenClaw workspace ─
